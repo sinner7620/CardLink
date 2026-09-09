@@ -53,6 +53,18 @@ export function excludeAnswerNoteId<T extends { noteId?: string }>(
   return answers.filter(answer => String(answer.noteId ?? "").trim() !== target)
 }
 
+/** Keep a multi-selection inside the group that contains the card which opened the action. */
+export function filterSelectionToAnchorGroup<T>(
+  items: T[],
+  anchor: T | undefined,
+  groupOf: (item: T) => string
+): T[] {
+  if (!anchor || items.length < 2) return [...items]
+  const anchorGroup = groupOf(anchor)
+  if (!anchorGroup) return [...items]
+  return items.filter(item => groupOf(item) === anchorGroup)
+}
+
 export function pathMatchScore(questionPath: string[], answerPath: string[]): number {
   const question = questionPath.map(normalizeTitle).filter(Boolean)
   const answer = answerPath.map(normalizeTitle).filter(Boolean)
@@ -62,6 +74,33 @@ export function pathMatchScore(questionPath: string[], answerPath: string[]): nu
     score += Math.max(1, 100 - index)
   }
   return score
+}
+
+/** The same MarginNote card can be represented by more than one mind-map node. */
+export function distinctAnswers<T extends { id: string; noteId?: string }>(answers: T[]): T[] {
+  const seen = new Set<string>()
+  return answers.filter(answer => {
+    const identity = String(answer.noteId || answer.id).trim()
+    if (!identity || seen.has(identity)) return false
+    seen.add(identity)
+    return true
+  })
+}
+
+/** Only expose a chooser while the ranked result remains genuinely ambiguous. */
+export function answerCandidatesForDisplay<
+  T extends { id: string; noteId?: string; pathTitles: string[]; tags: string[] }
+>(answers: T[], questionPath: string[]): T[] {
+  const distinct = distinctAnswers(answers)
+  if (distinct.length < 2) return []
+  const scores = distinct.map(answer => pathMatchScore(questionPath, answer.pathTitles))
+  const topScore = scores[0]
+  const tiedTop = distinct.filter((_answer, index) => scores[index] === topScore)
+  if (topScore > 0 && tiedTop.length === 1) return []
+  const standardTop = tiedTop.filter(answer =>
+    answer.tags.some(tag => normalizeTitle(tag) === "标准答案")
+  )
+  return standardTop.length === 1 ? [] : distinct
 }
 
 export function extractAnswer(answer: AnswerLike): string {
