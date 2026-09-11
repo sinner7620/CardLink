@@ -1,5 +1,18 @@
 export const MAIN_MINDMAP_SCOPE_ID = "__mn4_main_mindmap__"
 
+export function isSelectableMindMapRoot(
+  hasParent: boolean,
+  title: unknown,
+  noteId?: unknown,
+  groupTargetIds: unknown[] = []
+): boolean {
+  const currentNoteId = String(noteId ?? "")
+  const isGroupedAlias = groupTargetIds.some(targetId =>
+    typeof targetId === "string" && targetId.length > 0 && targetId !== currentNoteId
+  )
+  return !hasParent && !isGroupedAlias && typeof title === "string" && title.trim().length > 0
+}
+
 function cleanId(value: unknown): string {
   return typeof value === "string" ? value.trim() : ""
 }

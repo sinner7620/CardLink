@@ -1,5 +1,3 @@
-
-export const TELEMETRY_PRIMARY_ENDPOINT = "https://telemetry.2608204.xyz/ping"
 export const TELEMETRY_EU_ENDPOINT = "https://cardlink.cn.eu.org/ping"
 export const TELEMETRY_FALLBACK_ENDPOINT = "https://mnrails-telemetry.mr-wuyzhn.workers.dev/ping"
 export const TELEMETRY_INTERVAL = 12 * 60 * 60 * 1000
@@ -80,13 +78,7 @@ function postTelemetryTo(endpoint: string, id: string): Promise<boolean> {
         request,
         NSOperationQueue.mainQueue(),
         (response: any, _data: any, error: any) => {
-          const statusCode = telemetryStatusCode(response)
-          const errorMessage = error?.localizedDescription
-            ? String(error.localizedDescription)
-            : statusCode === 204
-              ? undefined
-              : `HTTP ${statusCode || "无响应"}`
-          resolve(!errorMessage && statusCode === 204)
+          resolve(!error?.localizedDescription && telemetryStatusCode(response) === 204)
         }
       )
     } catch {
@@ -95,88 +87,8 @@ function postTelemetryTo(endpoint: string, id: string): Promise<boolean> {
   })
 }
 
-export interface ConnectivityTestResult {
-  /** 展示用序号：测试1/测试2/测试3（不暴露端点网址） */
-  key: string
-  reachable: boolean
-  accepted: boolean
-  statusCode?: number
-  durationMs: number
-  error?: string
-}
-
-function connectivityTestTo(key: string, endpoint: string, payload: Record<string, unknown>): Promise<ConnectivityTestResult> {
-  const startedAt = Date.now()
-  return new Promise(resolve => {
-    try {
-      const request = NSMutableURLRequest.requestWithURL(NSURL.URLWithString(endpoint))
-      request.setHTTPMethod("POST")
-      request.setTimeoutInterval(REQUEST_TIMEOUT_SECONDS)
-      request.setValueForHTTPHeaderField("application/json", "Content-Type")
-      request.setHTTPBody(NSData.dataWithStringEncoding(JSON.stringify(payload), 4))
-      NSURLConnection.sendAsynchronousRequestQueueCompletionHandler(
-        request,
-        NSOperationQueue.mainQueue(),
-        (response: any, _data: any, error: any) => {
-          const statusCode = telemetryStatusCode(response)
-          const errorMessage = error?.localizedDescription
-            ? String(error.localizedDescription)
-            : statusCode === undefined
-              ? "无响应"
-              : undefined
-          resolve({
-            key,
-            reachable: statusCode !== undefined && !errorMessage,
-            accepted: statusCode === 204 && !errorMessage,
-            statusCode,
-            durationMs: Date.now() - startedAt,
-            error: errorMessage
-          })
-        }
-      )
-    } catch (error) {
-      resolve({
-        key,
-        reachable: false,
-        accepted: false,
-        durationMs: Date.now() - startedAt,
-        error: String(error)
-      })
-    }
-  })
-}
-
-/** 联通测试：逐通道发送明确标注的测试内容，结果只以 测试1/2/3 呈现，不含端点网址。 */
-export async function runTelemetryConnectivityTest(): Promise<{
-  test: true
-  testedAt: string
-  results: ConnectivityTestResult[]
-}> {
-  const testedAt = new Date().toISOString()
-  const payload = {
-    schema: 1,
-    test: true,
-    content_type: "connectivity-test",
-    content: "MN4 调试模式联通测试内容，不计入正式上报",
-    install_id: "00000000-0000-4000-8000-000000000000",
-    version: "test",
-    channel: telemetryChannel(__APP_VERSION__),
-    tested_at: testedAt
-  }
-  const results = [] as ConnectivityTestResult[]
-  const endpoints = [TELEMETRY_PRIMARY_ENDPOINT, TELEMETRY_EU_ENDPOINT, TELEMETRY_FALLBACK_ENDPOINT]
-  for (let index = 0; index < endpoints.length; index++) {
-    results.push(await connectivityTestTo(`测试${index + 1}`, endpoints[index], payload))
-  }
-  return { test: true, testedAt, results }
-}
-
 async function postTelemetry(id: string): Promise<boolean> {
-  for (const endpoint of [
-    TELEMETRY_PRIMARY_ENDPOINT,
-    TELEMETRY_EU_ENDPOINT,
-    TELEMETRY_FALLBACK_ENDPOINT
-  ]) {
+  for (const endpoint of [TELEMETRY_EU_ENDPOINT, TELEMETRY_FALLBACK_ENDPOINT]) {
     if (await postTelemetryTo(endpoint, id)) return true
   }
   return false
