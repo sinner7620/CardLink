@@ -13,6 +13,19 @@ const kv: Record<string, unknown> = {}
 let cachePathValue: string | undefined = "/cache"
 let writesDisabled = false
 const writes: Array<{ path: string; text: string }> = []
+const directories = new Set<string>()
+
+;(globalThis as any).NSFileManager = {
+  defaultManager: () => ({
+    fileExistsAtPath: (path: string) => files.has(path) || directories.has(path),
+    createDirectoryAtPathWithIntermediateDirectoriesAttributes: (path: string) => { directories.add(path); return true },
+    copyItemAtPathToPath: (source: string, destination: string) => {
+      const value = files.get(source)
+      if (value !== undefined) files.set(destination, value)
+    },
+    removeItemAtPath: (path: string) => { files.delete(path); directories.delete(path) }
+  })
+}
 
 const marginnoteMock = {
   isfileExists: (path: string) => files.has(path),
@@ -39,7 +52,8 @@ async function loadStore() {
 }
 
 const NOTEBOOK = "nbABC-123"
-const FILE = `/cache/mn4-answer-matcher.index.v1.${NOTEBOOK}.json`
+const FILE = `/cache/CardLink/indexes/mn4-answer-matcher.index.v1.${NOTEBOOK}.json`
+const LEGACY_FILE = `/cache/mn4-answer-matcher.index.v1.${NOTEBOOK}.json`
 const LEGACY_KEY = `mn4-answer-matcher.index.v1.${NOTEBOOK}`
 const items = [
   { id: "a1", noteId: "n1", notebookId: NOTEBOOK, pathTitles: [], titles: ["题1"], tags: [], comments: [], excerpts: [], children: [] }
@@ -67,6 +81,17 @@ test("旧 NSUserDefaults 快照读到后自动迁移到文件", async () => {
   assert.equal(loaded?.length, 1)
   assert.ok(writes.some(w => w.path === FILE), "应把旧快照迁移写入文件")
   assert.equal(kv[LEGACY_KEY], "", "迁移后旧键应被清空")
+})
+
+test("根 cachePath 的旧索引文件迁移到 CardLink/indexes", async () => {
+  await loadStore()
+  files.clear()
+  writes.length = 0
+  files.set(LEGACY_FILE, JSON.stringify(items))
+  const loaded = store.loadStoredIndex(NOTEBOOK)
+  assert.equal(loaded?.[0]?.noteId, "n1")
+  assert.equal(files.has(FILE), true)
+  assert.equal(files.has(LEGACY_FILE), false)
 })
 
 test("cachePath 不可用时回退旧存储，快照不丢", async () => {

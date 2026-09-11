@@ -1,4 +1,5 @@
 import { MN, delay, saveFile, showHUD, writeTextFile } from "marginnote"
+import { cardLinkDocumentPath } from "./storage-paths"
 import { LEVEL_DESCRIPTIONS, MistakeHistoryItem, MistakeRecord } from "./mistake-domain"
 import { mistakeDetailById, mistakeWorkbenchData } from "./mistake-manager"
 import { cardHtmlToMarkdown } from "./card-markdown"
@@ -118,7 +119,7 @@ const KEEP_EXPORTS = 5
 function cleanupOldExports(): void {
   try {
     const manager = NSFileManager.defaultManager() as any
-    const root = `${MN.app.documentPath}/MNAnswerMatcher/exports`
+    const root = cardLinkDocumentPath("exports")
     const entries = (manager.contentsOfDirectoryAtPathError(root, null) ?? []) as any[]
     // 目录与同名 zip 归为同一次导出（key 去掉 .zip），按批次计数而不是按条目。
     const items = entries
@@ -151,7 +152,7 @@ async function saveMarkdownBundle(markdown: string, requestedName: unknown): Pro
   const mdFilename = cleanFilename(requestedName, "md")
   const baseName = mdFilename.replace(/\.md$/i, "")
   const stamp = exportStamp()
-  const exportRoot = `${MN.app.documentPath}/MNAnswerMatcher/exports/${baseName}-${stamp}`
+  const exportRoot = `${cardLinkDocumentPath("exports")}/${baseName}-${stamp}`
   const assetRoot = `${exportRoot}/assets`
   ensureDirectory(assetRoot)
   const bundle = extractMarkdownAssets(markdown)
@@ -173,7 +174,7 @@ async function saveMarkdownBundle(markdown: string, requestedName: unknown): Pro
   ensureNotCancelled()
   writeTextFile(`${exportRoot}/${mdFilename}`, `\uFEFF${bundle.markdown}`)
   const zipFilename = `${baseName}.zip`
-  const zipPath = `${MN.app.documentPath}/MNAnswerMatcher/exports/${baseName}-${stamp}.zip`
+  const zipPath = `${cardLinkDocumentPath("exports")}/${baseName}-${stamp}.zip`
   if (!ZipArchive.createZipFileAtPathWithContentsOfDirectory(zipPath, exportRoot)) {
     throw new Error("Markdown 压缩包生成失败")
   }

@@ -12,16 +12,14 @@ export function storedWindowControlSide(): WindowControlSide {
   )
 }
 
-// 悬浮条几何单一来源：控件 40pt（贴近 HIG 44 最小触控目标，同时保留胶囊留白）、
-// 上下内边距由 (条高 − 控件高) / 2 推导，三个控件共用同一尺寸与同一字号。
-export const ANSWER_BAR_CONTROL_SIZE = 40
-export const ANSWER_BAR_HEIGHT = 52
-export const ANSWER_BAR_TOP_OFFSET = 5
+// 与插件顶栏选中页签同高：双键态固定为 88×36pt 的连续胶囊；每个键占 44×36pt，
+// 中间没有描边、间距或独立底色。候选答案出现时按同一 44pt 槽位自然延长。
+export const ANSWER_BAR_CONTROL_WIDTH = 44
+export const ANSWER_BAR_HEIGHT = 36
+export const ANSWER_BAR_TOP_OFFSET = 6
 export const ANSWER_BAR_SIDE_INSET = 6
-// 顶部拖动热区必须完整覆盖悬浮条（TOP_OFFSET + BAR_HEIGHT = 57），统一取 60。
-export const ANSWER_BAR_DRAG_STRIP_HEIGHT = 60
-const ANSWER_BAR_PADDING = (ANSWER_BAR_HEIGHT - ANSWER_BAR_CONTROL_SIZE) / 2
-const ANSWER_BAR_GAP = 4
+// 顶部拖动热区与插件页 48pt 顶栏同高。
+export const ANSWER_BAR_DRAG_STRIP_HEIGHT = 48
 
 /** 答案窗口的一体悬浮条：左右换边时整条移动，控件顺序同步镜像。 */
 export function answerControlBarLayout(
@@ -36,12 +34,12 @@ export function answerControlBarLayout(
 } {
   const normalized = normalizeWindowControlSide(side)
   const count = candidatesVisible ? 3 : 2
-  const barWidth = ANSWER_BAR_PADDING * 2 + count * ANSWER_BAR_CONTROL_SIZE + (count - 1) * ANSWER_BAR_GAP
+  const barWidth = count * ANSWER_BAR_CONTROL_WIDTH
   const slot = (index: number) => ({
-    x: ANSWER_BAR_PADDING + index * (ANSWER_BAR_CONTROL_SIZE + ANSWER_BAR_GAP),
-    y: ANSWER_BAR_PADDING,
-    width: ANSWER_BAR_CONTROL_SIZE,
-    height: ANSWER_BAR_CONTROL_SIZE
+    x: index * ANSWER_BAR_CONTROL_WIDTH,
+    y: 0,
+    width: ANSWER_BAR_CONTROL_WIDTH,
+    height: ANSWER_BAR_HEIGHT
   })
   const left = normalized === "left"
   return {
@@ -57,19 +55,21 @@ export function answerControlBarLayout(
   }
 }
 
-/** 答案悬浮条内的无独立底色按钮：三控件共用尺寸、圆角与默认字号，仅图形不同。 */
+/** 答案悬浮条内的无独立底色按钮：相邻点击面连续，不绘制中缝。 */
 export function createWindowControlButton(title: string, action: string, selected = false): UIButton {
   const button = UIButton.buttonWithType(0)
   button.autoresizingMask = 0
   button.setTitleForState(title, 0)
   button.setTitleColorForState(selected ? UIColor.colorWithHexString("#0e8dfd") : UIColor.blackColor().colorWithAlphaComponent(0.82), 0)
-  button.backgroundColor = selected ? UIColor.colorWithHexString("#0e8dfd").colorWithAlphaComponent(0.12) : UIColor.clearColor()
-  // 三类按钮统一使用完整 40pt 点击面与零内缩；✕ 比 × 使用更完整的字面框。
+  button.backgroundColor = UIColor.clearColor()
+  // 三类按钮统一使用完整点击面与零内缩；✕ 比 × 使用更完整的字面框。
   button.titleEdgeInsets = { top: 0, left: 0, bottom: 0, right: 0 }
   // 运行时不暴露 UIFont 全局（typings 有声明、运行时没有，真机已验证抛错）；
   // 三个控件同为 UIButton，默认系统字号天然一致，不得显式引用 UIFont。
-  button.layer.cornerRadius = ANSWER_BAR_CONTROL_SIZE / 2
-  button.layer.masksToBounds = true
+  button.layer.cornerRadius = 0
+  button.layer.masksToBounds = false
+  button.addTargetActionForControlEvents(self, "onAnswerControlPress:", 1 << 0)
+  button.addTargetActionForControlEvents(self, "onAnswerControlRelease:", (1 << 6) | (1 << 7) | (1 << 8))
   button.addTargetActionForControlEvents(self, action, 1 << 6)
   return button
 }

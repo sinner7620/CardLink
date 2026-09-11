@@ -1202,6 +1202,22 @@ export interface MistakeDetailData {
   answerStatus: "ready" | "unbound" | "not-found" | "index-missing"
 }
 
+export interface MistakeQuestionData {
+  questionHtml: string
+}
+
+/**
+ * 待复习批量展开专用的轻量读取。
+ *
+ * 这里只渲染原题，不执行答案索引查询与全部答案 HTML 生成，避免“展开全部”
+ * 把每一道题都升级成昂贵的完整详情请求。答案按钮仍按需走 mistakeDetail。
+ */
+export function mistakeQuestionById(recordId: string): MistakeQuestionData {
+  const record = loadMistakeState().records[recordId]
+  if (!record) throw new Error("错题记录不存在")
+  return { questionHtml: questionHtml(record) }
+}
+
 /**
  * 答案候选提取的共享内核：详情视图与 AI 只读快照都从这里取答案，
  * 保证两处绑定回退、匹配与渲染规则一致（评审 C 高危项的同源要求）。
@@ -1241,6 +1257,7 @@ export interface MistakeContentData {
 
 export interface MistakeContentReader {
   read(recordId: string): MistakeContentData
+  readQuestion(recordId: string): MistakeQuestionData
 }
 
 /**
@@ -1273,6 +1290,11 @@ export function createMistakeContentReader(): MistakeContentReader {
     return index.get(noteId)
   }
   return {
+    readQuestion(recordId: string): MistakeQuestionData {
+      const record = loadMistakeState().records[recordId]
+      if (!record) throw new Error("错题记录不存在")
+      return { questionHtml: questionHtml(record, resolveNote) }
+    },
     read(recordId: string): MistakeContentData {
       const record = loadMistakeState().records[recordId]
       if (!record) throw new Error("错题记录不存在")

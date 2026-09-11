@@ -3,6 +3,7 @@ import { backupBindings } from "./store"
 import { compareVersions } from "./version"
 import { describeError } from "./error-messages"
 import { captureDiagnosticError } from "./note-navigation"
+import { cardLinkTempPath, ensureStorageDirectory } from "./storage-paths"
 
 const GITHUB_RELEASES_API = `https://api.github.com/repos/${__GITHUB_REPOSITORY__}/releases?per_page=10`
 const GITEE_RELEASES_API = "https://gitee.com/api/v5/repos/baidreams/CardLink/releases?per_page=10"
@@ -107,7 +108,9 @@ async function downloadAsset(release: GitHubRelease, asset: ReleaseAsset): Promi
     timeout: 60
   })
   const fileName = asset.name || `CardLink-v${releaseVersion(release)}.mnaddon`
-  const path = `${tempPath.replace(/\/$/, "")}/${fileName}`
+  const directory = cardLinkTempPath("updates")
+  if (!directory || !ensureStorageDirectory(directory)) throw new Error("更新包临时目录不可用")
+  const path = `${directory}/${fileName}`
   // 封装层拿不到 HTTP 状态码：404/限流页只有几 KB，用体积下限拦下坏包
   const size = Number(response.data?.length() || 0)
   if (size < 64 * 1024) {

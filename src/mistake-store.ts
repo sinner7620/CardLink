@@ -2,6 +2,7 @@ import { getLocalDataByKey, isfileExists, MN, readJSON, setLocalDataByKey, write
 import { MistakeRecord, MistakeReviewCurves, nextReviewTime, sourceRecordKey } from "./mistake-domain"
 import { recordRuntimeState } from "./note-navigation"
 import { loadMatcherSettings } from "./settings"
+import { cardLinkDocumentPath, ensureStorageDirectory, migrateLegacyFile } from "./storage-paths"
 
 const STORAGE_KEY = "mn4-answer-matcher.mistakes.v2"
 // 旧版把备份整份写在 NSUserDefaults（与主键同库双写，容灾为零）。
@@ -14,9 +15,11 @@ function backupFilePath(slot = 0): string | undefined {
   try {
     const root = MN.app.documentPath
     if (!root) return undefined
-    return slot === 0
-      ? `${root}/MN4错题库备份.json`
-      : `${root}/MN4错题库备份-${slot}.json`
+    const name = slot === 0 ? "MN4错题库备份.json" : `MN4错题库备份-${slot}.json`
+    const path = `${cardLinkDocumentPath("backups")}/${name}`
+    ensureStorageDirectory(cardLinkDocumentPath("backups"))
+    migrateLegacyFile(`${String(root).replace(/\/$/, "")}/${name}`, path)
+    return path
   } catch {
     return undefined
   }

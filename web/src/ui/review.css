@@ -294,6 +294,26 @@
   color: #7b8799;
   font-size: 11px;
 }
+.reviewQuestionError {
+  grid-auto-flow: column;
+  justify-content: center;
+  gap: 8px;
+  color: #b54747;
+}
+.reviewQuestionError button {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid #e0a5a5;
+  border-radius: 8px;
+  background: #fff;
+  color: #a63838;
+  font: inherit;
+  font-weight: 800;
+}
+.reviewQuestionError button:hover {
+  border-color: #c96969;
+  background: #fff1f1;
+}
 .reviewResults {
   display: flex;
   gap: 5px;

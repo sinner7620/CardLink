@@ -214,13 +214,18 @@ test("答案窗口刷新按钮同时复位位置尺寸并重新载入当前答�
   assert.match(main, /onRefreshAnswerCard/)
 })
 
-test("答案窗口关闭、刷新与候选按钮共用 40pt 视觉规格", () => {
+test("答案窗口关闭、刷新与候选按钮共用连续胶囊规格", () => {
   const view = readFileSync("src/answer-card-view.ts", "utf8")
   const controls = readFileSync("src/window-controls.ts", "utf8")
   assert.match(view, /createWindowControlButton\("✕", "onCloseAnswerCard:"\)/)
   assert.match(view, /createWindowControlButton\("↻", "onRefreshAnswerCard:"\)/)
   assert.match(view, /createWindowControlButton\("", "onChooseAnswerCandidate:", true\)/)
-  assert.match(controls, /ANSWER_BAR_CONTROL_SIZE = 40/)
+  assert.match(controls, /ANSWER_BAR_CONTROL_WIDTH = 44/)
+  assert.match(controls, /ANSWER_BAR_HEIGHT = 36/)
+  assert.match(controls, /const barWidth = count \* ANSWER_BAR_CONTROL_WIDTH/)
+  assert.match(controls, /button\.layer\.cornerRadius = 0/)
+  assert.match(controls, /onAnswerControlPress:/)
+  assert.match(controls, /onAnswerControlRelease:/)
   assert.match(controls, /titleEdgeInsets = \{ top: 0, left: 0, bottom: 0, right: 0 \}/)
 })
 
@@ -235,7 +240,7 @@ test("答案窗口三控件合并为可左右换边的悬浮条，候选复用�
   assert.match(view, /createWindowControlButton\("", "onChooseAnswerCandidate:", true\)/)
   assert.match(controls, /button\.addTargetActionForControlEvents\(self, action, 1 << 6\)/)
   assert.match(view, /const controlBar = new UIView/)
-  assert.match(view, /controlBar\.backgroundColor = UIColor\.colorWithHexString\("#fafbfd"\)\.colorWithAlphaComponent\(0\.88\)/)
+  assert.match(view, /controlBar\.backgroundColor = UIColor\.colorWithHexString\("#fcfcfd"\)\.colorWithAlphaComponent\(0\.96\)/)
   assert.match(view, /controlBar\.addSubview\(closeButton\)[\s\S]*controlBar\.addSubview\(refreshButton\)[\s\S]*controlBar\.addSubview\(candidatesButton\)/)
   assert.match(view, /self\.answerCardControlBar = controlBar/)
   assert.match(view, /self\.answerCandidatesButton = candidatesButton/)
@@ -263,6 +268,19 @@ test("答案窗口三控件合并为可左右换边的悬浮条，候选复用�
   assert.doesNotMatch(view, /answerCandidatesDropdown|answerCardCandidateButtons|CANDIDATE_ROW_HEIGHT/)
   assert.doesNotMatch(matcher, /candidateBarHtml|AnswerCandidateOption/)
   assert.doesNotMatch(core, /switchAnswerCandidate/)
+})
+
+test("答案窗口胶囊按压驱动整体果冻回弹并尊重减弱动态", () => {
+  const view = readFileSync("src/answer-card-view.ts", "utf8")
+  const plugin = readFileSync("src/plugin.ts", "utf8")
+  const core = readFileSync("src/rails-core.ts", "utf8")
+  assert.match(view, /export function onAnswerControlPress/)
+  assert.match(view, /animateAnswerControlJelly\(0\.94, 1\.08\)/)
+  assert.match(view, /animateAnswerControlJelly\(1\.04, 0\.96\)/)
+  assert.match(view, /animateAnswerControlJelly\(0\.985, 1\.02\)/)
+  assert.match(view, /isReduceMotionEnabled/)
+  assert.match(plugin, /onAnswerControlPress, onAnswerControlRelease/)
+  assert.match(core, /onAnswerControlPress[\s\S]*onAnswerControlRelease/)
 })
 
 test("关闭按钮位置设置即时同步答案窗口且不会创建、显示或复位窗口", () => {

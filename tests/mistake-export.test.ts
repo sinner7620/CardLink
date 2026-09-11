@@ -163,7 +163,8 @@ test("MarginNote 图片使用媒体 ID 写出，不调用 NSData base64 解码",
 test("PDF 导出只使用当前文档确认的 WebView、NSData 与 saveFileWithUti 边界", () => {
   const bridge = readFileSync("rails-native/WebBridgeCommands.js", "utf8")
   assert.match(bridge, /stagePdfRenderPage/)
-  assert.match(bridge, /MN4AnswerMatcherPdfRuntime"/)
+  assert.match(bridge, /CardLink\/temp/)
+  assert.match(bridge, /pdf-runtime"/)
   assert.match(bridge, /NSData\.dataWithStringEncoding\(preparePdfHtml\(html, previewMode\), 4\)/)
   assert.match(bridge, /<script src="\.\/html2canvas\.min\.js"><\/script>/)
   assert.match(bridge, /<script src="\.\/jspdf\.umd\.min\.js"><\/script>/)
@@ -203,7 +204,7 @@ test("PDF 导出只使用当前文档确认的 WebView、NSData 与 saveFileWith
   assert.match(bridge, /pullPdfPreviewPages/)
   assert.match(bridge, /preview-page-" \+ \(pageIndex \+ 1\) \+ "\.jpg/)
   assert.match(bridge, /cleanupPdfArtifacts\(root, manager\)/)
-  assert.match(bridge, /MN4AnswerMatcherPdfCache/)
+  assert.match(bridge, /pdf-cache/)
   assert.match(bridge, /\["beta33", "beta34", "beta35", "beta36"\]/)
   assert.match(bridge, /for \(var index = 1; index <= 200; index \+= 1\)/)
   assert.doesNotMatch(bridge, /createElement\("iframe"\)/)

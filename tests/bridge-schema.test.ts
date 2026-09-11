@@ -54,6 +54,7 @@ test("预览 mock 必须覆盖核心交互命令（防 mock 漂移）", () => {
     "mistakes",
     "mistakesPage",
     "mistakeDetail",
+    "mistakeQuestion",
     "reviewMistake",
     "changeMistakeLevel",
     "changeMistakeLevels",

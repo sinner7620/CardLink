@@ -31,3 +31,19 @@ test("复习详情桥请求最多两个并发", async () => {
   await Promise.all(jobs)
   assert.equal(peak, 2)
 })
+
+test("单条复习详情失败会释放并发槽位供后续请求继续", async () => {
+  const started: string[] = []
+  const cache = createReviewDetailCache(async (recordId: string) => {
+    started.push(recordId)
+    if (recordId === "a") throw new Error("读取失败")
+    return { questionHtml: recordId, answers: [] }
+  })
+  const results = await Promise.allSettled([
+    cache.get("a", "1"),
+    cache.get("b", "1"),
+    cache.get("c", "1")
+  ])
+  assert.deepEqual(results.map(result => result.status), ["rejected", "fulfilled", "fulfilled"])
+  assert.deepEqual(started.sort(), ["a", "b", "c"])
+})

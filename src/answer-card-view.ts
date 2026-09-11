@@ -23,6 +23,69 @@ function layoutAnswerCardWindowControls(width: number, side: WindowControlSide =
   }
 }
 
+function reducedMotionEnabled(): boolean {
+  try {
+    const accessibility = (globalThis as any).UIAccessibility
+    return accessibility?.isReduceMotionEnabled?.() === true || accessibility?.isReduceMotionEnabled === true
+  } catch (_) {
+    return false
+  }
+}
+
+/** 以布局函数的标准帧为基准缩放整枚胶囊，避免多次按压累积几何误差。 */
+function applyAnswerControlJellyScale(scaleX: number, scaleY: number): void {
+  if (!self.answerCardView || !self.answerCardControlBar) return
+  const width = Number(self.answerCardView.frame.width)
+  const candidatesVisible = Boolean(self.answerCandidatesButton && !self.answerCandidatesButton.hidden)
+  const frames = answerControlBarLayout(width, storedWindowControlSide(), candidatesVisible)
+  const scaledWidth = frames.bar.width * scaleX
+  const scaledHeight = frames.bar.height * scaleY
+  self.answerCardControlBar.frame = {
+    x: frames.bar.x + (frames.bar.width - scaledWidth) / 2,
+    y: frames.bar.y + (frames.bar.height - scaledHeight) / 2,
+    width: scaledWidth,
+    height: scaledHeight
+  }
+  const scaleSlot = (slot: { x: number; y: number; width: number; height: number }) => ({
+    x: slot.x * scaleX,
+    y: slot.y * scaleY,
+    width: slot.width * scaleX,
+    height: slot.height * scaleY
+  })
+  self.answerCardCloseButton.frame = scaleSlot(frames.close)
+  self.answerCardRefreshButton.frame = scaleSlot(frames.refresh)
+  if (self.answerCandidatesButton) self.answerCandidatesButton.frame = scaleSlot(frames.candidates)
+}
+
+function animateAnswerControlJelly(scaleX: number, scaleY: number): Promise<unknown> {
+  const update = () => applyAnswerControlJellyScale(scaleX, scaleY)
+  if (reducedMotionEnabled() || typeof MNUtil.animate !== "function") {
+    update()
+    return Promise.resolve()
+  }
+  return Promise.resolve(MNUtil.animate(update))
+}
+
+/** 任一按钮按下时，整枚胶囊先横向收紧、纵向鼓起。 */
+export function onAnswerControlPress(): void {
+  const token = Number(self.answerControlJellyToken || 0) + 1
+  self.answerControlJellyToken = token
+  void animateAnswerControlJelly(0.94, 1.08)
+}
+
+/** 松手后做两段过冲并回到标准帧，形成克制的果冻回弹。 */
+export function onAnswerControlRelease(): void {
+  const token = Number(self.answerControlJellyToken || 0) + 1
+  self.answerControlJellyToken = token
+  if (reducedMotionEnabled()) {
+    applyAnswerControlJellyScale(1, 1)
+    return
+  }
+  void animateAnswerControlJelly(1.04, 0.96)
+    .then(() => token === self.answerControlJellyToken && animateAnswerControlJelly(0.985, 1.02))
+    .then(() => token === self.answerControlJellyToken && animateAnswerControlJelly(1, 1))
+}
+
 /** 同步悬浮条内候选控件的标题/可见性；点击后由原生选择弹窗承接。 */
 export function syncAnswerCandidatesControl(
   candidates: Array<{ id: string; title: string; standard: boolean }>,
@@ -83,14 +146,14 @@ export function showAnswerCard(html: string): void {
     // 悬浮条初始帧取自同一布局函数（双控件形态），创建与重排永远同源。
     const initialBar = answerControlBarLayout(defaultWidth, storedWindowControlSide(), false).bar
     const controlBar = new UIView(initialBar)
-    controlBar.backgroundColor = UIColor.colorWithHexString("#fafbfd").colorWithAlphaComponent(0.88)
+    controlBar.backgroundColor = UIColor.colorWithHexString("#fcfcfd").colorWithAlphaComponent(0.96)
     controlBar.layer.cornerRadius = initialBar.height / 2
     controlBar.layer.masksToBounds = false
     const controlBarLayer = controlBar.layer as any
     controlBarLayer.shadowColor = UIColor.blackColor()
-    controlBarLayer.shadowOffset = { width: 0, height: 3 }
-    controlBarLayer.shadowRadius = 7
-    controlBarLayer.shadowOpacity = 0.16
+    controlBarLayer.shadowOffset = { width: 0, height: 4 }
+    controlBarLayer.shadowRadius = 9
+    controlBarLayer.shadowOpacity = 0.18
     container.addSubview(controlBar)
 
     const closeButton = createWindowControlButton("✕", "onCloseAnswerCard:")

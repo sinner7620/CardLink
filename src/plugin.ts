@@ -58,6 +58,8 @@ import {
   syncAnswerCandidatesControl,
   onAnswerCardPan,
   onAnswerCardResize,
+  onAnswerControlPress,
+  onAnswerControlRelease,
   refreshAnswerCard,
   showAnswerCard,
   syncAnswerCardWindowControlSide
@@ -884,7 +886,7 @@ export function onPanelCloseButtonSideChanged(side: unknown): void {
   syncAnswerCardWindowControlSide(side)
 }
 
-export { onAnswerCardPan, onAnswerCardResize }
+export { onAnswerCardPan, onAnswerCardResize, onAnswerControlPress, onAnswerControlRelease }
 export { onNotebookPickerAction }
 export { onMistakeLevelPickerAction }
 

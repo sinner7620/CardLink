@@ -2,12 +2,16 @@ import { readFileSync } from "node:fs"
 import test from "node:test"
 import assert from "node:assert/strict"
 import { extractAIOutputText, parseAIReport } from "../src/ai-report"
+import { mineruDoneResults, mineruFailureMessage, mineruMissingDoneArchive, mineruResultItems, mineruServiceError, mineruStateSummary } from "../src/mineru-response"
+import { decodeBase64Utf8 } from "../src/base64"
 
 const source = readFileSync("src/ai-subsystem.ts", "utf8")
+const mineruResponseSource = readFileSync("src/mineru-response.ts", "utf8")
 const web = readFileSync("web/src/main.jsx", "utf8")
 const core = readFileSync("src/rails-core.ts", "utf8")
 const manager = readFileSync("src/mistake-manager.ts", "utf8")
 const plugin = readFileSync("src/plugin.ts", "utf8")
+const storagePaths = readFileSync("src/storage-paths.ts", "utf8")
 
 test("JSON 文件读取带存在性预检，缺失文件不再触发原生异常闪退", () => {
   // readJSON 仅允许出现在带 isfileExists 预检的 readJSONFile 助手内部：
@@ -46,7 +50,7 @@ test("配置页遵循摘要行＋展开编辑规范，密钥只显示掩码尾�
 
 test("AI 设置与错题主库存储隔离", () => {
   assert.match(source, /mn4-answer-matcher\.ai\.settings\.v1/)
-  assert.match(source, /MNAnswerMatcher\/ai\/reports/)
+  assert.match(source, /cardLinkDocumentPath\("ai\/reports"\)/)
   assert.doesNotMatch(source, /mn4-answer-matcher\.mistakes\.v2/)
 })
 
@@ -72,6 +76,34 @@ test("MinerU OCR 显示上传、轮询和下载阶段，预签名上传保持空
   assert.match(source, /正在申请[\s\S]*正在上传图片[\s\S]*等待 MinerU 解析[\s\S]*正在下载识别结果/)
   assert.match(source, /headers: \{ "Content-Type": "" \}/)
   assert.match(web, /job\.detail \|\|/)
+})
+
+test("MinerU 批量轮询读取官方 extract_result 并在终态停止", () => {
+  const done = { code: 0, data: { extract_result: [{ file_name: "question-1.jpg", data_id: "item-1", state: "done", full_zip_url: "https://cdn.example/result.zip" }] } }
+  assert.equal(mineruResultItems(done).length, 1)
+  assert.deepEqual(mineruDoneResults(done), [{ dataId: "item-1", fileName: "question-1.jpg", zipUrl: "https://cdn.example/result.zip" }])
+  assert.equal(mineruFailureMessage(done), undefined)
+  assert.equal(mineruMissingDoneArchive(done), false)
+  assert.equal(mineruServiceError(done, "查询任务"), undefined)
+  assert.match(source, /emptyPolls >= 5/)
+  assert.match(source, /连续缺少 data\.extract_result，已停止轮询/)
+})
+
+test("MinerU 轮询即时暴露失败原因、业务错误和异常完成响应", () => {
+  const failed = { code: 0, data: { extract_result: [{ state: "failed", err_msg: "每日额度已用完" }] } }
+  assert.equal(mineruFailureMessage(failed), "每日额度已用完")
+  assert.equal(mineruServiceError({ code: -60018, msg: "每日解析任务数量已达上限" }, "查询任务"), "MinerU 查询任务失败：每日解析任务数量已达上限")
+  assert.equal(mineruMissingDoneArchive({ data: { extract_result: [{ state: "done" }] } }), true)
+  assert.equal(mineruStateSummary({ data: { extract_result: [{ state: "running", extract_progress: { extracted_pages: 1, total_pages: 3 } }] } }), "解析中 1/3页")
+  assert.match(source, /MinerU 解析失败：\$\{failure\}/)
+  assert.match(source, /已完成解析，但未返回结果下载地址/)
+})
+
+test("MinerU Markdown 通过 NSData base64 与纯 JS UTF-8 解码，禁止 NSString 占位对象闪退路径", () => {
+  assert.equal(decodeBase64Utf8("TWluZXJV77ya5Y6f6aKYIPCdlb0="), "MinerU：原题 𝕽")
+  assert.match(source, /data\.base64Encoding\?\.\(\)/)
+  assert.match(source, /decodeBase64Utf8\(String\(encoded\)\)/)
+  assert.doesNotMatch(source, /NSString\.alloc\(\)/)
 })
 
 test("MinerU 图片复用真机可用的 Latin-1 NSData 桥，不调用缺失的字节静态方法", () => {
@@ -119,7 +151,7 @@ test("总开关关闭时 AI 运行时命令被原生统一门控，配置命令�
     assert.match(gated, new RegExp(`command === "${command}"`))
   }
   const beforeGate = source.slice(0, gate.index ?? 0)
-  for (const command of ["aiGetSettings", "aiSaveSettings", "aiListStudySets", "aiSetCredential", "aiClearCredential", "aiTestProvider", "aiTestMinerU"]) {
+  for (const command of ["aiGetSettings", "aiSaveSettings", "aiListStudySets", "aiListMistakeStudySets", "aiSetCredential", "aiClearCredential", "aiTestProvider", "aiTestMinerU"]) {
     assert.match(beforeGate, new RegExp(`command === "${command}"`))
     assert.doesNotMatch(gated, new RegExp(`command === "${command}"`))
   }
@@ -207,9 +239,108 @@ test("批量提取失败原因聚合可见，不再静默吞错", () => {
   assert.match(source, /内容不可用 \$\{unavailable\} 道（\$\{reasonSummary\}）/)
 })
 
-test("AI 手写内容仅在隐私开关允许时进入上传集合", () => {
-  assert.match(source, /drawingDataUris\(content\.questionHtml\)/)
-  assert.match(source, /settings\.privacy\.handwriting \? drawingDataUris/)
+test("题目准备把整张卡片送 OCR，并将文本独立落盘", () => {
+  assert.match(web, /import html2canvas from "html2canvas"/)
+  assert.match(web, /html2canvas\(doc\.body/)
+  assert.match(web, /aiSubmitPreparationImage/)
+  assert.match(web, /当前上传的题目卡片/)
+  assert.match(web, /单题进度/)
+  assert.match(web, /总进度/)
+  assert.match(web, /OCR 返回文本/)
+  assert.match(source, /cardLinkDocumentPath\("ai\/content"\)/)
+  assert.match(source, /contentFingerprint: sha256Hex\(imageDataUri\)/)
+  assert.match(source, /questionText: ocrText/)
+  assert.match(source, /provider: "mineru"/)
+})
+
+test("OCR 每题保存一个文本快照和同名整卡图片，并可在缓存页逐题对比", () => {
+  assert.match(source, /schemaVersion: 2/)
+  assert.match(source, /preparedQuestionImagePath\(recordId\)/)
+  assert.match(source, /imageData\.writeToFileAtomically\(imagePath, true\)/)
+  assert.match(source, /includedMindMapHandwriting:/)
+  assert.match(source, /command === "aiListPreparedQuestions"/)
+  assert.match(source, /command === "aiGetPreparedQuestion"/)
+  assert.match(web, /function OCRResultBrowser/)
+  assert.match(web, /发送给 OCR 的原题卡片/)
+  assert.match(web, /OCR 文本渲染/)
+  assert.match(web, /renderMarkdownPreview\(detail\.questionText\)/)
+})
+
+test("持久文件统一进入 CardLink 目录并保留旧目录迁移", () => {
+  assert.match(storagePaths, /const CURRENT_DIRECTORY = "CardLink"/)
+  assert.match(storagePaths, /const LEGACY_DIRECTORY = "MNAnswerMatcher"/)
+  assert.match(storagePaths, /copyItemAtPathToPath/)
+  assert.match(storagePaths, /manager\.removeItemAtPath\(source\)/)
+  for (const file of ["src/ai-subsystem.ts", "src/mistake-export.ts"]) {
+    assert.doesNotMatch(readFileSync(file, "utf8"), /MNAnswerMatcher\//)
+  }
+  assert.match(readFileSync("src/mistake-store.ts", "utf8"), /cardLinkDocumentPath\("backups"\)/)
+  assert.match(readFileSync("src/index-store.ts", "utf8"), /cardLinkCachePath\("indexes"\)/)
+})
+
+test("题目准备可选择智谱 GLM-OCR 并读取 Markdown 结果", () => {
+  assert.match(source, /type OCREngine = "mineru" \| "glm-ocr"/)
+  assert.match(source, /https:\/\/open\.bigmodel\.cn\/api\/paas\/v4/)
+  assert.match(source, /\/layout_parsing/)
+  assert.match(source, /json: \{ model: "glm-ocr", file: base64, return_crop_images: false, need_layout_visualization: false \}/)
+  assert.match(source, /result\.json\?\.md_results/)
+  assert.match(source, /estimatedBytes > 10 \* 1024 \* 1024/)
+  assert.match(source, /glm-ocr-\$\{sha256Hex\(source\)\}\.json/)
+  assert.match(source, /return engine === "glm-ocr"[\s\S]*glmOCR[\s\S]*mineruOCR/)
+  assert.match(source, /ocrEngine: settings\.ocrEngine/)
+  assert.match(source, /const engine: OCREngine = job\.ocrEngine/)
+  assert.match(source, /settings\.glmOcr\.credentialRef/)
+  assert.match(web, /<option value="glm-ocr">GLM-OCR（智谱）<\/option>/)
+  assert.match(web, /本次 API Key/)
+  assert.match(web, /官方限制单图不超过 10 MB/)
+})
+
+test("题目准备可读取并渲染卡片绑定的脑图手写", () => {
+  assert.match(source, /mindMapHandwriting: boolean/)
+  assert.match(source, /mindMapHandwriting: false/)
+  assert.match(source, /getSketchNoteForMindMapFocusNoteId/)
+  assert.match(source, /sketchMediaHashes\(sketch\)/)
+  assert.match(source, /db\.getMediaByHash\(hash\)\?\.base64Encoding/)
+  assert.match(source, /class="drawing bound-mindmap-handwriting-item"/)
+  assert.match(source, /data-drawing-id="mindmap-\$\{asset\.hash\}"/)
+  assert.match(source, /includeMindMapHandwriting: settings\.privacy\.mindMapHandwriting/)
+  assert.match(source, /job\.includeMindMapHandwriting && record/)
+  assert.match(source, /boundHandwritingStatus/)
+  assert.match(source, /const drawings = assets\.filter\(asset => asset\.kind === "drawing"\)/)
+  assert.match(web, /\["mindMapHandwriting", "脑图绑定手写"\]/)
+  assert.match(web, /includeMindMapHandwriting=\{settings\.privacy\.mindMapHandwriting\}/)
+  assert.match(web, /及其脑图绑定手写/)
+  assert.match(web, /当前 MarginNote 版本不支持读取脑图绑定手写/)
+})
+
+test("OCR 学习集候选只包含实际有错题的学习集", () => {
+  assert.match(source, /command === "aiListMistakeStudySets"/)
+  assert.match(source, /const counts = new Map<string, number>\(\)/)
+  assert.match(source, /counts\.get\(String\(item\.topicId\)\)[^\n]*> 0/)
+  assert.match(source, /mistakeCount: counts\.get\(String\(item\.topicId\)\)/)
+  assert.match(source, /if \(!records\.length\) throw new Error\("所选学习集没有错题，无需 OCR"\)/)
+  assert.match(web, /MNBridge\.send\("aiListMistakeStudySets"\)/)
+  assert.match(web, /QuestionPreparationWorkspace studySets=\{mistakeStudySets\}/)
+  assert.match(web, /选择含错题的学习集/)
+  assert.match(web, /当前没有包含错题的学习集，无需 OCR/)
+})
+
+test("AI 总结只读取已准备题目文本，不在分析阶段临时 OCR", () => {
+  const analysis = source.match(/async function runAnalysis[\s\S]*?export function isAICommand/)?.[0] || ""
+  assert.match(analysis, /readPreparedQuestion\(record\.recordId\)/)
+  assert.match(analysis, /if \(!prepared\) throw new Error\("题目尚未准备"\)/)
+  assert.match(analysis, /prepared\.questionText\.slice/)
+  assert.doesNotMatch(analysis, /mineruOCR\(/)
+})
+
+test("题目准备任务逐题统计成功失败并允许单题失败后继续", () => {
+  for (const command of ["aiStartQuestionPreparation", "aiGetQuestionPreparationJob", "aiGetPreparationQuestion", "aiSubmitPreparationImage", "aiFailPreparationQuestion", "aiAdvanceQuestionPreparation", "aiCancelQuestionPreparation"]) {
+    assert.match(source, new RegExp(`command === "${command}"`))
+    assert.match(web, new RegExp(command))
+  }
+  assert.match(source, /job\.completed \+= 1/)
+  assert.match(source, /job\[stage\] \+= 1/)
+  assert.match(web, /题目总数[\s\S]*成功[\s\S]*失败/)
 })
 
 test("AI 分析并发抑制与任务清理", () => {
@@ -220,10 +351,11 @@ test("AI 分析并发抑制与任务清理", () => {
 
 test("MinerU 结果按 data_id 回对且缓存键为内容 SHA-256 指纹", () => {
   assert.match(source, /uriByDataId\.get\(dataId\)/)
+  assert.match(source, /uriByFileName\.get\(fileName\)/)
   assert.match(source, /sha256Hex\(uri\)/)
   assert.match(source, /sha256Hex\(source\)/)
   assert.match(source, /contentFingerprint: sha256Hex\(source\)/)
-  assert.match(source, /file_results \?\? payload\?\.data\?\.results/)
+  assert.match(mineruResponseSource, /extract_result \?\? payload\?\.data\?\.file_results \?\? payload\?\.data\?\.results/)
   assert.doesNotMatch(source, /nestedZipUrls|simpleHash/)
 })
 

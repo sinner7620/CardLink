@@ -11,6 +11,8 @@ import {
   lifecycle,
   onAnswerCardPan,
   onAnswerCardResize,
+  onAnswerControlPress,
+  onAnswerControlRelease,
   onChooseAnswerCandidate,
   onAnswerToolbarClick,
   onCloseAnswerCard,
@@ -43,6 +45,7 @@ import {
   legacyMistakeTagMigrationCompleted,
   markQuestionAsMistake,
   mistakeDetailById,
+  mistakeQuestionById,
   mistakeWorkbenchRevision,
   migrateLegacyMistakeFavorites,
   openSourceByMistakeId,
@@ -76,9 +79,11 @@ function selectedNode(): NodeNote | undefined {
 async function bridgeInternal(command: string, payload: any): Promise<any> {
   if (command === "aiConfirmDevelopmentWarning" || command === "aiGetSettings" || command === "aiListReports" || command === "aiGetReport" ||
     command === "aiGetJob" || command === "aiPreviewAnalysis" || command === "aiStartAnalysis" ||
-    command === "aiOpenEvidence" || command === "aiCancelJob" || command === "aiListStudySets" ||
+    command === "aiOpenEvidence" || command === "aiCancelJob" || command === "aiListStudySets" || command === "aiListMistakeStudySets" ||
     command === "aiSaveSettings" || command === "aiSetCredential" || command === "aiTestProvider" || command === "aiTestMinerU" ||
-    command === "aiGetCacheStats" || command === "aiClearOCRCache" || command === "aiDeleteReport" || command === "aiRunDueSchedules" ||
+    command === "aiGetCacheStats" || command === "aiListPreparedQuestions" || command === "aiGetPreparedQuestion" || command === "aiClearOCRCache" || command === "aiDeleteReport" || command === "aiRunDueSchedules" ||
+    command === "aiStartQuestionPreparation" || command === "aiGetQuestionPreparationJob" || command === "aiGetPreparationQuestion" ||
+    command === "aiSubmitPreparationImage" || command === "aiFailPreparationQuestion" || command === "aiAdvanceQuestionPreparation" || command === "aiCancelQuestionPreparation" ||
     isAICommand(command)) return aiBridge(command, payload)
   if (command === "uiConstants") {
     // P1-7：原生共享常量 → web CSS 变量（--mn-topbar-height 由前端写入）
@@ -133,6 +138,7 @@ async function bridgeInternal(command: string, payload: any): Promise<any> {
   if (command === "unbindAnswerNotebook") return unbindCurrent()
   if (command === "openCurrentMistakeSource") return onMistakeLinkToolbarClick()
   if (command === "mistakeDetail") return mistakeDetailById(String(payload?.recordId ?? ""))
+  if (command === "mistakeQuestion") return mistakeQuestionById(String(payload?.recordId ?? ""))
   if (command === "setMistakeFavorite") return setMistakeFavoriteById(String(payload?.recordId ?? ""), payload?.favorite === true)
   if (command === "migrateLegacyFavorites") return migrateLegacyMistakeFavorites(payload?.titles)
   if (command === "openSource") return openSourceByMistakeId(String(payload?.recordId ?? ""))
@@ -224,6 +230,8 @@ async function bridge(command: string, payload: any): Promise<any> {
     onPanelCloseButtonSideChanged,
     onAnswerCardPan,
     onAnswerCardResize,
+    onAnswerControlPress,
+    onAnswerControlRelease,
     openMenu,
     ensureMnutilsEntrance,
     onMnutilsEntranceClick,

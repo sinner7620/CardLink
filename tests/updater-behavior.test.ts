@@ -94,6 +94,12 @@ const defaultsKv: Record<string, any> = {}
 let throttleWritten = false
 ;(globalThis as Record<string, unknown>).__GITHUB_REPOSITORY__ = "baidream/CardLink"
 ;(globalThis as Record<string, unknown>).__APP_VERSION__ = "2.3.3-beta.28"
+;(globalThis as Record<string, unknown>).NSFileManager = {
+  defaultManager: () => ({
+    fileExistsAtPath: () => false,
+    createDirectoryAtPathWithIntermediateDirectoriesAttributes: () => true
+  })
+}
 
 mock.module("marginnote", { namedExports: marginnoteMock })
 
@@ -179,7 +185,7 @@ test("发现新版本并确认后：下载附件 → 写入临时目录 → 调�
   assert.ok(download, "缺少附件下载请求")
   assert.equal((download!.init as any).headers.Accept, "application/octet-stream")
   assert.equal(calls.writes.length, 1)
-  assert.match(calls.writes[0], /^\/tmp\/mn-temp\/CardLink-v9\.9\.9\.mnaddon$/)
+  assert.match(calls.writes[0], /^\/tmp\/mn-temp\/CardLink\/temp\/updates\/CardLink-v9\.9\.9\.mnaddon$/)
   assert.equal(calls.saved.length, 1)
 })
 

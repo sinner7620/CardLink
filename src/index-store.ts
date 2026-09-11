@@ -1,4 +1,5 @@
 import { getLocalDataByKey, isfileExists, MN, readJSON, setLocalDataByKey, writeTextFile } from "marginnote"
+import { cardLinkCachePath, ensureStorageDirectory, migrateLegacyFile } from "./storage-paths"
 
 const INDEX_KEY_PREFIX = "mn4-answer-matcher.index.v1."
 const INDEX_FILE_PREFIX = "mn4-answer-matcher.index.v1."
@@ -28,7 +29,12 @@ function indexFilePath(notebookId: string): string | undefined {
     if (!root) return undefined
     const safe = String(notebookId || "").replace(/[^\w-]/g, "_")
     if (!safe) return undefined
-    return `${root.replace(/\/$/, "")}/${INDEX_FILE_PREFIX}${safe}${INDEX_FILE_SUFFIX}`
+    const directory = cardLinkCachePath("indexes")
+    if (!directory) return undefined
+    ensureStorageDirectory(directory)
+    const path = `${directory}/${INDEX_FILE_PREFIX}${safe}${INDEX_FILE_SUFFIX}`
+    migrateLegacyFile(`${String(root).replace(/\/$/, "")}/${INDEX_FILE_PREFIX}${safe}${INDEX_FILE_SUFFIX}`, path)
+    return path
   } catch {
     return undefined
   }

@@ -41,6 +41,13 @@ const REVIEW_CURVES_ARRAY = [[1, 3, 7], [2, 5, 10], [14]]
 // 面板侧历史上的白屏正是把对象形态的 REVIEW_CURVES 当数组用；两条形态都要能渲染。
 const REVIEW_CURVES_OBJECT = { 0: [1, 3, 7], 1: [2, 5, 10], 2: [14] } as unknown as number[][]
 
+test("OCR 结果 Markdown 含图片和链接时可安全渲染", () => {
+  assert.doesNotThrow(() => ui.renderMarkdownPreview("# 原题\n![电路图](assets/q1.png)\n[参考链接](https://example.com)"))
+  const html = ui.renderMarkdownPreview("![电路图](assets/q1.png) 与 [参考链接](https://example.com)")
+  assert.match(html, /\[图片：电路图\]/)
+  assert.match(html, /参考链接/)
+})
+
 function record(overrides: Record<string, unknown> = {}) {
   const now = new Date()
   return {

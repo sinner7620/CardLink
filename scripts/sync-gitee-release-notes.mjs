@@ -5,6 +5,11 @@ const token = process.env.GITEE_TOKEN
 const repo = process.env.GITEE_REPO || "baidreams/CardLink"
 const tag = process.env.RELEASE_TAG
 const notesFile = process.env.RELEASE_NOTES_FILE || (tag ? `RELEASE_NOTES_${tag}.md` : "")
+const api = `https://gitee.com/api/v5/repos/${repo}`
+
+function apiUrl(route) {
+  return `${api}${route}`
+}
 
 if (!token) {
   console.log("SKIP: GITEE_TOKEN 未配置，跳过 Gitee 同步")

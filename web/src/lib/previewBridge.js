@@ -186,6 +186,17 @@ function workbenchPage(offset = 0, transferId = "preview-workbench") {
   }
 }
 
+let previewPreparationJob = null
+function previewPreparationPublic() {
+  if (!previewPreparationJob) return { status: "missing" }
+  return { ...previewPreparationJob, recordIds: undefined, totalProgress: previewPreparationJob.total ? Math.round(previewPreparationJob.completed / previewPreparationJob.total * 100) : 100 }
+}
+function previewPreparationCurrent() {
+  const recordId = previewPreparationJob?.recordIds?.[previewPreparationJob.completed]
+  const record = records.find(item => item.recordId === recordId)
+  return record ? { recordId, title: record.sourceTitle, index: previewPreparationJob.completed + 1, total: previewPreparationJob.total, stage: "waiting-render", progress: 0, detail: "等待渲染题目卡片", ocrText: "" } : undefined
+}
+
 export async function previewSend(command, payload = null) {
   if (command === "mistakesRevision") return { revision: workbench().revision || "preview" }
   // AI 配置页与总览 AI 面板的预览 mock：形状与原生 publicSettings/报告索引一致。
@@ -197,18 +208,55 @@ export async function previewSend(command, payload = null) {
       { id: "deepseek-main", name: "DeepSeek", type: "deepseek", baseUrl: "https://api.deepseek.com", model: "deepseek-chat", timeoutMs: 60000, credentialRef: "llm-deepseek-main" }
     ],
     subjects: [{ id: "subject-math", name: "考研数学", studySetIds: ["set-1"], schedule: { enabled: true, frequency: "weekly", hour: 9, weekday: 1, monthday: 1, lastRunAt: "2026-09-05T09:00:00.000Z" } }],
+    ocrEngine: "glm-ocr",
     mineru: { enabled: true, baseUrl: "https://mineru.net", credentialRef: "ocr-mineru", model: "vlm", language: "ch", enableFormula: true, enableTable: true, policy: "auto" },
-    privacy: { includeAnswer: true, includeSourcePath: true, includeReviewHistory: true, includeCustomCategories: true, images: "when-needed", handwriting: false },
+    glmOcr: { baseUrl: "https://open.bigmodel.cn/api/paas/v4", credentialRef: "ocr-glm", model: "glm-ocr", timeoutMs: 120000 },
+    privacy: { includeAnswer: true, includeSourcePath: true, includeReviewHistory: true, includeCustomCategories: true, images: "when-needed", handwriting: false, mindMapHandwriting: true },
     credentials: {
       "llm-openai-main": { configured: true, persistence: "local", maskedSuffix: "8f2a" },
       "llm-deepseek-main": { configured: false, persistence: "none", maskedSuffix: "" },
-      "ocr-mineru": { configured: false, persistence: "none", maskedSuffix: "" }
+      "ocr-mineru": { configured: false, persistence: "none", maskedSuffix: "" },
+      "ocr-glm": { configured: true, persistence: "local", maskedSuffix: "c913" }
     }
   }
   if (command === "aiSaveSettings") return payload
-  if (command === "aiListStudySets") return [{ id: "set-1", title: "高等数学题集" }, { id: "set-2", title: "线性代数错题" }, { id: "set-3", title: "概率论练习" }]
-  if (command === "aiGetCacheStats") return { ocrEntries: 23, reportCount: 2 }
+  if (command === "aiListStudySets") return [{ id: "questions", title: "高等数学题集" }, { id: "practice", title: "强化练习" }, { id: "empty", title: "暂未标记错题的学习集" }]
+  if (command === "aiListMistakeStudySets") return [{ id: "questions", title: "高等数学题集", mistakeCount: 2 }, { id: "practice", title: "强化练习", mistakeCount: 1 }]
+  if (command === "aiGetCacheStats") return { ocrEntries: 23, preparedEntries: 18, reportCount: 2 }
   if (command === "aiListReports") return []
+  if (command === "aiStartQuestionPreparation") {
+    const recordIds = records.filter(item => item.sourceNotebookId === payload?.studySetId).map(item => item.recordId)
+    previewPreparationJob = { id: `preview-prep-${Date.now()}`, studySetId: payload?.studySetId, status: recordIds.length ? "waiting-render" : "done", total: recordIds.length, completed: 0, success: 0, failed: 0, recordIds, current: undefined }
+    previewPreparationJob.current = previewPreparationCurrent()
+    return previewPreparationPublic()
+  }
+  if (command === "aiGetQuestionPreparationJob") return previewPreparationPublic()
+  if (command === "aiGetPreparationQuestion") {
+    if (!previewPreparationJob?.current) throw new Error("题目准备任务不存在")
+    previewPreparationJob.current = { ...previewPreparationJob.current, stage: "rendering", detail: "正在渲染整张题目卡片" }
+    return { recordId: payload?.recordId, title: previewPreparationJob.current.title, questionHtml: detail(String(payload?.recordId || "")).questionHtml }
+  }
+  if (command === "aiSubmitPreparationImage") {
+    if (!previewPreparationJob?.current) throw new Error("题目准备任务不存在")
+    previewPreparationJob.completed += 1
+    previewPreparationJob.success += 1
+    previewPreparationJob.current = { ...previewPreparationJob.current, stage: "success", progress: 100, detail: "识别并保存完成", ocrText: "设二元函数 f(x,y) 在点 (x₀,y₀) 处的两个偏导数存在，判断该函数在该点连续的充分性与必要性。" }
+    previewPreparationJob.status = previewPreparationJob.completed >= previewPreparationJob.total ? "done" : "waiting-advance"
+    return { accepted: true }
+  }
+  if (command === "aiFailPreparationQuestion") {
+    previewPreparationJob.completed += 1
+    previewPreparationJob.failed += 1
+    previewPreparationJob.current = { ...previewPreparationJob.current, stage: "failed", detail: payload?.error || "渲染失败", error: payload?.error || "渲染失败" }
+    previewPreparationJob.status = previewPreparationJob.completed >= previewPreparationJob.total ? "done" : "waiting-advance"
+    return previewPreparationPublic()
+  }
+  if (command === "aiAdvanceQuestionPreparation") {
+    previewPreparationJob.current = previewPreparationCurrent()
+    previewPreparationJob.status = previewPreparationJob.current ? "waiting-render" : "done"
+    return previewPreparationPublic()
+  }
+  if (command === "aiCancelQuestionPreparation") { if (previewPreparationJob) previewPreparationJob.status = "cancelled"; return { cancelled: !!previewPreparationJob } }
   if (command === "aiRunDueSchedules" || command === "aiGetJob" || command === "aiPreviewAnalysis") return { accepted: true, status: "missing" }
   if (command === "dashboard") return {
     version: "2.4.0 · 完整界面预览",
@@ -247,6 +295,10 @@ export async function previewSend(command, payload = null) {
     return { enabled: pluginEnabled }
   }
   if (command === "mistakeDetail") return detail(String(payload?.recordId ?? ""))
+  if (command === "mistakeQuestion") {
+    const value = detail(String(payload?.recordId ?? ""))
+    return { questionHtml: value.questionHtml }
+  }
   if (command === "setMistakeFavorite") {
     const record = records.find(item => item.recordId === String(payload?.recordId ?? ""))
     if (!record) throw new Error("错题记录不存在")

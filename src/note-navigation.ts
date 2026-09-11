@@ -10,6 +10,7 @@ import {
 } from "marginnote"
 import { noteReferenceUrl } from "./note-link"
 import { loadMatcherSettings } from "./settings"
+import { cardLinkTempPath, ensureStorageDirectory } from "./storage-paths"
 
 const RUNTIME_DEBUG_MAX_LINES = 2000
 const RUNTIME_DEBUG_STORAGE_KEY = "mn4-answer-matcher.runtime-debug.v1"
@@ -516,7 +517,9 @@ export function exportNavigationRuntimeLog(): { saved: true; filename: string } 
   const started = Date.now()
   const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14)
   const filename = `MN4运行日志-${__APP_VERSION__}-${stamp}.txt`
-  const path = `${MN.app.tempPath || MN.app.documentPath}/${filename}`
+  const directory = cardLinkTempPath("logs")
+  if (!directory || !ensureStorageDirectory(directory)) throw new Error("运行日志临时目录不可用")
+  const path = `${directory}/${filename}`
   writeTextFile(path, `\uFEFF${runtimeLogText()}`)
   pushRuntimeDebugLine("日志", `生成并写入完成 durationMs=${Date.now() - started}`)
   runtimeLogExportPending = true

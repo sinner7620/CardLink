@@ -394,7 +394,7 @@ body,
   box-shadow: inset 0 1px 0 rgba(255,255,255,.90),
     inset 0 -1px 0 rgba(255,255,255,.38),
     0 3px 12px rgba(52,72,96,.10);
-  grid-template-columns: minmax(90px, 1fr) auto minmax(90px, 1fr);
+  grid-template-columns: minmax(94px, 1fr) auto minmax(94px, 1fr);
   padding-left: 6px;
   padding-right: 6px;
   border-bottom-color: rgba(148,163,184,.28);
@@ -431,6 +431,40 @@ body,
 }
 .topTools-right {
   justify-self: end;
+}
+.windowControlCapsule {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 44px;
+  width: 88px;
+  height: 36px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(252, 252, 253, .96);
+  box-shadow: 0 4px 18px rgba(15, 23, 42, .18), inset 0 1px 0 rgba(255, 255, 255, .92);
+  transform-origin: center;
+}
+.windowControlCapsule .iconButton {
+  box-sizing: border-box;
+  width: 44px;
+  height: 36px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.windowControlCapsule:active {
+  animation: windowControlJelly .42s cubic-bezier(.22, .9, .28, 1.18) both;
+}
+@keyframes windowControlJelly {
+  0% { transform: scale(1); }
+  24% { transform: scale(.94, 1.08); }
+  55% { transform: scale(1.04, .96); }
+  78% { transform: scale(.985, 1.02); }
+  100% { transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .windowControlCapsule:active { animation: none; }
 }
 @media (max-width: 800px) {
 .topBar {

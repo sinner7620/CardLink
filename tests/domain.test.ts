@@ -111,14 +111,14 @@ test("答案悬浮条左右换边时整体贴边并镜像三控件顺序", () =>
   assert.equal(right.bar.x + right.bar.width, 494)
   assert.ok(left.close.x < left.refresh.x && left.refresh.x < left.candidates.x)
   assert.ok(right.candidates.x < right.refresh.x && right.refresh.x < right.close.x)
-  // 控件统一 40×40（贴近 HIG 44 触控目标）、条高 52；三控件条宽 12 + 120 + 8。
-  assert.equal(left.close.width, 40)
-  assert.equal(left.close.height, 40)
-  assert.equal(left.refresh.width, 40)
-  assert.equal(left.candidates.height, 40)
-  assert.equal(left.bar.height, 52)
-  assert.equal(answerControlBarLayout(500, "left", false).bar.width, 96)
-  assert.equal(left.bar.width, 140)
+  // 与插件页选中页签同高：88×36 连续胶囊；每个槽位 44×36，无内边距与中缝。
+  assert.equal(left.close.width, 44)
+  assert.equal(left.close.height, 36)
+  assert.equal(left.refresh.width, 44)
+  assert.equal(left.candidates.height, 36)
+  assert.equal(left.bar.height, 36)
+  assert.equal(answerControlBarLayout(500, "left", false).bar.width, 88)
+  assert.equal(left.bar.width, 132)
 })
 
 test("同一学习集中的不同脑图可保存独立答案绑定并兼容旧绑定", () => {
@@ -843,6 +843,7 @@ test("scoped 解除绑定同时清除笔记本级回退键，避免假解除", (
 test("索引快照存 cachePath 文件并带旧存储迁移", () => {
   const store = readFileSync("src/index-store.ts", "utf8")
   assert.match(store, /MN\.app\.cachePath/)
+  assert.match(store, /cardLinkCachePath\("indexes"\)/)
   assert.match(store, /writeTextFile\(path, payload\)/)
   assert.match(store, /INDEX_KEY_PREFIX\}\$\{notebookId\}/)
   assert.match(store, /迁移到文件|迁移成功后清空旧键|旧版快照存 NSUserDefaults/)

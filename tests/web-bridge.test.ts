@@ -29,7 +29,9 @@ test("日志同一调用栈直接写临时文件并保存，失败后可重试�
     loadMatcherSettings: () => ({ debugModeEnabled: true }),
     runtimeLogText: () => "existing log", MN: { app: { tempPath: "/tmp", documentPath: "/docs" } },
     pushRuntimeDebugLine() {},
-    writeTextFile: (file: string, text: string) => { assert.match(file, /^\/tmp\//); assert.equal(text, "\uFEFFexisting log"); calls.push("write") },
+    cardLinkTempPath: (relative: string) => `/tmp/CardLink/temp/${relative}`,
+    ensureStorageDirectory: () => true,
+    writeTextFile: (file: string, text: string) => { assert.match(file, /^\/tmp\/CardLink\/temp\/logs\//); assert.equal(text, "\uFEFFexisting log"); calls.push("write") },
     saveFile: (_file: string, uti: string) => { assert.equal(uti, "public.plain-text"); calls.push("save"); if (fail) throw new Error("picker failed") }
   }
   runInNewContext(transpileModule(fn, { compilerOptions: { module: 1, target: 7 } }).outputText, context)
@@ -202,7 +204,7 @@ test("运行日志只在独立调试功能区显示并通过原生桥接保存�
   // 与 beta.2 相同的直接保存路径；导出不再同步读取原生选中视图或人为延时。
   const exportBody = navigation.match(/export function exportNavigationRuntimeLog[\s\S]*?\n\}/)?.[0] || ""
   assert.doesNotMatch(exportBody, /delay\(|recordRuntimeState\(|currentControllerState\(/)
-  assert.match(exportBody, /MN\.app\.tempPath \|\| MN\.app\.documentPath/)
+  assert.match(exportBody, /cardLinkTempPath\("logs"\)/)
   assert.match(navigation, /if \(runtimeLogExportPending\) throw/)
   assert.doesNotMatch(navigation, /delay\(0\.05\)/)
   assert.match(navigation, /return \{ saved: true, filename \}/)
@@ -235,8 +237,8 @@ test("设置页可切换插件窗口关闭按钮位置", () => {
   assert.match(panel, /function setCloseButtonSide/)
   assert.match(source, /action\("closePanel", null, false\)/)
   assert.match(source, /<Icon name="close" \/>/)
-  assert.ok(source.includes('panelCloseSide === "left" && <>{closeButton}{refreshButton}</>'))
-  assert.ok(source.includes('panelCloseSide === "right" && <>{refreshButton}{closeButton}</>'))
+  assert.ok(source.includes('panelCloseSide === "left" && <div className="windowControlCapsule">{closeButton}{refreshButton}</div>'))
+  assert.ok(source.includes('panelCloseSide === "right" && <div className="windowControlCapsule">{refreshButton}{closeButton}</div>'))
   assert.doesNotMatch(panel, /UIButton\.buttonWithType|controller\.closeButton/)
   assert.match(panel, /mn4-answer-matcher\.rails\.close-side\.v1/)
 })
@@ -288,6 +290,10 @@ test("整条顶栏除按钮组外可拖动、Tab 居中且顶栏为白色", () =
   assert.match(panel, /controller\.webView\.layer\.cornerRadius = 14/)
   assert.match(source, /const refreshButton = <button className="iconButton"/)
   assert.match(source, /const closeButton = <button className="iconButton"/)
+  assert.match(source, /className="windowControlCapsule"/)
+  assert.match(css, /\.windowControlCapsule \{[\s\S]*width: 88px;[\s\S]*height: 36px;/)
+  assert.match(css, /@keyframes windowControlJelly/)
+  assert.match(css, /prefers-reduced-motion: reduce/)
   assert.match(css, /\.topBar \{[\s\S]*background: #fff/)
   assert.match(css, /-webkit-backdrop-filter: none/)
   assert.doesNotMatch(css, /\.shell::after/)
@@ -297,7 +303,7 @@ test("整条顶栏除按钮组外可拖动、Tab 居中且顶栏为白色", () =
   assert.match(css, /\.shell > main \{[^}]*flex: 1 1 auto;[^}]*min-height: 0;[^}]*display: flex;/)
   assert.doesNotMatch(css, /\.shell > main \{[^}]*height: 100%;/)
   assert.match(css, /html,\s*body,\s*#root\s*\{[^}]*background:\s*transparent;/)
-  assert.match(css, /grid-template-columns: minmax\(90px, 1fr\) auto minmax\(90px, 1fr\)/)
+  assert.match(css, /grid-template-columns: minmax\(94px, 1fr\) auto minmax\(94px, 1fr\)/)
   assert.match(source, /topTools topTools-left[\s\S]*panelCloseSide === "left"[\s\S]*<nav className="topNav">[\s\S]*topTools topTools-right[\s\S]*panelCloseSide === "right"/)
   assert.match(redesign, /header\.topBar \{[\s\S]*width: 100%;[\s\S]*max-width: 100vw;[\s\S]*margin: 0;/)
   assert.match(redesign, /grid-template-columns: minmax\(0, 1fr\) auto minmax\(0, 1fr\);/)
@@ -387,6 +393,17 @@ test("待复习队列包含真实原题、双重筛选和与预览一致的控�
   assert.ok(questionIndex >= 0 && actionsIndex > questionIndex)
   assert.ok(answerIndex >= 0 && historyIndex > actionsIndex)
   assert.match(source, /MNBridge\.send\("mistakeDetail", \{ recordId \}\)/)
+  assert.match(source, /MNBridge\.send\("mistakeQuestion", \{ recordId \}\)/)
+  assert.match(source, /questionErrorsById/)
+  assert.match(source, /retryQuestion/)
+  assert.doesNotMatch(source, /let cancelled = false[\s\S]*?const queue = visibleRecords/)
+  assert.match(source, /setQuestionsById\(current => \(\{ \.\.\.current, \[recordId\]: question \}\)\)/)
+  assert.doesNotMatch(source, /setQuestionsById\(current => retainReviewDetail/)
+  const manager = readFileSync(path.join(process.cwd(), "src", "mistake-manager.ts"), "utf8")
+  const lightQuestionStart = manager.indexOf("export function mistakeQuestionById")
+  const lightQuestionEnd = manager.indexOf("function answerCandidatesForRecord", lightQuestionStart)
+  assert.ok(lightQuestionStart >= 0 && lightQuestionEnd > lightQuestionStart)
+  assert.doesNotMatch(manager.slice(lightQuestionStart, lightQuestionEnd), /answerCandidatesForRecord|findAnswersForQuestion/)
   assert.match(source, /html=\{detail\.questionHtml\}/)
   assert.match(source, /function ReviewAnswer/)
   assert.match(source, /createReviewDetailCache/)

@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { createRoot } from "react-dom/client"
+import html2canvas from "html2canvas"
 import MNBridge from "./lib/mnBridge"
 import { Icon } from "./icons"
 import { buildMindMapOptions, buildParentInsights, sourceInsightKey } from "../../src/source-insights"
@@ -775,9 +776,9 @@ function App() {
   return <div className={`shell panelClose-${panelCloseSide} tab-${tab}`}>
     <main>
       <header className="topBar">
-        <div className="topTools topTools-left">{panelCloseSide === "left" && <>{closeButton}{refreshButton}</>}</div>
+        <div className="topTools topTools-left">{panelCloseSide === "left" && <div className="windowControlCapsule">{closeButton}{refreshButton}</div>}</div>
         <nav className="topNav">{entries.map(([key, name, count]) => <button key={key} className={tab === key ? "active" : ""} onClick={() => { setReviewFocusId(""); if (key !== "settings") setSettingsPane("root"); setTab(key) }}><strong>{name}</strong>{count > 0 && <b>{count}</b>}</button>)}</nav>
-        <div className="topTools topTools-right">{panelCloseSide === "right" && <>{refreshButton}{closeButton}</>}</div>
+        <div className="topTools topTools-right">{panelCloseSide === "right" && <div className="windowControlCapsule">{refreshButton}{closeButton}</div>}</div>
       </header>
       {locateHint && <div className="locateHintBanner" role="alert">{locateHint}</div>}
       {pendingNotice && <div className="pendingNotice" role="status"><i /><span>{pendingNotice}</span></div>}
@@ -1294,8 +1295,10 @@ function normalizeAISettingsView(value) {
     profiles,
     subjects,
     credentials: input.credentials && typeof input.credentials === "object" ? input.credentials : {},
+    ocrEngine: input.ocrEngine === "glm-ocr" ? "glm-ocr" : "mineru",
     mineru: { enabled: false, policy: "auto", enableFormula: true, enableTable: true, credentialRef: "mineru-token", ...(input.mineru || {}) },
-    privacy: { includeAnswer: true, includeSourcePath: true, includeReviewHistory: true, includeCustomCategories: true, handwriting: false, images: "when-needed", ...(input.privacy || {}) },
+    glmOcr: { baseUrl: "https://open.bigmodel.cn/api/paas/v4", credentialRef: "ocr-glm", model: "glm-ocr", timeoutMs: 120000, ...(input.glmOcr || {}) },
+    privacy: { includeAnswer: true, includeSourcePath: true, includeReviewHistory: true, includeCustomCategories: true, handwriting: false, mindMapHandwriting: false, images: "when-needed", ...(input.privacy || {}) },
   }
 }
 
@@ -1303,13 +1306,212 @@ const AI_FREQUENCY_LABELS = { daily: "每天", weekly: "每周", monthly: "每�
 const AI_POLICY_LABELS = { auto: "自动", all: "全部图片", "image-only": "纯图片题", never: "不使用" }
 const AI_IMAGE_LABELS = { "when-needed": "图片必要时上传", always: "图片总是上传", never: "图片不发送" }
 
+const OCR_STAGE_LABELS = {
+  "waiting-render": "等待渲染",
+  rendering: "正在渲染",
+  queued: "等待 OCR",
+  uploading: "正在上传",
+  ocr: "正在识别",
+  success: "识别成功",
+  failed: "识别失败"
+}
+
+const BOUND_HANDWRITING_LABELS = {
+  included: "已加入脑图绑定手写",
+  none: "此题没有脑图绑定手写",
+  unsupported: "当前 MarginNote 版本不支持读取脑图绑定手写",
+  unreadable: "检测到脑图绑定手写，但媒体数据不可读"
+}
+
+function QuestionPreparationWorkspace({ studySets, ocrEngine, includeMindMapHandwriting, onStorageChanged, onStatus }) {
+  const [studySetId, setStudySetId] = useState("")
+  const [job, setJob] = useState(null)
+  const [questionHtml, setQuestionHtml] = useState("")
+  const [previewImage, setPreviewImage] = useState("")
+  const [busy, setBusy] = useState(false)
+  const requestedRef = useRef("")
+  const submittedRef = useRef("")
+  const advancedRef = useRef("")
+
+  useEffect(() => {
+    if (!studySetId && studySets[0]?.id) setStudySetId(studySets[0].id)
+  }, [studySets, studySetId])
+
+  useEffect(() => {
+    if (!job?.id || ["done", "cancelled", "missing"].includes(job.status)) return undefined
+    let disposed = false
+    let timer = 0
+    async function poll() {
+      try {
+        const fresh = await MNBridge.send("aiGetQuestionPreparationJob", { jobId: job.id })
+        if (disposed) return
+        setJob(fresh)
+        if (!["done", "cancelled", "missing"].includes(fresh.status)) timer = window.setTimeout(poll, 700)
+        else if (fresh.status === "done") onStorageChanged?.()
+      } catch (reason) {
+        if (!disposed) onStatus(reason?.message || String(reason))
+      }
+    }
+    timer = window.setTimeout(poll, 350)
+    return () => { disposed = true; window.clearTimeout(timer) }
+  }, [job?.id])
+
+  useEffect(() => {
+    const current = job?.current
+    if (!job?.id || !current || current.stage !== "waiting-render") return
+    const key = `${job.id}:${current.recordId}`
+    if (requestedRef.current === key) return
+    requestedRef.current = key
+    submittedRef.current = ""
+    advancedRef.current = ""
+    setQuestionHtml("")
+    setPreviewImage("")
+    MNBridge.send("aiGetPreparationQuestion", { jobId: job.id, recordId: current.recordId })
+      .then(result => setQuestionHtml(result.questionHtml || ""))
+      .catch(reason => onStatus(reason?.message || String(reason)))
+  }, [job?.id, job?.current?.recordId, job?.current?.stage])
+
+  useEffect(() => {
+    const current = job?.current
+    if (!job?.id || job.status !== "waiting-advance" || !current || !["success", "failed"].includes(current.stage)) return undefined
+    const key = `${job.id}:${current.recordId}:${current.stage}`
+    if (advancedRef.current === key) return undefined
+    advancedRef.current = key
+    const timer = window.setTimeout(async () => {
+      try { setJob(await MNBridge.send("aiAdvanceQuestionPreparation", { jobId: job.id })) }
+      catch (reason) { onStatus(reason?.message || String(reason)) }
+    }, 1600)
+    return () => window.clearTimeout(timer)
+  }, [job?.id, job?.status, job?.current?.recordId, job?.current?.stage])
+
+  async function start() {
+    if (!studySetId || busy) return
+    setBusy(true)
+    onStatus("正在创建 OCR 题目准备任务…")
+    try {
+      requestedRef.current = ""
+      submittedRef.current = ""
+      advancedRef.current = ""
+      setQuestionHtml("")
+      setPreviewImage("")
+      const next = await MNBridge.send("aiStartQuestionPreparation", { studySetId })
+      setJob(next)
+      onStatus(next.total ? `已加入 ${next.total} 道错题` : "所选学习集没有错题")
+    } catch (reason) { onStatus(reason?.message || String(reason)) }
+    finally { setBusy(false) }
+  }
+
+  async function cancel() {
+    if (!job?.id) return
+    await MNBridge.send("aiCancelQuestionPreparation", { jobId: job.id })
+    setJob(current => current ? { ...current, status: "cancelled" } : current)
+    onStatus("题目准备任务已取消")
+  }
+
+  async function renderAndSubmit(event) {
+    const current = job?.current
+    if (!job?.id || !current || !questionHtml) return
+    const key = `${job.id}:${current.recordId}`
+    if (submittedRef.current === key) return
+    submittedRef.current = key
+    try {
+      const doc = event.currentTarget.contentDocument
+      if (!doc?.body) throw new Error("题目卡片渲染窗口不可用")
+      await doc.fonts?.ready
+      await Promise.all(Array.from(doc.images || []).map(image => image.complete ? Promise.resolve() : new Promise(resolve => {
+        const finish = () => resolve()
+        image.addEventListener("load", finish, { once: true })
+        image.addEventListener("error", finish, { once: true })
+        window.setTimeout(finish, 5000)
+      })))
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+      const width = Math.max(640, doc.documentElement.scrollWidth, doc.body.scrollWidth)
+      const height = Math.max(1, doc.documentElement.scrollHeight, doc.body.scrollHeight)
+      const scale = Math.max(.5, Math.min(1.5, 12000 / height))
+      const canvas = await html2canvas(doc.body, { backgroundColor: "#ffffff", logging: false, useCORS: true, scale, width, height, windowWidth: width, windowHeight: height })
+      const imageDataUri = canvas.toDataURL("image/jpeg", .9)
+      setPreviewImage(imageDataUri)
+      await MNBridge.send("aiSubmitPreparationImage", { jobId: job.id, recordId: current.recordId, imageDataUri })
+    } catch (reason) {
+      const message = reason?.message || String(reason)
+      onStatus(message)
+      try { await MNBridge.send("aiFailPreparationQuestion", { jobId: job.id, recordId: current.recordId, error: message }) } catch {}
+    }
+  }
+
+  const current = job?.current
+  const running = job && !["done", "cancelled", "missing"].includes(job.status)
+  const itemProgress = Math.max(0, Math.min(100, Number(current?.progress || 0)))
+  const totalProgress = Math.max(0, Math.min(100, Number(job?.totalProgress || 0)))
+  return <div className="aiPreparationWorkspace">
+    <div className="aiPreparationControls">
+      <label><span>选择含错题的学习集</span><select value={studySetId} disabled={running} onChange={event => setStudySetId(event.target.value)}>{studySets.map(set => <option key={set.id} value={set.id}>{set.title}（{set.mistakeCount} 题）</option>)}</select></label>
+      <p>逐题把整张原题卡片{includeMindMapHandwriting ? "及其脑图绑定手写" : ""}渲染为图片并发送给 {ocrEngine === "glm-ocr" ? "GLM-OCR" : "MinerU"}。识别文本独立保存在本地，后续 AI 总结直接读取文本。</p>
+      <div className="aiEditorActions"><button type="button" disabled={!studySetId || busy || running} onClick={start}>{busy ? "正在启动…" : "开始准备错题"}</button>{running && <button type="button" className="aiDangerButton" onClick={cancel}>取消</button>}</div>
+      {!studySets.length && <small className="aiPreparationEmpty">当前没有包含错题的学习集，无需 OCR。</small>}
+      {job && <dl className="aiPreparationCounts"><div><dt>题目总数</dt><dd>{job.total || 0}</dd></div><div><dt>成功</dt><dd>{job.success || 0}</dd></div><div><dt>失败</dt><dd>{job.failed || 0}</dd></div></dl>}
+    </div>
+    <div className="aiPreparationMonitor">
+      <div className="aiPreparationPreview">
+        {previewImage ? <img src={previewImage} alt={`当前上传的题目卡片：${current?.title || ""}`} /> : questionHtml ? <iframe title="待上传题目卡片" srcDoc={questionHtml} onLoad={renderAndSubmit} /> : <div><Icon name="image" /><span>{job?.status === "done" ? "题目准备已完成" : "当前上传的题目卡片会显示在这里"}</span></div>}
+      </div>
+      {job && <div className="aiPreparationProgress">
+        <div className="aiPreparationProgressLabel"><span>单题进度 · {OCR_STAGE_LABELS[current?.stage] || (job.status === "done" ? "已完成" : "等待开始")}</span><b>{Math.round(itemProgress)}%</b></div>
+        <progress max="100" value={itemProgress} />
+        <small>{current ? `${current.index}/${current.total} · ${current.title} · ${current.detail || ""}` : "没有待处理题目"}</small>
+        {current?.boundHandwritingStatus && current.boundHandwritingStatus !== "disabled" && <small>{BOUND_HANDWRITING_LABELS[current.boundHandwritingStatus] || "脑图绑定手写状态未知"}{current.boundHandwritingCount ? `（${current.boundHandwritingCount} 项）` : ""}</small>}
+        <div className="aiPreparationProgressLabel"><span>总进度</span><b>{Math.round(totalProgress)}%</b></div>
+        <progress max="100" value={totalProgress} />
+        <div className="aiPreparationOcr"><strong>OCR 返回文本</strong><pre>{current?.ocrText || (current?.error ? `识别失败：${current.error}` : "识别完成后将在这里显示")}</pre></div>
+      </div>}
+    </div>
+  </div>
+}
+
+function OCRResultBrowser({ items, onStatus }) {
+  const [selectedId, setSelectedId] = useState("")
+  const [detail, setDetail] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (!items.length) { setSelectedId(""); setDetail(null); return }
+    if (!items.some(item => item.recordId === selectedId)) setSelectedId(items[0].recordId)
+  }, [items, selectedId])
+
+  useEffect(() => {
+    if (!selectedId) return undefined
+    let disposed = false
+    setLoading(true)
+    MNBridge.send("aiGetPreparedQuestion", { recordId: selectedId }).then(value => {
+      if (!disposed) setDetail(value)
+    }).catch(reason => {
+      if (!disposed) onStatus(reason?.message || String(reason))
+    }).finally(() => { if (!disposed) setLoading(false) })
+    return () => { disposed = true }
+  }, [selectedId])
+
+  if (!items.length) return <div className="aiOcrBrowserEmpty"><Icon name="image" /><span>完成题目 OCR 后，可在这里逐题核对原题卡片与识别文本。</span></div>
+  const selected = items.find(item => item.recordId === selectedId) || items[0]
+  return <section className="aiOcrBrowser" aria-label="OCR 结果对比">
+    <header>
+      <label><span>选择题目</span><select value={selectedId} onChange={event => setSelectedId(event.target.value)}>{items.map((item, index) => <option key={item.recordId} value={item.recordId}>{index + 1}. {item.sourceTitle}</option>)}</select></label>
+      <small>{selected?.sourceNotebookTitle || "原学习集"} · {selected?.provider === "bigmodel" ? "GLM-OCR" : "MinerU"}{selected?.includedMindMapHandwriting ? ` · 含 ${selected.boundHandwritingCount || 1} 项脑图手写` : ""}</small>
+    </header>
+    <div className="aiOcrCompare">
+      <figure><figcaption>发送给 OCR 的原题卡片</figcaption>{detail?.imageDataUri ? <img src={detail.imageDataUri} alt={`${selected?.sourceTitle || "题目"} OCR 原图`} /> : <div className="aiOcrMissingImage">{loading ? "正在读取图片…" : "历史记录未保存原题图片，请重新 OCR 此题"}</div>}</figure>
+      <section><h3>OCR 文本渲染</h3>{loading ? <div className="aiOcrRenderedEmpty">正在读取 OCR 文本…</div> : detail?.questionText ? <div className="markdownPreview aiOcrRenderedText" dangerouslySetInnerHTML={{ __html: renderMarkdownPreview(detail.questionText) }} /> : <div className="aiOcrRenderedEmpty">没有可显示的 OCR 文本</div>}</section>
+    </div>
+    {detail?.processedAt && <footer>识别时间：{new Date(detail.processedAt).toLocaleString()}</footer>}
+  </section>
+}
+
 function AISettingsPage({ onBack, onEnabledChanged }) {
-  const [settings, setSettings] = useState(null), [studySets, setStudySets] = useState([]), [newSubject, setNewSubject] = useState(""), [status, setStatus] = useState(""), [cacheStats, setCacheStats] = useState(null), [reportList, setReportList] = useState([])
+  const [settings, setSettings] = useState(null), [studySets, setStudySets] = useState([]), [mistakeStudySets, setMistakeStudySets] = useState([]), [newSubject, setNewSubject] = useState(""), [status, setStatus] = useState(""), [cacheStats, setCacheStats] = useState(null), [reportList, setReportList] = useState([]), [preparedQuestions, setPreparedQuestions] = useState([])
   const [expandedKey, setExpandedKey] = useState("")
   const pageRef = useRef(null)
   const toggleEditor = key => setExpandedKey(current => current === key ? "" : key)
-  async function loadStorage() { const [stats, list] = await Promise.all([MNBridge.send("aiGetCacheStats"), MNBridge.send("aiListReports")]); setCacheStats(stats); setReportList(list || []) }
-  useEffect(() => { Promise.all([MNBridge.send("aiGetSettings"), MNBridge.send("aiListStudySets")]).then(([a, b]) => { const next = normalizeAISettingsView(a); setSettings(next); setStudySets(Array.isArray(b) ? b : []); if (next.enabled) loadStorage() }).catch(reason => setStatus(reason.message || String(reason))) }, [])
+  async function loadStorage() { const [stats, list, questions] = await Promise.all([MNBridge.send("aiGetCacheStats"), MNBridge.send("aiListReports"), MNBridge.send("aiListPreparedQuestions")]); setCacheStats(stats); setReportList(list || []); setPreparedQuestions(Array.isArray(questions) ? questions : []) }
+  useEffect(() => { Promise.all([MNBridge.send("aiGetSettings"), MNBridge.send("aiListStudySets"), MNBridge.send("aiListMistakeStudySets")]).then(([a, b, c]) => { const next = normalizeAISettingsView(a); setSettings(next); setStudySets(Array.isArray(b) ? b : []); setMistakeStudySets(Array.isArray(c) ? c : []); if (next.enabled) loadStorage() }).catch(reason => setStatus(reason.message || String(reason))) }, [])
   useLayoutEffect(() => { pageRef.current?.scrollTo?.({ top: 0, left: 0 }) }, [])
   async function save(next) { const normalized = normalizeAISettingsView(next); const previousEnabled = settings?.enabled === true; setSettings(normalized); try { const savedState = normalizeAISettingsView(await MNBridge.send("aiSaveSettings", normalized)); setSettings(savedState); setStatus("已保存"); if (savedState.enabled) loadStorage(); if (savedState.enabled !== previousEnabled) onEnabledChanged?.() } catch (reason) { setStatus(reason.message || String(reason)) } }
   if (!settings) return <section className="aiSettingsPage" ref={pageRef}><div className="aiEmpty">正在读取…</div></section>
@@ -1371,32 +1573,37 @@ function AISettingsPage({ onBack, onEnabledChanged }) {
     </div>
     <div className="settingsGroup aiCompactSettings"><h2>题目识别</h2>
       <button type="button" className="aiSummaryRow" aria-expanded={expandedKey === "mineru"} onClick={() => toggleEditor("mineru")}>
-        <span><strong>MinerU 图片识别</strong><small>{settings.mineru.enabled ? `${AI_POLICY_LABELS[settings.mineru.policy] || "自动"} · 公式${settings.mineru.enableFormula ? "开" : "关"} 表格${settings.mineru.enableTable ? "开" : "关"}` : "已关闭"}</small></span>
+        <span><strong>OCR 引擎</strong><small>{settings.mineru.enabled ? `${settings.ocrEngine === "glm-ocr" ? "GLM-OCR" : "MinerU"} · ${settings.ocrEngine === "glm-ocr" ? "整卡文档解析" : `${AI_POLICY_LABELS[settings.mineru.policy] || "自动"} · 公式${settings.mineru.enableFormula ? "开" : "关"} 表格${settings.mineru.enableTable ? "开" : "关"}`}` : "已关闭"}</small></span>
         <b>{expandedKey === "mineru" ? "收起" : "编辑"}</b>
       </button>
       {expandedKey === "mineru" && <div className="aiEditor">
-        <label className="aiSettingRow"><span>启用 MinerU</span><input type="checkbox" checked={settings.mineru.enabled} onChange={event => save({ ...settings, mineru: { ...settings.mineru, enabled: event.target.checked } })} /></label>
-        <label className="aiSettingRow"><span>OCR 策略</span><select value={settings.mineru.policy} onChange={event => save({ ...settings, mineru: { ...settings.mineru, policy: event.target.value } })}><option value="auto">自动</option><option value="all">全部图片</option><option value="image-only">纯图片题</option><option value="never">不使用</option></select></label>
-        <label className="aiSettingRow"><span>公式识别</span><input type="checkbox" checked={settings.mineru.enableFormula} onChange={event => save({ ...settings, mineru: { ...settings.mineru, enableFormula: event.target.checked } })} /></label>
-        <label className="aiSettingRow"><span>表格识别</span><input type="checkbox" checked={settings.mineru.enableTable} onChange={event => save({ ...settings, mineru: { ...settings.mineru, enableTable: event.target.checked } })} /></label>
-        <div className="aiEditorActions">
-          <button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: settings.mineru.credentialRef, persistence: "session" }).then(() => MNBridge.send("aiGetSettings")).then(setSettings)}>本次 Token</button>
-          <button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: settings.mineru.credentialRef, persistence: "local" }).then(() => MNBridge.send("aiGetSettings")).then(setSettings)}>本地保存</button>
-          <button onClick={() => MNBridge.send("aiTestMinerU").then(() => setStatus("MinerU 已连接")).catch(reason => setStatus(reason.message || String(reason)))}>测试</button>
-        </div>
+        <label className="aiSettingRow"><span>启用题目识别</span><input type="checkbox" checked={settings.mineru.enabled} onChange={event => save({ ...settings, mineru: { ...settings.mineru, enabled: event.target.checked } })} /></label>
+        <label className="aiSettingRow"><span>OCR 引擎</span><select value={settings.ocrEngine} onChange={event => save({ ...settings, ocrEngine: event.target.value })}><option value="mineru">MinerU</option><option value="glm-ocr">GLM-OCR（智谱）</option></select></label>
+        {settings.ocrEngine === "mineru" ? <>
+          <label className="aiSettingRow"><span>OCR 策略</span><select value={settings.mineru.policy} onChange={event => save({ ...settings, mineru: { ...settings.mineru, policy: event.target.value } })}><option value="auto">自动</option><option value="all">全部图片</option><option value="image-only">纯图片题</option><option value="never">不使用</option></select></label>
+          <label className="aiSettingRow"><span>公式识别</span><input type="checkbox" checked={settings.mineru.enableFormula} onChange={event => save({ ...settings, mineru: { ...settings.mineru, enableFormula: event.target.checked } })} /></label>
+          <label className="aiSettingRow"><span>表格识别</span><input type="checkbox" checked={settings.mineru.enableTable} onChange={event => save({ ...settings, mineru: { ...settings.mineru, enableTable: event.target.checked } })} /></label>
+          <div className="aiEditorActions"><button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: settings.mineru.credentialRef, persistence: "session" }).then(() => MNBridge.send("aiGetSettings")).then(setSettings)}>本次 Token</button><button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: settings.mineru.credentialRef, persistence: "local" }).then(() => MNBridge.send("aiGetSettings")).then(setSettings)}>本地保存</button><button onClick={() => MNBridge.send("aiTestMinerU").then(() => setStatus("MinerU 已连接")).catch(reason => setStatus(reason.message || String(reason)))}>测试</button></div>
+        </> : <>
+          <label className="aiEditorField"><span>API 地址</span><input value={settings.glmOcr.baseUrl} aria-label="GLM-OCR API 地址" onChange={event => save({ ...settings, glmOcr: { ...settings.glmOcr, baseUrl: event.target.value } })} /></label>
+          <label className="aiEditorField"><span>模型</span><input value="glm-ocr" aria-label="GLM-OCR 模型" disabled /></label>
+          <small className="aiOcrHint">整张题目卡片以 JPG Base64 发送；官方限制单图不超过 10 MB，返回 Markdown 文本。</small>
+          <div className="aiEditorActions"><button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: settings.glmOcr.credentialRef, persistence: "session" }).then(() => MNBridge.send("aiGetSettings")).then(setSettings)}>本次 API Key</button><button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: settings.glmOcr.credentialRef, persistence: "local" }).then(() => MNBridge.send("aiGetSettings")).then(setSettings)}>本地保存</button><span className="aiCredentialState">{credentialLabel(settings.glmOcr.credentialRef)}</span></div>
+        </>}
       </div>}
     </div>
     <div className="settingsGroup aiCompactSettings"><h2>发送内容</h2>
       <button type="button" className="aiSummaryRow" aria-expanded={expandedKey === "privacy"} onClick={() => toggleEditor("privacy")}>
-        <span><strong>发送给 AI 的内容</strong><small>{[settings.privacy.includeAnswer && "答案", settings.privacy.includeSourcePath && "章节", settings.privacy.includeReviewHistory && "历史", settings.privacy.includeCustomCategories && "标签", settings.privacy.handwriting && "手写"].filter(Boolean).join("、") || "仅题目文字"} · {AI_IMAGE_LABELS[settings.privacy.images]}</small></span>
+        <span><strong>发送给 AI 的内容</strong><small>{[settings.privacy.includeAnswer && "答案", settings.privacy.includeSourcePath && "章节", settings.privacy.includeReviewHistory && "历史", settings.privacy.includeCustomCategories && "标签", settings.privacy.handwriting && "卡片内手写", settings.privacy.mindMapHandwriting && "脑图绑定手写"].filter(Boolean).join("、") || "仅题目文字"} · {AI_IMAGE_LABELS[settings.privacy.images]}</small></span>
         <b>{expandedKey === "privacy" ? "收起" : "编辑"}</b>
       </button>
       {expandedKey === "privacy" && <div className="aiEditor">
-        {[["includeAnswer", "参考答案"], ["includeSourcePath", "章节路径"], ["includeReviewHistory", "复习历史"], ["includeCustomCategories", "自定义标签"], ["handwriting", "手写内容"]].map(([key, label]) => <label key={key} className="aiSettingRow"><span>{label}</span><input type="checkbox" checked={settings.privacy[key]} onChange={event => save({ ...settings, privacy: { ...settings.privacy, [key]: event.target.checked } })} /></label>)}
+        {[["includeAnswer", "参考答案"], ["includeSourcePath", "章节路径"], ["includeReviewHistory", "复习历史"], ["includeCustomCategories", "自定义标签"], ["handwriting", "卡片内手写"], ["mindMapHandwriting", "脑图绑定手写"]].map(([key, label]) => <label key={key} className="aiSettingRow"><span>{label}</span><input type="checkbox" checked={settings.privacy[key]} onChange={event => save({ ...settings, privacy: { ...settings.privacy, [key]: event.target.checked } })} /></label>)}
         <label className="aiSettingRow"><span>图片上传</span><select value={settings.privacy.images} onChange={event => save({ ...settings, privacy: { ...settings.privacy, images: event.target.value } })}><option value="when-needed">必要时</option><option value="always">总是</option><option value="never">不发送</option></select></label>
       </div>}
     </div>
-    {settings.enabled && <div className="settingsGroup aiStorageSettings"><h2>缓存与报告</h2><div><button onClick={() => MNBridge.send("aiClearOCRCache").then(loadStorage)}>OCR 缓存 <span>{cacheStats?.ocrEntries || 0}</span></button><span className="aiReportCount">报告 {cacheStats?.reportCount || 0}</span></div>{reportList.slice(0, 8).map(item => <article key={item.id}><span><strong>{item.subjectName}</strong><small>{new Date(item.createdAt).toLocaleDateString()}</small></span><button onClick={() => MNBridge.send("aiDeleteReport", { reportId: item.id }).then(loadStorage)}>删除</button></article>)}</div>}
+    {settings.enabled && <div className="settingsGroup aiPreparationSettings"><h2>错题题目准备</h2><QuestionPreparationWorkspace studySets={mistakeStudySets} ocrEngine={settings.ocrEngine} includeMindMapHandwriting={settings.privacy.mindMapHandwriting} onStorageChanged={loadStorage} onStatus={setStatus} /></div>}
+    {settings.enabled && <div className="settingsGroup aiStorageSettings"><h2>缓存与报告</h2><div className="aiStorageSummary"><span><strong>OCR 缓存</strong><small>API 缓存 {cacheStats?.ocrEntries || 0} · 已准备题目 {cacheStats?.preparedEntries || 0} · 报告 {cacheStats?.reportCount || 0}</small></span><button onClick={() => MNBridge.send("aiClearOCRCache").then(loadStorage)}>清空 OCR</button></div><OCRResultBrowser items={preparedQuestions} onStatus={setStatus} />{reportList.slice(0, 8).map(item => <article key={item.id}><span><strong>{item.subjectName}</strong><small>{new Date(item.createdAt).toLocaleDateString()}</small></span><button onClick={() => MNBridge.send("aiDeleteReport", { reportId: item.id }).then(loadStorage)}>删除</button></article>)}</div>}
     </div>
   </section>
 }
@@ -1520,12 +1727,21 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, setManua
   const [categoryFilter, setCategoryFilter] = useState("all")
   const [queueNotice, setQueueNotice] = useState("")
   const [detailsById, setDetailsById] = useState({})
+  const [questionsById, setQuestionsById] = useState({})
+  const [questionErrorsById, setQuestionErrorsById] = useState({})
+  const [questionLoadRevision, setQuestionLoadRevision] = useState(0)
   const [questionOpenById, setQuestionOpenById] = useState({})
   const [jumpHighlightedId, setJumpHighlightedId] = useState("")
   const detailLoadingRef = useRef(new Set())
   const detailCache = useMemo(() => createReviewDetailCache(recordId => MNBridge.send("mistakeDetail", { recordId })), [])
+  const questionCache = useMemo(() => createReviewDetailCache(recordId => MNBridge.send("mistakeQuestion", { recordId })), [])
+  const mountedRef = useRef(true)
+  const questionOpenRef = useRef(questionOpenById)
+  questionOpenRef.current = questionOpenById
   const reviewPageRef = useRef(null)
 
+
+  useEffect(() => () => { mountedRef.current = false }, [])
 
   useEffect(() => {
     if (reviewPageRef.current) reviewPageRef.current.scrollTop = 0
@@ -1607,45 +1823,70 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, setManua
     setQuestionOpenById(current => {
       const next = { ...current }
       for (const item of visibleRecords) next[item.recordId] = nextOpen
+      questionOpenRef.current = next
       return next
     })
+    if (!nextOpen) {
+      const visibleIds = new Set(visibleRecords.map(item => item.recordId))
+      setQuestionsById(current => Object.fromEntries(Object.entries(current).filter(([recordId]) => !visibleIds.has(recordId))))
+      setQuestionErrorsById(current => Object.fromEntries(Object.entries(current).filter(([recordId]) => !visibleIds.has(recordId))))
+    }
   }
 
   function toggleQuestion(recordId) {
-    setQuestionOpenById(current => ({ ...current, [recordId]: !(current[recordId] === true) }))
+    const nextOpen = !(questionOpenById[recordId] === true)
+    setQuestionOpenById(current => {
+      const next = { ...current, [recordId]: nextOpen }
+      questionOpenRef.current = next
+      return next
+    })
+    if (!nextOpen) {
+      setQuestionsById(current => { const next = { ...current }; delete next[recordId]; return next })
+      setQuestionErrorsById(current => { const next = { ...current }; delete next[recordId]; return next })
+    }
   }
 
-  // 详情只为已展开完整原题的记录加载：切进待复习页不再触发整页 mistakeDetail 风暴
+  // 原题只为已展开记录加载：切进待复习页不触发整页桥请求。
   const openSignature = visibleRecords
     .filter(item => questionOpenById[item.recordId] === true)
     .map(item => item.recordId)
     .join("")
   useEffect(() => {
-    let cancelled = false
     const queue = visibleRecords
       .filter(item => questionOpenById[item.recordId] === true)
-      .filter(item => !detailsById[item.recordId] && !detailLoadingRef.current.has(item.recordId))
+      .filter(item => !questionsById[item.recordId] && !questionErrorsById[item.recordId] && !detailLoadingRef.current.has(item.recordId))
       .map(item => item.recordId)
-    // 并发限流：待复习页可能有很多道题，避免一次性发出全部详情请求。
-    const CONCURRENCY = 4
-    async function worker() {
-      while (queue.length && !cancelled) {
-        const recordId = queue.shift()
-        detailLoadingRef.current.add(recordId)
-        try {
-          const detail = await detailCache.get(recordId, records.find(item => item.recordId === recordId)?.updatedAt || "")
-          if (!cancelled && detail) setDetailsById(current => retainReviewDetail(current, recordId, detail))
-        } catch {
-          // 单条详情失败不阻塞其余加载
-        } finally {
-          detailLoadingRef.current.delete(recordId)
+    // 协调器负责双并发；已经发出的单题任务不因筛选或折叠变化被作废，
+    // 否则请求回包后没有状态落点，该卡片会永久停留在“正在读取”。
+    for (const recordId of queue) {
+      detailLoadingRef.current.add(recordId)
+      const version = records.find(item => item.recordId === recordId)?.updatedAt || ""
+      void questionCache.get(recordId, version).then(question => {
+        if (mountedRef.current && question && questionOpenRef.current[recordId] === true) {
+          // 请求协调器的复用缓存有界；当前实际展开的题目必须全部保留，
+          // 否则展开超过 6 题时先完成的卡片会被淘汰并退回永久加载态。
+          setQuestionsById(current => ({ ...current, [recordId]: question }))
+          setQuestionErrorsById(current => {
+            if (!current[recordId]) return current
+            const next = { ...current }; delete next[recordId]; return next
+          })
         }
-      }
+      }).catch(error => {
+        if (mountedRef.current && questionOpenRef.current[recordId] === true) setQuestionErrorsById(current => ({
+          ...current,
+          [recordId]: String(error?.message || error || "读取失败")
+        }))
+      }).finally(() => { detailLoadingRef.current.delete(recordId) })
     }
-    for (let i = 0; i < CONCURRENCY; i++) void worker()
-    return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleSignature, openSignature])
+  }, [visibleSignature, openSignature, questionLoadRevision])
+
+  function retryQuestion(recordId) {
+    setQuestionErrorsById(current => {
+      const next = { ...current }; delete next[recordId]; return next
+    })
+    setQuestionLoadRevision(current => current + 1)
+  }
 
   function nextDays(item, level) {
     const curve = reviewCurves?.[level] || defaultReviewCurves[level]
@@ -1732,7 +1973,8 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, setManua
     <div className="reviewList">
     {!visibleRecords.length ? <Empty title="当前队列没有题目" text="可以切换其他复习状态或掌握等级查看。" icon={false} /> : visibleRecords.map(item => {
       const expanded = answerDetail?.record?.recordId === item.recordId
-      const questionDetail = detailsById[item.recordId]
+      const questionDetail = questionsById[item.recordId] || detailsById[item.recordId]
+      const questionError = questionErrorsById[item.recordId]
       const questionOpen = questionOpenById[item.recordId] === true
       const tags = manualTagsOf(item)
       const completed = item.reviewCompleted === true
@@ -1748,7 +1990,7 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, setManua
           <span className="reviewCardTopActions"><small className={`reviewSchedule ${statusOf(item) === "overdue" ? "overdue" : ""}`}>{schedule}</small><button type="button" className="questionFoldButton" aria-label={questionOpen ? `收起 ${item.sourceTitle} 的题目预览` : `展开 ${item.sourceTitle} 的题目预览`} aria-expanded={questionOpen} onClick={() => toggleQuestion(item.recordId)}><MorphIcon from="collapse" to="expand" active={!questionOpen} /></button></span>
         </div>
         {feedbackById[item.recordId] && <div className="reviewCardFeedback" role="status">{feedbackById[item.recordId]}</div>}
-        {questionOpen && <section className="reviewQuestion" aria-label="完整原题"><span>完整原题</span>{questionDetail ? <CardPreview title={`${item.sourceTitle}完整原题`} html={questionDetail.questionHtml} initialAutoHeight /> : <div className="reviewQuestionLoading">正在读取完整原题…</div>}</section>}
+        {questionOpen && <section className="reviewQuestion" aria-label="完整原题"><span>完整原题</span>{questionDetail ? <CardPreview title={`${item.sourceTitle}完整原题`} html={questionDetail.questionHtml} initialAutoHeight /> : questionError ? <div className="reviewQuestionLoading reviewQuestionError">读取完整原题失败。<button type="button" onClick={() => retryQuestion(item.recordId)}>重试</button></div> : <div className="reviewQuestionLoading">正在读取完整原题…</div>}</section>}
         <div className="dueReviewActions">
           <LocateButton className="reviewLocateAction" locateKey={`mistake:${item.recordId}`} onWaiting={() => showLocateHint("正在切换学习集并定位原题，请稍候…")} onLocate={async () => {
             const located = await action("openSource", { recordId: item.recordId }, false)
@@ -2079,8 +2321,8 @@ function renderMarkdownPreview(markdown) {
     .replace(RE("`([^`]+)`"), "<code>$1</code>")
     .replace(RE("[*][*]([^*]+)[*][*]"), "<strong>$1</strong>")
     .replace(RE("[*]([^*]+)[*]"), "<em>$1</em>")
-    .replace(RE("![([^]]*)](([^)]+))"), '<span class="mdImageNote">[图片：$1]</span>')
-    .replace(RE("[([^]]+)](([^)]+))"), "$1")
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<span class="mdImageNote">[图片：$1]</span>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
   const lines = String(markdown || "").split(RE(NL))
   const out = []
   let inList = false
@@ -2420,5 +2662,6 @@ export {
   SettingsGroup,
   RegexMatchingSettings,
   MistakeLevelGuide,
-  ConnectivityResult
+  ConnectivityResult,
+  renderMarkdownPreview
 }

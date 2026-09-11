@@ -44,6 +44,36 @@ export function decodeBase64Ascii(value: string): string {
   return output
 }
 
+/** base64 编码的 UTF-8 文本 → JS 字符串；不依赖 TextDecoder，兼容 MarginNote 的 JavaScriptCore。 */
+export function decodeBase64Utf8(value: string): string {
+  const bytes = decodeBase64Bytes(value)
+  let output = ""
+  for (let index = 0; index < bytes.length;) {
+    const first = bytes[index]
+    if (first < 0x80) { output += String.fromCharCode(first); index += 1; continue }
+    const width = first >= 0xc2 && first <= 0xdf ? 2 : first >= 0xe0 && first <= 0xef ? 3 : first >= 0xf0 && first <= 0xf4 ? 4 : 0
+    if (!width || index + width > bytes.length) { output += "\uFFFD"; index += 1; continue }
+    let codePoint = first & (width === 2 ? 0x1f : width === 3 ? 0x0f : 0x07)
+    let valid = true
+    for (let offset = 1; offset < width; offset++) {
+      const next = bytes[index + offset]
+      if ((next & 0xc0) !== 0x80) { valid = false; break }
+      codePoint = (codePoint << 6) | (next & 0x3f)
+    }
+    const minimum = width === 2 ? 0x80 : width === 3 ? 0x800 : 0x10000
+    if (!valid || codePoint < minimum || codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
+      output += "\uFFFD"; index += 1; continue
+    }
+    if (codePoint <= 0xffff) output += String.fromCharCode(codePoint)
+    else {
+      const adjusted = codePoint - 0x10000
+      output += String.fromCharCode(0xd800 + (adjusted >> 10), 0xdc00 + (adjusted & 0x3ff))
+    }
+    index += width
+  }
+  return output
+}
+
 /** 按文件头魔数判断 base64 图片的 MIME 类型。 */
 export function imageMimeFromBase64(value: string, fallback = "image/png"): string {
   const base64 = String(value || "").replace(/\s/g, "")

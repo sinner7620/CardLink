@@ -65,6 +65,20 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
     try { if (manager.fileExistsAtPath(path)) manager.removeItemAtPath(path); } catch (error) {}
   }
 
+  function ensureCardLinkTempRoot(app) {
+    var base = app.tempPath || app.documentPath;
+    if (!base) throw new Error("当前 MarginNote 未提供临时目录");
+    base = String(base).replace(/\/$/, "");
+    var manager = NSFileManager.defaultManager();
+    cleanupPdfArtifacts(base, manager);
+    var directory = base + "/CardLink/temp";
+    if (!manager.fileExistsAtPath(directory) &&
+        !manager.createDirectoryAtPathWithIntermediateDirectoriesAttributes(directory, true, null)) {
+      throw new Error("CardLink 临时目录创建失败");
+    }
+    return directory;
+  }
+
   function cleanupPdfArtifacts(root, manager) {
     var base = String(root).replace(/\/$/, "");
     ["beta33", "beta34", "beta35", "beta36"].forEach(function (version) {
@@ -78,7 +92,7 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
 
   function ensurePdfCacheDirectory(root) {
     var manager = NSFileManager.defaultManager();
-    var directory = String(root).replace(/\/$/, "") + "/MN4AnswerMatcherPdfCache";
+    var directory = String(root).replace(/\/$/, "") + "/pdf-cache";
     if (!manager.fileExistsAtPath(directory) &&
         !manager.createDirectoryAtPathWithIntermediateDirectoriesAttributes(directory, true, null)) {
       throw new Error("PDF 缓存目录创建失败");
@@ -88,11 +102,10 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
 
   function stagePdfRenderPage(controller, html, previewMode) {
     var app = Application.sharedInstance();
-    var root = app.tempPath || app.documentPath;
-    if (!root) throw new Error("当前 MarginNote 未提供 PDF 临时目录");
+    var root = ensureCardLinkTempRoot(app);
     var manager = NSFileManager.defaultManager();
     cleanupPdfArtifacts(root, manager);
-    var directory = String(root).replace(/\/$/, "") + "/MN4AnswerMatcherPdfRuntime";
+    var directory = String(root).replace(/\/$/, "") + "/pdf-runtime";
     if (!manager.fileExistsAtPath(directory) &&
         !manager.createDirectoryAtPathWithIntermediateDirectoriesAttributes(directory, true, null)) {
       throw new Error("PDF 临时目录创建失败");
@@ -165,8 +178,7 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
       var data = decodePdfBase64(base64);
       if (controller.exportPdfTask) controller.exportPdfTask.progress = 92;
       var app = Application.sharedInstance();
-      var root = app.tempPath || app.documentPath;
-      if (!root) throw new Error("当前 MarginNote 未提供 PDF 临时目录");
+      var root = ensureCardLinkTempRoot(app);
       if (request.result.renderPdfPreview) {
         var cacheDirectory = ensurePdfCacheDirectory(root);
         var previewPath = cacheDirectory + "/preview.pdf";
@@ -244,8 +256,8 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
       return;
     }
     var app = Application.sharedInstance();
-    var root = app.tempPath || app.documentPath;
-    if (!root) {
+    var root;
+    try { root = ensureCardLinkTempRoot(app); } catch (error) {
       rejectPdfRequest(controller, new Error("当前 MarginNote 未提供 PDF 预览临时目录"));
       return;
     }

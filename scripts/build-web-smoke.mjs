@@ -13,6 +13,8 @@ const stub = {
   name: "web-smoke-stubs",
   setup(build) {
     const empty = () => ({ contents: "module.exports = {}", loader: "js" })
+    build.onResolve({ filter: /^html2canvas$/ }, () => ({ path: "html2canvas", namespace: "web-smoke-stub" }))
+    build.onLoad({ filter: /.*/, namespace: "web-smoke-stub" }, () => ({ contents: "module.exports = async function html2canvasStub() { return {}; }", loader: "js" }))
     build.onLoad({ filter: /\.css$/ }, empty)
     build.onLoad({ filter: /(^|[\\/])(ui-alignment|ui-redesign|mnBridge|previewBridge)\.js$/ }, empty)
     // Phosphor/SF 图标经 Vite 的 ?raw 约定导入 SVG；Node bundle 里按文本内联。
