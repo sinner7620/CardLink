@@ -1,47 +1,28 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
-import { createRequire } from "node:module"
 import test from "node:test"
 import {
   isTelemetryDue,
   TELEMETRY_EU_ENDPOINT,
   TELEMETRY_FALLBACK_ENDPOINT,
   TELEMETRY_INTERVAL,
+  TELEMETRY_PRIMARY_ENDPOINT,
   telemetryChannel,
   telemetryStatusCode
 } from "../src/telemetry"
-
-const require = createRequire(import.meta.url)
-const { sanitizedPayload } = require("../cloudbase/telemetry-relay/index.js")
 
 test("版本号映射到 stable 与 beta 匿名统计渠道", () => {
   assert.equal(telemetryChannel("1.9.91"), "stable")
   assert.equal(telemetryChannel("2.3.11-beta.1"), "beta")
 })
 
-test("优先使用 EU 自定义域名，并保留 workers.dev 备用入口", () => {
+test("优先使用 xyz 自定义域名，并保留 EU 与 workers.dev 两级备用入口", () => {
+  assert.equal(TELEMETRY_PRIMARY_ENDPOINT, "https://telemetry.2608204.xyz/ping")
   assert.equal(TELEMETRY_EU_ENDPOINT, "https://cardlink.cn.eu.org/ping")
   assert.equal(
     TELEMETRY_FALLBACK_ENDPOINT,
     "https://mnrails-telemetry.mr-wuyzhn.workers.dev/ping"
   )
-})
-
-test("CloudBase 中转只保留四个通过校验的匿名字段", () => {
-  const payload = sanitizedPayload(JSON.stringify({
-    schema: 1,
-    install_id: "00000000-0000-4000-8000-000000000000",
-    version: "1.9.11",
-    channel: "stable",
-    ignored: "must-not-be-forwarded"
-  }))
-  assert.deepEqual(payload, {
-    schema: 1,
-    install_id: "00000000-0000-4000-8000-000000000000",
-    version: "1.9.11",
-    channel: "stable"
-  })
-  assert.equal(sanitizedPayload(JSON.stringify({ schema: 1 })), undefined)
 })
 
 test("兼容 MarginNote HTTP 响应的 statusCode 属性与方法两种桥接形式", () => {
@@ -60,12 +41,28 @@ test("匿名统计按成功时间节流 12 小时", () => {
 
 test("上报只接受 204，并在成功后记录时间且失败全程静默", () => {
   const source = readFileSync("src/telemetry.ts", "utf8")
-  assert.match(source, /telemetryStatusCode\(response\) === 204/)
-  assert.match(source, /\[TELEMETRY_EU_ENDPOINT, TELEMETRY_FALLBACK_ENDPOINT\]/)
-  assert.match(source, /for \(const endpoint of \[TELEMETRY_EU_ENDPOINT, TELEMETRY_FALLBACK_ENDPOINT\]\)/)
+  assert.match(source, /statusCode === 204/)
+  assert.match(source, /TELEMETRY_PRIMARY_ENDPOINT,[\s\S]*TELEMETRY_EU_ENDPOINT,[\s\S]*TELEMETRY_FALLBACK_ENDPOINT/)
+  assert.match(source, /for \(const endpoint of/)
   assert.match(source, /if \(await postTelemetry\(id\)\) rememberSuccess/)
   assert.match(source, /const REQUEST_TIMEOUT_SECONDS = 8/)
   assert.match(source, /setTimeoutInterval\(REQUEST_TIMEOUT_SECONDS\)/)
   assert.match(source, /catch \{\s*\/\/ Best effort only/)
   assert.doesNotMatch(source, /showHUD|popup|MN\.error/)
+})
+
+test("联通测试：逐通道发送测试标记，结果以测试序号呈现且不暴露端点", () => {
+  const telemetry = readFileSync("src/telemetry.ts", "utf8")
+  const ui = readFileSync("web/src/main.jsx", "utf8")
+  const bridge = readFileSync("src/rails-core.ts", "utf8")
+  assert.match(bridge, /command === "testTelemetryConnectivity"[\s\S]*debugModeEnabled/)
+  assert.match(telemetry, /content_type: "connectivity-test"/)
+  assert.match(telemetry, /不计入正式上报/)
+  assert.match(telemetry, /install_id: "00000000-0000-4000-8000-000000000000"/)
+  assert.match(telemetry, /connectivityTestTo\(`测试/)
+  assert.doesNotMatch(telemetry, /rememberSuccess\(Date\.now\(\)\)[\s\S]{0,80}connectivity/i)
+  // UI 只呈现测试序号与结果，不展示端点网址
+  assert.match(ui, /"联通测试"/)
+  assert.match(ui, /item\.key/)
+  assert.doesNotMatch(ui, /TELEMETRY_PRIMARY_ENDPOINT/)
 })

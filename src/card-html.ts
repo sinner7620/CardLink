@@ -1,4 +1,13 @@
 import { pkDrawingRendererScript } from "./pkdrawing-renderer"
+import { renderMarkdown } from "./markdown"
+import { noteLinkTarget } from "./safe-note"
+import { imageMimeFromBase64 } from "./base64"
+import { escapeHtml } from "./html-utils"
+import { UI_COLORS } from "./ui-tokens"
+import { wireFramePinchZoom } from "./pinch-zoom"
+import { mountCardPreview } from "./card-preview"
+
+export { escapeHtml } from "./html-utils"
 
 export type NoteResolver = (noteId: string) => any
 export type MediaResolver = (hash: string) => string | undefined
@@ -16,21 +25,12 @@ function textOf(value: unknown): string {
   return typeof value === "string" ? value.trim() : ""
 }
 
-export function escapeHtml(value: unknown): string {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;")
-}
-
 function imageBlock(paint: unknown, resolveMedia: MediaResolver): string {
   const hash = textOf(paint)
   if (!hash) return ""
   const base64 = resolveMedia(hash)
   return base64
-    ? `<figure><img src="data:image/jpeg;base64,${base64}" /></figure>`
+    ? `<figure><img data-media-id="${escapeHtml(hash)}" src="data:${imageMimeFromBase64(base64)};base64,${base64}" /></figure>`
     : '<div class="missing-image">图片资源不可用</div>'
 }
 
@@ -39,7 +39,7 @@ function drawingBlock(drawing: unknown, resolveDrawing: DrawingResolver): string
   if (!hash) return ""
   const base64 = resolveDrawing(hash)
   return base64
-    ? `<figure class="drawing"><canvas data-drawing="${base64}"></canvas></figure>`
+    ? `<figure class="drawing"><canvas data-drawing-id="${escapeHtml(hash)}" data-drawing="${base64}"></canvas></figure>`
     : '<div class="missing-image">未读取到手写数据</div>'
 }
 
@@ -57,11 +57,11 @@ function paintNoteBlock(
   const imageBase64 = resolveMedia(paintHash)
   const drawingBase64 = resolveDrawing(drawingHash)
   if (imageBase64 && drawingBase64) {
-    return `<figure class="paint-note"><img src="data:image/png;base64,${imageBase64}" /><canvas data-drawing="${drawingBase64}" data-drawing-overlay="true"></canvas></figure>`
+    return `<figure class="paint-note"><img data-media-id="${escapeHtml(paintHash)}" src="data:${imageMimeFromBase64(imageBase64)};base64,${imageBase64}" /><canvas data-drawing-id="${escapeHtml(drawingHash)}" data-drawing="${drawingBase64}" data-drawing-overlay="true"></canvas></figure>`
   }
-  if (imageBase64) return `<figure><img src="data:image/png;base64,${imageBase64}" /></figure>`
+  if (imageBase64) return `<figure><img data-media-id="${escapeHtml(paintHash)}" src="data:${imageMimeFromBase64(imageBase64)};base64,${imageBase64}" /></figure>`
   if (drawingBase64) {
-    return `<figure class="drawing"><canvas data-drawing="${drawingBase64}"></canvas></figure>`
+    return `<figure class="drawing"><canvas data-drawing-id="${escapeHtml(drawingHash)}" data-drawing="${drawingBase64}"></canvas></figure>`
   }
   return '<div class="missing-image">图片及手写资源不可用</div>'
 }
@@ -69,10 +69,8 @@ function paintNoteBlock(
 function excerptBlock(note: any, resolveMedia: MediaResolver): string {
   const excerptText = textOf(note?.excerptText)
   const image = imageBlock(note?.excerptPic?.paint, resolveMedia)
-  // excerptText beside an excerpt image is OCR fallback text. Rendering both
-  // duplicates the same content and produces noisy mathematical expressions.
   if (image) return image
-  return excerptText ? `<div class="text-block">${escapeHtml(excerptText)}</div>` : ""
+  return excerptText ? `<div class="text-block markdown-body">${renderMarkdown(excerptText)}</div>` : ""
 }
 
 function noteBody(
@@ -105,8 +103,17 @@ function noteBody(
       const html = textOf(comment?.html)
       if (html || text) blocks.push(`<div class="html-block">${html || escapeHtml(text)}</div>`)
     } else if (type === "TextNote" && text && !text.startsWith("#")) {
-      if (!text.includes("marginnote3app") && !text.includes("marginnote4app")) {
-        blocks.push(`<div class="text-block">${escapeHtml(text)}</div>`)
+      const linkedId = noteLinkTarget(text)
+      if (linkedId) {
+        // MN4 note links are plain TextNote comments; render the linked note's
+        // content instead of dropping it (same fallback chain as LinkNote).
+        const linked = resolveNote(linkedId)
+        if (linked && !visited.has(linked)) {
+          const linkedBody = noteBody(linked, resolveNote, resolveMedia, resolveDrawing, visited)
+          if (linkedBody) blocks.push(linkedBody)
+        }
+      } else if (!text.includes("marginnote3app") && !text.includes("marginnote4app")) {
+        blocks.push(`<div class="text-block markdown-body">${renderMarkdown(text)}</div>`)
       }
     } else if (type === "LinkNote") {
       const mergedBlocks: string[] = []
@@ -118,9 +125,8 @@ function noteBody(
       )
       const mergedText = textOf(comment?.q_htext)
       if (mergedImage) mergedBlocks.push(mergedImage)
-      // q_htext is OCR for q_hpic. Keep it only when the merged excerpt has no image.
       if (!mergedImage && mergedText) {
-        mergedBlocks.push(`<div class="text-block">${escapeHtml(mergedText)}</div>`)
+        mergedBlocks.push(`<div class="text-block markdown-body">${renderMarkdown(mergedText)}</div>`)
       }
 
       // Older cards may not carry q_htext/q_hpic. Only then fall back to resolving noteid.
@@ -131,18 +137,14 @@ function noteBody(
           if (linkedBody) mergedBlocks.push(linkedBody)
         }
       }
-      if (mergedBlocks.length) {
-        // Merged excerpts are card content, not a separate semantic section.
-        blocks.push(mergedBlocks.join(""))
-      }
+      if (mergedBlocks.length) blocks.push(mergedBlocks.join(""))
     }
   }
   return blocks.join("")
 }
 
-// Keep answer-card zoom behavior aligned with the Beta question preview: the
-// content scales around the two-finger focus point and remains scrollable.
-const cardPinchZoomScript = String.raw`(function(){var card=document.querySelector(".card");if(!card)return;var baseWidth=Math.max(1,Math.ceil(card.getBoundingClientRect().width)),baseHeight=Math.max(1,Math.ceil(card.scrollHeight)),scale=1,startScale=1,startDistance=0,focusX=0,focusY=0;card.style.width=baseWidth+"px";card.style.maxWidth="none";card.style.transformOrigin="0 0";card.style.willChange="transform";document.documentElement.style.overflow="auto";document.body.style.overflow="visible";function distance(t){return Math.hypot(t[0].clientX-t[1].clientX,t[0].clientY-t[1].clientY)}function midpoint(t){return{x:(t[0].clientX+t[1].clientX)/2,y:(t[0].clientY+t[1].clientY)/2}}function remember(point){focusX=(window.scrollX+point.x)/scale;focusY=(window.scrollY+point.y)/scale}function apply(value,point){scale=Math.max(1,Math.min(3,value));card.style.transform="scale("+scale+")";document.body.style.width=Math.ceil(baseWidth*scale)+"px";document.body.style.height=Math.ceil(baseHeight*scale)+"px";document.documentElement.dataset.previewScale=scale.toFixed(2);if(point)window.scrollTo(Math.max(0,focusX*scale-point.x),Math.max(0,focusY*scale-point.y))}document.addEventListener("touchstart",function(event){if(event.touches.length!==2)return;var point=midpoint(event.touches);startDistance=distance(event.touches);startScale=scale;remember(point)},{passive:true});document.addEventListener("touchmove",function(event){if(event.touches.length!==2||!startDistance)return;event.preventDefault();var point=midpoint(event.touches);apply(startScale*distance(event.touches)/startDistance,point)},{passive:false});document.addEventListener("touchend",function(event){if(event.touches.length<2)startDistance=0},{passive:true});document.addEventListener("gesturestart",function(event){var point={x:Number(event.clientX||innerWidth/2),y:Number(event.clientY||innerHeight/2)};startScale=scale;remember(point);event.preventDefault()},{passive:false});document.addEventListener("gesturechange",function(event){var point={x:Number(event.clientX||innerWidth/2),y:Number(event.clientY||innerHeight/2)};event.preventDefault();apply(startScale*Number(event.scale||1),point)},{passive:false});apply(1)})();`
+// 统一控制器由各宿主复用，不再二次安装手势。
+const cardPinchZoomScript = `(${mountCardPreview.toString()})(window, ${wireFramePinchZoom.toString()});`
 
 export function renderCardHtml(
   note: any,
@@ -170,8 +172,7 @@ export function renderCardHtml(
   return `<!doctype html>
 <html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=3,user-scalable=yes">
 <style>
-:root{color-scheme:light dark}*{box-sizing:border-box}html,body{margin:0;padding:0;background:transparent;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#202124}body{padding:0}.card{min-height:100vh;background:#fff;padding:54px 22px 34px}.eyebrow{font-size:12px;color:#6b7280;margin-bottom:6px}.card h1{font-size:22px;line-height:1.35;margin:0 44px 18px 0}.text-block,.html-block{font-size:16px;line-height:1.7;white-space:pre-wrap;word-break:break-word;margin:12px 0;padding:12px 14px;background:#f5f7fb;border-radius:9px}.html-block{white-space:normal}figure{margin:14px 0;text-align:center}img,canvas[data-drawing]{display:block;max-width:100%;height:auto;margin:0 auto;border-radius:8px}canvas[data-drawing]{width:100%;background:#fff}.paint-note{position:relative;display:block}.paint-note img{width:100%;height:auto}.paint-note canvas[data-drawing]{position:absolute;inset:0;width:100%;height:100%;margin:0;background:transparent;pointer-events:none}.missing-image{padding:28px;text-align:center;color:#9b1c1c;background:#fff1f1;border-radius:8px}.child{margin-top:20px;padding-top:16px;border-top:1px solid #d9dde7}.child h2{font-size:17px;margin:0 0 10px}
-@media(prefers-color-scheme:dark){html,body{color:#f3f4f6}.card{background:#202124}.text-block,.html-block{background:#303236}.eyebrow{color:#aeb4bf}.child{border-color:#45484f}}
+:root{color-scheme:light;--mn-accent:${UI_COLORS.accent};--mn-gray-fill:${UI_COLORS.grayFill};--mn-level-0:${UI_COLORS.level0};--mn-level-1:${UI_COLORS.level1};--mn-level-2:${UI_COLORS.level2}}*{box-sizing:border-box}html,body{margin:0;padding:0;background:transparent;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#202124}body{padding:0}.card{min-height:100vh;background:#fff;padding:54px 22px 34px}.eyebrow{font-size:12px;color:#6b7280;margin-bottom:6px}.card h1{font-size:22px;line-height:1.35;margin:0 44px 18px 0}.text-block,.html-block{font-size:16px;line-height:1.7;word-break:break-word;margin:12px 0;padding:12px 14px;background:#f5f7fb;border-radius:9px}.html-block{white-space:normal}.markdown-body>:first-child{margin-top:0}.markdown-body>:last-child{margin-bottom:0}.markdown-body p,.markdown-body ul,.markdown-body ol,.markdown-body blockquote,.markdown-body pre{margin:8px 0}.markdown-body h1,.markdown-body h2,.markdown-body h3,.markdown-body h4{line-height:1.35;margin:16px 0 8px}.markdown-body h1{font-size:1.45em}.markdown-body h2{font-size:1.3em}.markdown-body h3{font-size:1.16em}.markdown-body ul,.markdown-body ol{padding-left:1.6em}.markdown-body blockquote{margin-left:0;padding-left:12px;border-left:3px solid #9ca3af;color:#4b5563}.markdown-body code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em;padding:.12em .3em;background:rgba(127,127,127,.14);border-radius:4px}.markdown-body pre{overflow:auto;padding:10px 12px;background:rgba(127,127,127,.14);border-radius:7px;white-space:pre}.markdown-body pre code{padding:0;background:none}.markdown-body table{display:block;max-width:100%;overflow:auto;border-collapse:collapse}.markdown-body th,.markdown-body td{padding:5px 9px;border:1px solid #c9ced8}.markdown-body a{color:var(--mn-accent)}.markdown-body .katex-display{display:block;margin:12px 0;overflow-x:auto;overflow-y:hidden;text-align:center}.markdown-body math{font-size:1.08em}figure{margin:14px 0;text-align:center}img,canvas[data-drawing]{display:block;max-width:100%;height:auto;margin:0 auto;border-radius:8px}canvas[data-drawing]{background:#fff}.paint-note{position:relative;display:block}.paint-note img{width:100%;height:auto}.paint-note canvas[data-drawing]{position:absolute;inset:0;width:100%;height:100%;margin:0;background:transparent;pointer-events:none}.missing-image{padding:28px;text-align:center;color:#9b1c1c;background:#fff1f1;border-radius:8px}.child{margin-top:20px;padding-top:16px;border-top:1px solid #d9dde7}.child h2{font-size:17px;margin:0 0 10px}
 </style></head><body><article class="card"><div class="eyebrow">${escapeHtml(
     questionTitle
   )}</div><h1>${escapeHtml(answerTitle)}</h1>${main}${children}</article><script>${pkDrawingRendererScript}</script><script>${cardPinchZoomScript}</script></body></html>`

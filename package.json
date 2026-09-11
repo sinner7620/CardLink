@@ -1,27 +1,51 @@
 {
-  "name": "mn4-answer-matcher",
-  "version": "1.9.12",
+  "name": "cardlink",
+  "version": "2.4.1",
+  "mnChannel": "stable",
   "private": true,
   "description": "MarginNote 4 跨脑图答案匹配插件",
   "author": "frank",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/sinner7620/mn4_answer_matcher.git"
+    "url": "https://github.com/sinner7620/CardLink.git"
   },
   "scripts": {
     "build": "node build.mjs",
+    "build:source": "node build.mjs",
+    "dev:web": "vite --config web/vite.config.js",
     "check": "tsc --noEmit",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "tsx --experimental-test-module-mocks --test tests/ai-subsystem.test.ts tests/bridge-schema.test.ts tests/content-fingerprint.test.ts tests/domain.test.ts tests/mistake-export.test.ts tests/mistake-performance.test.ts tests/mistake-write-behavior.test.ts tests/plugin-events.test.ts tests/telemetry.test.ts tests/updater-behavior.test.ts tests/updater.test.ts tests/web-bridge.test.ts tests/web-render-smoke.test.ts tests/index-store-behavior.test.ts tests/card-preview.test.ts tests/review-detail-cache.test.ts"
   },
   "dependencies": {
-    "marginnote": "0.9.30"
+    "html2canvas": "1.4.1",
+    "jspdf": "3.0.3",
+    "katex": "0.18.4",
+    "lucide": "1.39.0",
+    "marginnote": "0.9.30",
+    "marked": "18.0.11",
+    "morphicons": "1.7.1"
   },
   "devDependencies": {
-    "adm-zip": "0.5.16",
+    "@playwright/test": "1.62.1",
     "@types/adm-zip": "0.5.7",
-    "esbuild": "0.25.6",
+    "@vitejs/plugin-react": "6.0.1",
+    "adm-zip": "0.5.16",
+    "esbuild": "0.27.0",
+    "postcss": "8.5.19",
+    "react": "19.2.5",
+    "react-dom": "19.2.5",
     "tsx": "4.20.3",
-    "typescript": "5.8.3"
+    "typescript": "5.8.3",
+    "vite": "8.0.9"
+  },
+  "mnRails": {
+    "template": "web",
+    "version": "0.5.8"
+  },
+  "pnpm": {
+    "ignoredBuiltDependencies": [
+      "core-js"
+    ]
   }
 }

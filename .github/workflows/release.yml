@@ -1,4 +1,4 @@
-name: Build and publish MN add-on
+name: Build and publish CardLink
 
 on:
   push:
@@ -36,7 +36,7 @@ jobs:
         with:
           body_path: RELEASE_NOTES_${{ github.ref_name }}.md
           prerelease: ${{ contains(github.ref_name, '-') }}
-          files: dist/mn4-answer-matcher-v*.mnaddon
+          files: dist/CardLink-${{ github.ref_name }}.mnaddon
       - name: Sync release to Gitee mirror
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -44,10 +44,10 @@ jobs:
           GITEE_REPO: baidreams/CardLink
           RELEASE_TAG: ${{ github.ref_name }}
           RELEASE_NOTES_FILE: RELEASE_NOTES_${{ github.ref_name }}.md
-        run: node scripts/sync-gitee-release.mjs
+        run: node scripts/sync-gitee-release-notes.mjs
       - name: Upload manual-build artifact
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: mn4-answer-matcher
-          path: dist/mn4-answer-matcher-v*.mnaddon
+          name: CardLink
+          path: dist/CardLink-v*.mnaddon
