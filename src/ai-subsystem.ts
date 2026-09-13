@@ -14,6 +14,7 @@ const SETTINGS_KEY = "mn4-answer-matcher.ai.settings.v1"
 const CREDENTIALS_KEY = "mn4-answer-matcher.ai.credentials.v1"
 const MAX_RECORDS = 300
 const MAX_ANALYSIS_IMAGES = 30
+const MAX_HANDWRITING_IMAGES = 6
 const MAX_HANDWRITING_BASE64_CHARS = 4000000
 type ProviderType = "openai" | "deepseek"
 type Frequency = "daily" | "weekly" | "monthly"
@@ -25,9 +26,9 @@ export interface AISubject { id: string; name: string; studySetIds: string[]; sc
 export interface AISettings {
   schemaVersion: 1; enabled: boolean; defaultProfileId: string; profiles: AIProfile[]; subjects: AISubject[]
   ocrEngine: OCREngine
-  mineru: { enabled: boolean; baseUrl: string; credentialRef: string; model: "vlm"; language: string; enableFormula: boolean; enableTable: boolean; policy: "auto" | "all" | "image-only" | "never" }
+  mineru: { enabled: boolean; baseUrl: string; credentialRef: string; model: "vlm"; language: string; enableFormula: boolean; enableTable: boolean }
   glmOcr: { baseUrl: string; credentialRef: string; model: "glm-ocr"; timeoutMs: number }
-  privacy: { includeAnswer: boolean; includeSourcePath: boolean; includeReviewHistory: boolean; includeCustomCategories: boolean; images: "when-needed" | "always" | "never"; handwriting: boolean; mindMapHandwriting: boolean; handwritingToModel: boolean }
+  privacy: { includeAnswer: boolean; includeSourcePath: boolean; includeReviewHistory: boolean; includeCustomCategories: boolean; handwriting: boolean }
 }
 
 const DEFAULTS: AISettings = {
@@ -37,9 +38,9 @@ const DEFAULTS: AISettings = {
     { id: "deepseek-main", name: "DeepSeek", type: "deepseek", baseUrl: "https://api.deepseek.com", model: "deepseek-v4-pro", timeoutMs: 60000, credentialRef: "llm-deepseek-main" }
   ], subjects: [],
   ocrEngine: "mineru",
-  mineru: { enabled: false, baseUrl: "https://mineru.net", credentialRef: "ocr-mineru", model: "vlm", language: "ch", enableFormula: true, enableTable: true, policy: "auto" },
+  mineru: { enabled: false, baseUrl: "https://mineru.net", credentialRef: "ocr-mineru", model: "vlm", language: "ch", enableFormula: true, enableTable: true },
   glmOcr: { baseUrl: "https://open.bigmodel.cn/api/paas/v4", credentialRef: "ocr-glm", model: "glm-ocr", timeoutMs: 120000 },
-  privacy: { includeAnswer: true, includeSourcePath: true, includeReviewHistory: true, includeCustomCategories: true, images: "when-needed", handwriting: false, mindMapHandwriting: false, handwritingToModel: false }
+  privacy: { includeAnswer: true, includeSourcePath: true, includeReviewHistory: true, includeCustomCategories: true, handwriting: false }
 }
 let cached: AISettings | undefined
 let sessionCredentials: Record<string, string> = {}
@@ -62,9 +63,11 @@ function normalize(value: any): AISettings {
   const mineru = value?.mineru || {}, glmOcr = value?.glmOcr || {}, privacy = value?.privacy || {}
   return { schemaVersion: 1, enabled: value?.enabled === true, defaultProfileId: profiles.some(item => item.id === value?.defaultProfileId) ? value.defaultProfileId : profiles[0]?.id || "", profiles, subjects,
     ocrEngine: value?.ocrEngine === "glm-ocr" ? "glm-ocr" : "mineru",
-    mineru: { ...DEFAULTS.mineru, ...mineru, enabled: mineru.enabled === true, baseUrl: String(mineru.baseUrl || DEFAULTS.mineru.baseUrl).replace(/\/+$/, ""), policy: ["auto", "all", "image-only", "never"].includes(mineru.policy) ? mineru.policy : "auto", enableFormula: mineru.enableFormula !== false, enableTable: mineru.enableTable !== false },
+    // 旧 policy "never" 的关闭意图迁移到 enabled；其余策略在整卡识别模型下等价于开启。
+    mineru: { ...DEFAULTS.mineru, ...mineru, enabled: mineru.enabled === true && mineru.policy !== "never", baseUrl: String(mineru.baseUrl || DEFAULTS.mineru.baseUrl).replace(/\/+$/, ""), enableFormula: mineru.enableFormula !== false, enableTable: mineru.enableTable !== false },
     glmOcr: { ...DEFAULTS.glmOcr, ...glmOcr, baseUrl: String(glmOcr.baseUrl || DEFAULTS.glmOcr.baseUrl).replace(/\/+$/, "").replace(/\/layout_parsing$/i, ""), model: "glm-ocr", timeoutMs: Math.min(180000, Math.max(10000, Number(glmOcr.timeoutMs) || 120000)) },
-    privacy: { includeAnswer: privacy.includeAnswer !== false, includeSourcePath: privacy.includeSourcePath !== false, includeReviewHistory: privacy.includeReviewHistory !== false, includeCustomCategories: privacy.includeCustomCategories !== false, images: ["when-needed", "always", "never"].includes(privacy.images) ? privacy.images : "when-needed", handwriting: privacy.handwriting === true, mindMapHandwriting: privacy.mindMapHandwriting === true, handwritingToModel: privacy.handwritingToModel === true } }
+    // 手写内容统一开关：旧「卡片内手写 / 脑图绑定手写 / 手写原图直传」任一开启都视为愿意发送手写。
+    privacy: { includeAnswer: privacy.includeAnswer !== false, includeSourcePath: privacy.includeSourcePath !== false, includeReviewHistory: privacy.includeReviewHistory !== false, includeCustomCategories: privacy.includeCustomCategories !== false, handwriting: privacy.handwriting === true || privacy.mindMapHandwriting === true || privacy.handwritingToModel === true } }
 }
 export function loadAISettings() { return cached ||= normalize(getLocalDataByKey(SETTINGS_KEY)) }
 function taskSettingsFingerprint(settings: AISettings): string {
@@ -263,9 +266,7 @@ interface PreparedQuestionSnapshot {
   processedAt: string
   imageFile?: string
   imageMime?: "image/jpeg"
-  handwritingImageFile?: string
-  handwritingImageMime?: "image/jpeg"
-  handwritingImageBytes?: number
+  handwritingImages?: { file: string; bytes: number }[]
   includedMindMapHandwriting?: boolean
   boundHandwritingCount?: number
 }
@@ -281,19 +282,18 @@ function writePreparedQuestion(value: PreparedQuestionSnapshot): void {
 }
 function readQuestionInput(record: any, settings: AISettings, reader = createMistakeContentReader()) {
   const raw = reader.readQuestion(record.recordId).questionHtml
-  const includeBound = settings.privacy.images !== "never" && settings.privacy.mindMapHandwriting
-  const handwriting = includeBound
+  const includeHandwriting = settings.privacy.handwriting
+  const handwriting = includeHandwriting
     ? readBoundMindMapHandwriting(String(record.sourceNotebookId), String(record.sourceNoteId))
     : { status: "none" as const, assets: [] }
-  if (includeBound && ["unsupported", "unreadable"].includes(handwriting.status)) {
-    throw new Error("脑图绑定手写无法读取，请检查原卡片或关闭脑图手写发送")
+  if (includeHandwriting && ["unsupported", "unreadable"].includes(handwriting.status)) {
+    throw new Error("手写内容无法读取，请检查原卡片或关闭手写内容发送")
   }
   const boundHtml = appendBoundMindMapHandwriting("<body></body>", handwriting)
   const plan = planQuestionInput(raw, settings, boundHtml)
-  if (!plan.needsOCR && !plan.hasText) throw new Error("当前图片/OCR 策略下没有可用题目文字")
   return { ...plan, sourceFingerprint: sha256Hex(JSON.stringify([record.sourceNotebookId, record.sourceNoteId,
     questionBody(raw), handwriting])), policyFingerprint: preparationPolicyFingerprint(settings),
-    boundHandwritingStatus: includeBound ? handwriting.status : "disabled", boundHandwritingCount: handwriting.assets.length }
+    boundHandwritingStatus: includeHandwriting ? handwriting.status : "disabled", boundHandwritingCount: handwriting.assets.length }
 }
 function assertPreparationCurrent(job: any, recordId: string): ReturnType<typeof readQuestionInput> {
   ensureJobActive(job)
@@ -304,14 +304,6 @@ function assertPreparationCurrent(job: any, recordId: string): ReturnType<typeof
     throw new Error("题目、手写或发送范围已变化，请重新准备")
   }
   return current
-}
-function saveNativeQuestion(record: any, input: ReturnType<typeof readQuestionInput>): void {
-  writePreparedQuestion({ schemaVersion: 3, recordId: record.recordId, sourceNoteId: record.sourceNoteId,
-    sourceNotebookId: record.sourceNotebookId, sourceTitle: record.sourceTitle, status: "ready",
-    sourceFingerprint: input.sourceFingerprint, policyFingerprint: input.policyFingerprint,
-    contentFingerprint: sha256Hex(input.nativeText), questionText: input.nativeText, ocrText: "",
-    provider: "local", model: "native-text", processedAt: new Date().toISOString(),
-    includedMindMapHandwriting: false, boundHandwritingCount: 0 })
 }
 function preparedQuestionSummaries(): any[] {
   ensureDirectory(preparedQuestionRoot())
@@ -564,10 +556,10 @@ function finishPreparationItem(job: any, stage: "success" | "failed", detail: st
   job.status = job.completed >= job.total ? "done" : "waiting-advance"
 }
 
-async function processPreparationImage(job: any, recordId: string, imageDataUri: string, handwritingDataUri = ""): Promise<void> {
+async function processPreparationImage(job: any, recordId: string, imageDataUri: string, handwritingDataUris: string[] = []): Promise<void> {
   try {
     const input = assertPreparationCurrent(job, recordId)
-    if (!input.needsOCR) throw new Error("当前策略不允许上传此题图片")
+    if (!input.needsOCR) throw new Error("未开启题目识别（OCR），题目无法发送")
     const record = loadMistakeState().records[recordId]
     if (!record) throw new Error("错题记录不存在")
     job.status = "running"
@@ -587,13 +579,14 @@ async function processPreparationImage(job: any, recordId: string, imageDataUri:
     const imagePath = preparedQuestionImagePath(recordId)
     const imageData = dataFromBase64Source(imageDataUri)
     if (!imageData.writeToFileAtomically(imagePath, true)) throw new Error("OCR 已完成，但原题卡片图片保存失败")
-    // 手写原图另存为独立附件：供分析模型直传使用，缺失只降低能力，不阻断准备。
-    let handwriting: { file: string; bytes: number } | undefined
-    if (/^data:image\/jpeg;base64,/i.test(handwritingDataUri) && handwritingDataUri.length <= MAX_HANDWRITING_BASE64_CHARS) {
+    // 手写内容以独立图片另存，仅供分析模型直传；单张无效或超限只跳过，不阻断准备。
+    const handwritingImages: { file: string; bytes: number }[] = []
+    for (const [index, dataUri] of handwritingDataUris.entries()) {
+      if (handwritingImages.length >= MAX_HANDWRITING_IMAGES || !/^data:image\/jpeg;base64,/i.test(dataUri) || dataUri.length > MAX_HANDWRITING_BASE64_CHARS) continue
       try {
-        const handwritingPath = preparedQuestionImagePath(`${recordId}-handwriting`)
-        const handwritingData = dataFromBase64Source(handwritingDataUri)
-        if (handwritingData.writeToFileAtomically(handwritingPath, true)) handwriting = { file: handwritingPath.slice(preparedQuestionImageRoot().length + 1), bytes: handwritingData.length }
+        const handwritingPath = preparedQuestionImagePath(`${recordId}-h${index}`)
+        const handwritingData = dataFromBase64Source(dataUri)
+        if (handwritingData.writeToFileAtomically(handwritingPath, true)) handwritingImages.push({ file: `${sha256Hex(`${recordId}-h${index}`)}.jpg`, bytes: handwritingData.length })
       } catch {}
     }
     writePreparedQuestion({
@@ -613,11 +606,11 @@ async function processPreparationImage(job: any, recordId: string, imageDataUri:
       processedAt: new Date().toISOString(),
       imageFile: `images/${sha256Hex(recordId)}.jpg`,
       imageMime: "image/jpeg",
-      ...(handwriting ? { handwritingImageFile: `images/${sha256Hex(`${recordId}-handwriting`)}.jpg`, handwritingImageMime: "image/jpeg" as const, handwritingImageBytes: handwriting.bytes } : {}),
-      includedMindMapHandwriting: job.includeMindMapHandwriting === true && Number(job.current?.boundHandwritingCount || 0) > 0,
+      ...(handwritingImages.length ? { handwritingImages } : {}),
+      includedMindMapHandwriting: job.includeHandwriting === true && Number(job.current?.boundHandwritingCount || 0) > 0,
       boundHandwritingCount: Number(job.current?.boundHandwritingCount) || 0
     })
-    finishPreparationItem(job, "success", handwriting ? "识别并保存完成，已另存手写原图" : "识别并保存完成", ocrText)
+    finishPreparationItem(job, "success", handwritingImages.length ? `识别并保存完成，已另存 ${handwritingImages.length} 张手写图片` : "识别并保存完成", ocrText)
   } catch (reason) {
     if (job.cancelled) { job.status = "cancelled"; return }
     const message = text((reason as any)?.message || reason, 300) || "OCR 失败"
@@ -637,6 +630,8 @@ function pruneFinishedJobs(keep = 10): void {
 async function runAnalysis(job: any, subject: AISubject, profile: AIProfile) { try {
   ensureJobActive(job)
   const settings = loadAISettings()
+  // 题目文本只来自整卡 OCR：未开启识别时没有题目来源，直接拒绝而不是静默发送空内容。
+  if (!settings.mineru.enabled) throw new Error("未开启题目识别（OCR），题目不发送；请先在 AI 服务中开启")
   const all = Object.values(loadMistakeState().records)
     .filter(record => subject.studySetIds.includes(record.sourceNotebookId))
     .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))
@@ -657,24 +652,26 @@ async function runAnalysis(job: any, subject: AISubject, profile: AIProfile) { t
     try {
       const input = readQuestionInput(record, settings, contentReader)
       const prepared = readPreparedQuestion(record.recordId)
-      if (input.needsOCR && !preparedInputMatches(prepared, input)) {
+      if (!preparedInputMatches(prepared, input)) {
         throw new Error(prepared ? "题目、手写或发送范围已变化，旧 OCR 需重新准备" : "题目尚未准备")
       }
-      // OCR 只复用来源和策略均匹配的快照；纯文字分支完全不读取旧混合 OCR 内容。
-      const question = input.needsOCR ? prepared!.questionText : input.nativeText
-      let handwritingLine = ""
-      if (settings.privacy.handwritingToModel && input.needsOCR) {
-        handwritingExpected += 1
-        const dataUri = prepared?.handwritingImageFile
-          ? readImageFileDataUri(preparedQuestionImageRoot(), prepared.handwritingImageFile, prepared.handwritingImageMime || "image/jpeg", MAX_HANDWRITING_BASE64_CHARS)
-          : ""
-        if (dataUri && attachments.length < MAX_ANALYSIS_IMAGES) {
-          attachments.push({ reference: `${ref}-H1`, dataUri })
-          handwritingLine = `\n附件 ${ref}-H1：本题脑图绑定手写原图（见随附图片）`
-        } else {
-          handwritingMissing += 1
-        }
+      // 手写内容以独立图片随对应题目发送；仅在开启手写内容且准备时已另存时附带。
+      const handwritingFiles = settings.privacy.handwriting ? (prepared!.handwritingImages || []) : []
+      const attached: ModelImageAttachment[] = []
+      for (const [fileIndex, entry] of handwritingFiles.entries()) {
+        if (attachments.length >= MAX_ANALYSIS_IMAGES) break
+        const dataUri = readImageFileDataUri(preparedQuestionImageRoot(), entry.file, "image/jpeg", MAX_HANDWRITING_BASE64_CHARS)
+        if (!dataUri) continue
+        attached.push({ reference: `${ref}-H${fileIndex + 1}`, dataUri })
       }
+      attachments.push(...attached)
+      if (settings.privacy.handwriting) {
+        handwritingExpected += 1
+        if (!attached.length) handwritingMissing += 1
+      }
+      const handwritingLine = attached.length
+        ? `\n附件 ${ref}-H1${attached.length > 1 ? `–H${attached.length}` : ""}：本题手写内容（见随附图片，共 ${attached.length} 张）`
+        : ""
       let answer = ""
       if (settings.privacy.includeAnswer) {
         try {
@@ -684,7 +681,7 @@ async function runAnalysis(job: any, subject: AISubject, profile: AIProfile) { t
         } catch { missingAnswerIds.add(record.recordId) }
       }
       items.push({ reference: ref, recordId: record.recordId,
-        text: `${ref}\n题目：${question}${handwritingLine}\n${answer ? `答案：${answer}\n` : ""}${settings.privacy.includeSourcePath ? `路径：${record.sourceNotebookTitle} > ${record.sourcePathTitles.join(" > ")}\n` : ""}状态：${["不会", "不熟", "掌握"][record.level]}；复习${record.reviewCount}次${settings.privacy.includeCustomCategories ? `；标签：${(record.manualCategories || []).join("、")}` : ""}${settings.privacy.includeReviewHistory ? `；历史：${record.history.map(item => item.level).join("→")}` : ""}` })
+        text: `${ref}\n题目：${prepared!.questionText}${handwritingLine}\n${answer ? `答案：${answer}\n` : ""}${settings.privacy.includeSourcePath ? `路径：${record.sourceNotebookTitle} > ${record.sourcePathTitles.join(" > ")}\n` : ""}状态：${["不会", "不熟", "掌握"][record.level]}；复习${record.reviewCount}次${settings.privacy.includeCustomCategories ? `；标签：${(record.manualCategories || []).join("、")}` : ""}${settings.privacy.includeReviewHistory ? `；历史：${record.history.map(item => item.level).join("→")}` : ""}` })
       inputs.set(record.recordId, input)
     } catch (error) {
       unavailable++
@@ -715,7 +712,7 @@ async function runAnalysis(job: any, subject: AISubject, profile: AIProfile) { t
   }
   ensureJobActive(job)
   job.status = "analyzing"; job.progress = 48; job.detail = "正在生成错题总结"
-  const header = `科目：${subject.name}\n本次实际发送${sentRecords.length}题；不会${counts[0]}，不熟${counts[1]}，掌握${counts[2]}；内容不可用${unavailable}，容量跳过${packed.omitted}，缺答案${missingAnswers}。${attachments.length ? `随附 ${attachments.length} 张脑图绑定手写原图，按附件编号（Q 编号-H1）对应题目，仅作为答过程证据。\n` : ""}提炼薄弱点、错误模式和可执行建议。每项必须引用已提供的 Q 编号，不得编造；说明不超过80字。\n\n`
+  const header = `科目：${subject.name}\n本次实际发送${sentRecords.length}题；不会${counts[0]}，不熟${counts[1]}，掌握${counts[2]}；内容不可用${unavailable}，容量跳过${packed.omitted}，缺答案${missingAnswers}。${attachments.length ? `随附 ${attachments.length} 张手写内容图片，按附件编号对应题目，仅作为答过程证据。\n` : ""}提炼薄弱点、错误模式和可执行建议。每项必须引用已提供的 Q 编号，不得编造；说明不超过80字。\n\n`
   const result = await awaitAnalysisResult(callLLM(profile, header + packed.text, job, attachments), job)
   ensureJobActive(job)
   job.status = "saving"; job.progress = 88; job.detail = "正在保存报告"
@@ -726,8 +723,8 @@ async function runAnalysis(job: any, subject: AISubject, profile: AIProfile) { t
   if (packed.omitted) limitations.push(`容量限制跳过 ${packed.omitted} 道完整题目；实际发送 ${sentRecords.length} 道`)
   if (droppedEvidence) limitations.push(`AI 引用了 ${droppedEvidence} 个未发送或不存在的题目编号，已剔除`)
   if (unavailable && reasonSummary) limitations.push(`内容不可用 ${unavailable} 道（${reasonSummary}）`)
-  if (settings.privacy.handwritingToModel && handwritingMissing) limitations.push(`${handwritingMissing} 道题未附带手写原图（未重新准备、该题无绑定手写或图片超限）`)
-  if (handwritingExpected - handwritingMissing > attachments.length) limitations.push(`手写原图达到单次上限 ${MAX_ANALYSIS_IMAGES} 张，仅附带前 ${attachments.length} 张`)
+  if (settings.privacy.handwriting && handwritingMissing) limitations.push(`${handwritingMissing} 道题未附带手写内容图片（未重新准备、该题无手写或图片超限）`)
+  if (handwritingExpected - handwritingMissing > attachments.length) limitations.push(`手写内容图片达到单次上限 ${MAX_ANALYSIS_IMAGES} 张，仅附带前 ${attachments.length} 张`)
   const saved = { id: `report-${Date.now().toString(36)}`, subjectId: subject.id, subjectName: subject.name, createdAt: new Date().toISOString(), scopeFingerprint: fingerprint(all), recordCount: sentRecords.length,
     coverage: { usable: sentRecords.length, unavailable, missingAnswers, total: all.length, analyzed: sentRecords.length, selected: records.length, budgetOmitted: packed.omitted },
     provider: profile.type, model: profile.model, promptVersion: "mistake-summary.v2", evidence, usage: result.usage, content: { ...report, limitations } }
@@ -769,6 +766,7 @@ export async function aiBridge(command: string, payload: any): Promise<any> {
   if (command === "aiRunDueSchedules") { void runDueAIAnalyses(); return { accepted: true } }
   if (command === "aiStartQuestionPreparation") {
     const settings = loadAISettings()
+    if (!settings.mineru.enabled) throw new Error("未开启题目识别（OCR），请先在 AI 服务中开启")
     const studySetId = text(payload?.studySetId, 100)
     const studySet = (MN.db.allNotebooks() || []).find((item: any) => String(item?.topicId || "") === studySetId)
     if (!studySet) throw new Error("学习集不存在")
@@ -785,7 +783,7 @@ export async function aiBridge(command: string, payload: any): Promise<any> {
       studySetId,
       studySetTitle: text(studySet?.title, 100) || "未命名学习集",
       ocrEngine: settings.ocrEngine,
-      includeMindMapHandwriting: settings.privacy.images !== "never" && settings.privacy.mindMapHandwriting,
+      includeHandwriting: settings.privacy.handwriting,
       status: "waiting-render",
       total: records.length,
       completed: 0,
@@ -815,14 +813,11 @@ export async function aiBridge(command: string, payload: any): Promise<any> {
       job.input = input
       job.current.boundHandwritingStatus = input.boundHandwritingStatus
       job.current.boundHandwritingCount = input.boundHandwritingCount
-      if (!input.needsOCR) {
-        saveNativeQuestion(record, input)
-        finishPreparationItem(job, "success", "已直接读取题目文字，未上传图片", input.nativeText)
-        return { recordId: job.current.recordId, title: job.current.title, questionHtml: "", nativeOnly: true }
-      }
+      if (!input.needsOCR) throw new Error("未开启题目识别（OCR），题目无法发送")
       job.current.stage = "rendering"
-      job.current.detail = "正在渲染按发送范围筛选后的题目卡片"
+      job.current.detail = "正在渲染去除手写后的整张题目卡片"
       return { recordId: job.current.recordId, title: job.current.title, questionHtml: input.html,
+        includeHandwriting: loadAISettings().privacy.handwriting === true,
         boundHandwritingStatus: input.boundHandwritingStatus, boundHandwritingCount: input.boundHandwritingCount }
     } catch (reason) {
       const message = text((reason as any)?.message || reason, 300) || "读取题目失败"
@@ -839,11 +834,12 @@ export async function aiBridge(command: string, payload: any): Promise<any> {
     if (job.current.recordId !== recordId) throw new Error("当前题目已变化，请重新渲染")
     if (job.current.stage !== "rendering") return { accepted: false, duplicate: true }
     const input = assertPreparationCurrent(job, recordId)
-    if (!input.needsOCR) throw new Error("当前策略不允许上传此题图片")
+    if (!input.needsOCR) throw new Error("未开启题目识别（OCR），题目无法发送")
     if (!/^data:image\/(?:jpeg|png);base64,/i.test(imageDataUri)) throw new Error("题目卡片图片格式无效")
     job.current.stage = "queued"
     job.current.detail = "题目卡片已提交，等待 OCR"
-    void processPreparationImage(job, recordId, imageDataUri, String(payload?.handwritingDataUri || ""))
+    const uris = Array.isArray(payload?.handwritingDataUris) ? payload.handwritingDataUris.map((item: any) => String(item || "")).filter(Boolean) : []
+    void processPreparationImage(job, recordId, imageDataUri, uris)
     return { accepted: true }
   }
   if (command === "aiFailPreparationQuestion") {
@@ -881,7 +877,7 @@ export async function aiBridge(command: string, payload: any): Promise<any> {
     for (const record of records) {
       try {
         const input = readQuestionInput(record, settings, reader)
-        if (!input.needsOCR || preparedInputMatches(readPreparedQuestion(record.recordId), input)) preparedCount++
+        if (input.needsOCR && preparedInputMatches(readPreparedQuestion(record.recordId), input)) preparedCount++
       } catch {}
     }
     return { subjectId: subject.id, recordCount: all.length, analyzableCount: records.length, preparedCount,

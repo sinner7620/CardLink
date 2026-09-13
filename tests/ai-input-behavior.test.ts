@@ -3,47 +3,33 @@ import assert from "node:assert/strict"
 import { packAnalysisItems, planQuestionInput, preparationPolicyFingerprint, preparedInputMatches, analysisUserContent, type PreparationPolicy } from "../src/ai-input"
 
 const policy: PreparationPolicy = {
-  privacy: { images: "when-needed", handwriting: false, mindMapHandwriting: false }, ocrEngine: "glm-ocr",
-  mineru: { enabled: true, policy: "auto", baseUrl: "https://ocr.test", language: "ch", enableFormula: true, enableTable: true },
+  privacy: { handwriting: false }, ocrEngine: "glm-ocr",
+  mineru: { enabled: true, baseUrl: "https://ocr.test", language: "ch", enableFormula: true, enableTable: true },
   glmOcr: { baseUrl: "https://ocr.test", model: "glm-ocr" }
 }
 const card = (content: string) => `<html><body><article class="card"><div class="eyebrow">原题</div><h1>题目标题</h1>${content}</article></body></html>`
 const picture = '<figure class="paint-note"><img src="data:image/png;base64,aW1hZ2U=" /><canvas data-drawing="ZHJhd2luZw==" data-drawing-overlay="true"></canvas></figure>'
 
-test("禁止图片会移除图像与笔迹；卡片手写和脑图手写分别控制", () => {
+test("OCR 截图永远不含手写；开启手写内容时渲染版保留手写供独立捕获", () => {
   const raw = card(`<p>题干文字</p>${picture}`)
-  const disabled = planQuestionInput(raw, { ...policy, privacy: { images: "never", handwriting: true, mindMapHandwriting: true } }, card(picture))
-  assert.equal(disabled.needsOCR, false)
-  assert.doesNotMatch(disabled.html, /<img|<canvas/)
-  assert.match(disabled.nativeText, /题干文字/)
-  const noDrawing = planQuestionInput(raw, policy)
-  assert.match(noDrawing.html, /<img/)
-  assert.doesNotMatch(noDrawing.html, /<canvas/)
-  const boundOnly = planQuestionInput(raw, { ...policy, privacy: { ...policy.privacy, mindMapHandwriting: true } }, '<body><canvas data-drawing="Ym91bmQ="></canvas></body>')
-  assert.match(boundOnly.html, /Ym91bmQ=/)
-  assert.doesNotMatch(boundOnly.html, /ZHJhd2luZw==/)
+  const plain = planQuestionInput(raw, policy)
+  assert.match(plain.ocrHtml, /<img/)
+  assert.doesNotMatch(plain.ocrHtml, /<canvas/)
+  assert.equal(plain.html, plain.ocrHtml)
+  assert.equal(plain.needsOCR, true)
+  const withHandwriting = planQuestionInput(raw, { ...policy, privacy: { handwriting: true } }, '<body><section class="bound-mindmap-handwriting">Ym91bmQ=</section></body>')
+  assert.match(withHandwriting.html, /<canvas[^>]*ZHJhd2luZw==/)
+  assert.match(withHandwriting.html, /Ym91bmQ=/)
+  assert.doesNotMatch(withHandwriting.ocrHtml, /<canvas|Ym91bmQ=/)
 })
 
-test("OCR 策略按内容和上传权限执行，标题不算图片题的题干文字", () => {
-  const imageOnly = card('<img src="data:image/png;base64,aW1hZ2U=" />')
-  const mixed = card('<p>题干</p><img src="data:image/png;base64,aW1hZ2U=" />')
-  const textOnly = card('<p>题干</p>')
-  for (const engine of ["mineru", "glm-ocr"] as const) {
-    const settings = { ...policy, ocrEngine: engine }
-    assert.equal(planQuestionInput(imageOnly, settings).needsOCR, true)
-    assert.equal(planQuestionInput(textOnly, settings).needsOCR, false)
-    const only = { ...settings, mineru: { ...settings.mineru, policy: "image-only" as const } }
-    assert.equal(planQuestionInput(imageOnly, only).needsOCR, true)
-    assert.equal(planQuestionInput(mixed, only).needsOCR, false)
-    const all = { ...settings, privacy: { ...settings.privacy, images: "always" as const }, mineru: { ...settings.mineru, policy: "all" as const } }
-    assert.equal(planQuestionInput(textOnly, all).needsOCR, true)
-    assert.equal(planQuestionInput(mixed, { ...all, mineru: { ...all.mineru, policy: "never" } }).needsOCR, false)
-    assert.equal(planQuestionInput(mixed, { ...all, mineru: { ...all.mineru, enabled: false } }).needsOCR, false)
-    assert.equal(planQuestionInput(mixed, { ...all, privacy: { ...all.privacy, images: "never" } }).needsOCR, false)
-  }
+test("OCR 关闭时没有题目文本来源，题目不得发送", () => {
+  const raw = card("<p>题干文字</p>")
+  assert.equal(planQuestionInput(raw, { ...policy, mineru: { ...policy.mineru, enabled: false } }).needsOCR, false)
+  assert.equal(planQuestionInput(raw, policy).needsOCR, true)
 })
 
-test("旧混合缓存不能复用；来源、手写策略或 OCR 配置变化使缓存失效", () => {
+test("旧缓存不能复用；来源、手写开关或 OCR 配置变化使缓存失效", () => {
   const identity = { sourceFingerprint: "source-1", policyFingerprint: preparationPolicyFingerprint(policy) }
   const snapshot = { schemaVersion: 3, status: "ready", questionText: "OCR", ...identity }
   assert.equal(preparedInputMatches(snapshot, identity), true)
@@ -77,7 +63,8 @@ let onRequest: (request: Request) => void = request => request.complete({})
 const runtime = globalThis as any
 runtime.NSFileManager = { defaultManager: () => ({ fileExistsAtPath: () => true,
   createDirectoryAtPathWithIntermediateDirectoriesAttributes: () => true }) }
-runtime.NSData = { dataWithStringEncoding: (value: string) => ({ value, writeToFileAtomically: (path: string) => { files.set(path, value); return true } }) }
+runtime.NSData = { dataWithStringEncoding: (value: string) => ({ value, writeToFileAtomically: (path: string) => { files.set(path, value); return true } }),
+  dataWithContentsOfFile: (path: string) => files.has(path) ? { base64Encoding: () => Buffer.from(files.get(path)!, "binary").toString("base64") } : null }
 runtime.NSURL = { URLWithString: (url: string) => url }
 runtime.NSMutableURLRequest = { requestWithURL: (url: string) => ({ url, body: undefined, setHTTPMethod() {}, setTimeoutInterval() {}, setValueForHTTPHeaderField() {}, setHTTPBody(data: any) { this.body = JSON.parse(data.value) } }) }
 runtime.NSOperationQueue = { mainQueue: () => ({}) }
@@ -114,7 +101,7 @@ async function reset() {
     subjects: [{ id: "subject", name: "科目", studySetIds: ["book"], schedule: { enabled: false } }],
     privacy: { ...policy.privacy, includeAnswer: false } }
   await bridge("aiSaveSettings", settings)
-  onRequest = request => request.complete(request.url.includes("layout_parsing") ? { md_results: "识别后的题目与手写" } : response())
+  onRequest = request => request.complete(request.url.includes("layout_parsing") ? { md_results: "识别后的题目文字" } : response())
   return settings
 }
 function add(id = "one", content = card("<p>题干文字</p>")) {
@@ -131,67 +118,67 @@ async function finished(id: string) {
   await until(async () => ["done", "failed", "cancelled"].includes((await bridge("aiGetJob", { jobId: id })).status))
   return bridge("aiGetJob", { jobId: id })
 }
-async function prepare() {
+async function prepare(handwritingUris: string[] = []) {
   const job = await bridge("aiStartQuestionPreparation", { studySetId: "book" })
   const input = await bridge("aiGetPreparationQuestion", { jobId: job.id, recordId: "one" })
-  if (!input.nativeOnly) {
-    await bridge("aiSubmitPreparationImage", { jobId: job.id, recordId: "one", imageDataUri: "data:image/jpeg;base64,aW1hZ2U=" })
-    await until(async () => (await bridge("aiGetQuestionPreparationJob", { jobId: job.id })).status === "done")
-  }
+  await bridge("aiSubmitPreparationImage", { jobId: job.id, recordId: "one", imageDataUri: "data:image/jpeg;base64,aW1hZ2U=", handwritingDataUris: handwritingUris })
+  await until(async () => (await bridge("aiGetQuestionPreparationJob", { jobId: job.id })).status === "done")
   return { job, input }
 }
+/** 新模型下分析只读准备快照：走真实准备任务循环为当前全部错题生成快照。 */
+async function prepareAll() {
+  const job = await bridge("aiStartQuestionPreparation", { studySetId: "book" })
+  for (let i = 0; i < 500; i++) {
+    const state = await bridge("aiGetQuestionPreparationJob", { jobId: job.id })
+    const current = state.current
+    if (state.status === "done" || state.status === "cancelled") return state
+    try {
+      if (current?.stage === "waiting-render") {
+        await bridge("aiGetPreparationQuestion", { jobId: job.id, recordId: current.recordId })
+      } else if (current?.stage === "rendering") {
+        // 每题使用不同图片，避免命中 OCR 内容缓存导致后续题目不发请求。
+        const image = `data:image/jpeg;base64,${Buffer.from(`image-${current.index}`).toString("base64")}`
+        await bridge("aiSubmitPreparationImage", { jobId: job.id, recordId: current.recordId, imageDataUri: image })
+      } else if (state.status === "waiting-advance" && ["success", "failed"].includes(current.stage)) {
+        await bridge("aiAdvanceQuestionPreparation", { jobId: job.id })
+      }
+    } catch {}
+    await new Promise(resolve => setTimeout(resolve, 2))
+  }
+  throw new Error("准备任务未在测试期限内结束")
+}
 
-test("真实准备流程在禁止图片时无请求，纯文字分析不依赖旧 OCR", async () => {
-  const settings = await reset(); add("one", card(`<p>原生文字</p>${picture}`))
-  await bridge("aiSaveSettings", { ...settings, privacy: { ...settings.privacy, images: "never", handwriting: true } })
-  const { input } = await prepare()
-  assert.equal(input.nativeOnly, true)
+test("未开启题目识别时准备与分析都被拒绝，不发送题目", async () => {
+  const settings = await reset(); add()
+  await bridge("aiSaveSettings", { ...settings, mineru: { ...settings.mineru, enabled: false } })
+  await assert.rejects(bridge("aiStartQuestionPreparation", { studySetId: "book" }), /未开启题目识别/)
+  await assert.rejects(analyze().then(job => finished(job.id)).then(job => { throw new Error(job.error) }), /未开启题目识别/)
   assert.equal(requests.length, 0)
-  const localSnapshot = JSON.parse([...files.values()][0])
-  assert.equal(localSnapshot.schemaVersion, 3)
-  assert.equal(localSnapshot.provider, "local")
-  const job = await finished((await analyze()).id)
-  assert.equal(job.status, "done")
-  assert.match(requests[0].body.messages[1].content, /原生文字/)
-  assert.doesNotMatch(JSON.stringify(requests[0].body), /base64|ZHJhd2luZw|手写解析失败/)
 })
 
-test("真实请求拒绝旧缓存和变化来源，重做后可用，关闭脑图手写不沿用混合文字", async () => {
-  const settings = await reset(); add("one", card(`<p>原生文字</p>${picture}`)); sketch = { drawing: "hash" }
-  await bridge("aiSaveSettings", { ...settings, privacy: { ...settings.privacy, mindMapHandwriting: true } })
-  const { input } = await prepare()
+test("旧 OCR 缓存被拒绝；手写开启时渲染含手写且以独立图片随题发送", async () => {
+  const settings = await reset(); add("one", card(`<p>题干</p>${picture}`)); sketch = { drawing: "hash" }
+  await bridge("aiSaveSettings", { ...settings, privacy: { ...settings.privacy, handwriting: true } })
+  const { input } = await prepare(["data:image/jpeg;base64,aGFuZHdyaXRpbmc="])
+  assert.match(input.questionHtml, /ZHJhd2luZw==/)
   assert.match(input.questionHtml, /mindmap-hash/)
-  assert.equal(requests.filter(r => r.url.includes("layout_parsing")).length, 1)
+  const snapshot = JSON.parse([...files.entries()].find(([path]) => path.includes("/records/"))![1])
+  assert.equal(snapshot.provider, "bigmodel")
+  assert.equal(snapshot.handwritingImages?.length, 1)
   assert.equal((await finished((await analyze()).id)).status, "done")
-  const sent = requests.filter(r => r.url.includes("llm")); assert.match(sent[0].body.messages[1].content, /识别后的题目与手写/)
-  drawingBytes = "Y2hhbmdlZA=="
+  const sent = requests.filter(item => item.url.includes("llm"))
+  assert.match(sent[0].body.messages[1].content[0].text, /识别后的题目文字/)
+  assert.match(sent[0].body.messages[1].content[0].text, /附件 Q001-H1：本题手写内容/)
+  assert.deepEqual(sent[0].body.messages[1].content[1], { type: "image_url", image_url: { url: "data:image/jpeg;base64,aGFuZHdyaXRpbmc=" } })
+  // 关闭手写内容后，同一题不再附带图片，也不得沿用开启手写时的旧缓存。
+  await bridge("aiSaveSettings", { ...settings, privacy: { ...settings.privacy, handwriting: false } })
   assert.equal((await finished((await analyze()).id)).status, "failed")
-  assert.equal(requests.filter(r => r.url.includes("llm")).length, 1)
-  await prepare()
-  html.one = card(`<p>改题干</p>${picture}`)
-  assert.equal((await finished((await analyze()).id)).status, "failed")
-  await bridge("aiSaveSettings", settings)
-  assert.equal((await finished((await analyze()).id)).status, "failed")
-  assert.equal(requests.filter(r => r.url.includes("llm")).length, 1)
-  await prepare()
-  assert.equal((await finished((await analyze()).id)).status, "done")
-  const entry = [...files.entries()].find(([path]) => path.includes("/records/"))!
-  files.set(entry[0], JSON.stringify({ ...JSON.parse(entry[1]), schemaVersion: 2 }))
-  assert.equal((await finished((await analyze()).id)).status, "failed")
-})
-
-test("截图后改设置会取消准备，不能继续上传", async () => {
-  const settings = await reset(); add("one", card(picture))
-  const prep = await bridge("aiStartQuestionPreparation", { studySetId: "book" })
-  await bridge("aiGetPreparationQuestion", { jobId: prep.id, recordId: "one" })
-  await bridge("aiSaveSettings", { ...settings, privacy: { ...settings.privacy, images: "never" } })
-  await assert.rejects(bridge("aiSubmitPreparationImage", { jobId: prep.id, recordId: "one", imageDataUri: "data:image/jpeg;base64,aW1hZ2U=" }), /已取消/)
-  assert.equal(requests.length, 0)
+  assert.equal(requests.filter(item => item.url.includes("llm")).length, 1)
 })
 
 test("截图后改原题阻止上传；OCR 返回期间改手写不能保存新快照", async () => {
   const settings = await reset(); add("one", card(picture)); sketch = { drawing: "hash" }
-  await bridge("aiSaveSettings", { ...settings, privacy: { ...settings.privacy, mindMapHandwriting: true } })
+  await bridge("aiSaveSettings", { ...settings, privacy: { ...settings.privacy, handwriting: true } })
   const prep = await bridge("aiStartQuestionPreparation", { studySetId: "book" })
   await bridge("aiGetPreparationQuestion", { jobId: prep.id, recordId: "one" })
   html.one = card(`<p>已改题干</p>${picture}`)
@@ -228,7 +215,7 @@ test("取消已发出的 OCR 后不写缓存或题目快照", async () => {
 
 test("分析请求取消后的成功和失败响应都不能写报告或改成 failed/done", async () => {
   for (const status of [200, 500]) {
-    await reset(); add()
+    await reset(); add(); await prepareAll()
     let pending: Request | undefined
     onRequest = request => { pending = request }
     const job = await analyze()
@@ -242,7 +229,7 @@ test("分析请求取消后的成功和失败响应都不能写报告或改成 f
 })
 
 test("关闭再打开总开关不能恢复已取消请求的保存；取消准备阶段不发模型请求", async () => {
-  const settings = await reset(); add()
+  const settings = await reset(); add(); await prepareAll()
   let pending: Request | undefined
   onRequest = request => { pending = request }
   const job = await analyze()
@@ -265,10 +252,20 @@ test("真实报告引用排除读取失败与容量外题目，覆盖数等于�
   add("one")
   add("two", card(`<p>${"长".repeat(120000)}</p>`))
   add("three", "")
-  onRequest = request => request.complete(response(["Q001", "Q002", "Q003", "toString"]))
+  // 准备按 one、two、three 顺序逐题 OCR：让第二题返回超长文本以触发整题预算截断。
+  let ocrCount = 0
+  onRequest = request => {
+    if (request.url.includes("layout_parsing")) {
+      ocrCount += 1
+      request.complete({ md_results: ocrCount === 2 ? "长".repeat(120000) : "识别后的题目文字" })
+    } else {
+      request.complete(response(["Q001", "Q002", "Q003", "toString"]))
+    }
+  }
+  await prepareAll()
   const job = await finished((await analyze()).id)
   assert.equal(job.status, "done")
-  const prompt = requests[0].body.messages[1].content
+  const prompt = requests.filter(item => item.url.includes("llm"))[0].body.messages[1].content
   assert.ok(prompt.length <= 120000)
   assert.doesNotMatch(prompt, /Q002|Q003/)
   const report = await bridge("aiGetReport", { reportId: job.reportId })

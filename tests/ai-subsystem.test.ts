@@ -39,12 +39,12 @@ test("AI 配置页加入共享滚动、触摸与内边距清单", () => {
   assert.match(shell, /html,\s*body\s*\{[^}]*touch-action:\s*pan-x pan-y/)
   assert.doesNotMatch(shell, /html,\s*body\s*\{[^}]*touch-action:\s*none/)
   assert.match(shell, /section\.settingsPage,\s*body > #root > \.shell > main > section\.aiSettingsPage,\s*body > #root > \.shell > main > section\.exportPage/)
-  assert.match(settings, /\.aiSettingsPage\s*\{[^}]*grid-auto-rows:max-content;[^}]*align-content:start;/)
+  assert.match(settings, /\.aiSettingsPage\s*\{[^}]*grid-auto-rows:\s*max-content;\s*[^}]*align-content:\s*start;/)
 })
 
 test("配置页遵循摘要行＋展开编辑规范，密钥只显示掩码尾部", () => {
   assert.match(web, /const \[expandedKey, setExpandedKey\] = useState\(""\)/)
-  assert.match(web, /className="aiSummaryRow"/)
+  assert.match(web, /className="aiRow aiRowButton"/)
   assert.match(web, /已配置 \u00b7\u00b7\u00b7\u00b7\$\{state\.maskedSuffix/)
   assert.match(web, /AI_FREQUENCY_LABELS/)
 })
@@ -295,8 +295,8 @@ test("题目准备可选择智谱 GLM-OCR 并读取 Markdown 结果", () => {
 })
 
 test("题目准备可读取并渲染卡片绑定的脑图手写", () => {
-  assert.match(source, /mindMapHandwriting: boolean/)
-  assert.match(source, /mindMapHandwriting: false/)
+  assert.match(source, /handwriting: boolean/)
+  assert.match(source, /handwriting: false/)
   assert.match(handwriting, /getSketchNoteForMindMapFocusNoteId/)
   assert.match(handwriting, /sketchMediaHashes\(sketch\)/)
   assert.match(handwriting, /db\.getMediaByHash\(hash\)\?\.base64Encoding/)
@@ -304,24 +304,20 @@ test("题目准备可读取并渲染卡片绑定的脑图手写", () => {
   assert.match(handwriting, /data-drawing-id="mindmap-\$\{asset\.hash\}"/)
   assert.match(source, /boundHandwritingStatus/)
   assert.match(handwriting, /const drawings = assets\.filter\(asset => asset\.kind === "drawing"\)/)
-  assert.match(web, /\["mindMapHandwriting", "脑图绑定手写"\]/)
-  assert.match(web, /includeMindMapHandwriting=\{settings\.privacy\.mindMapHandwriting\}/)
-  assert.match(web, /及其脑图绑定手写/)
+  assert.match(web, /includeHandwriting=\{settings\.privacy\.handwriting\}/)
   assert.match(web, /当前 MarginNote 版本不支持读取脑图绑定手写/)
 })
 
-test("手写原图可作为独立附件发给分析模型", () => {
-  assert.match(source, /handwritingToModel: boolean/)
-  assert.match(source, /handwritingToModel: false/)
-  assert.match(source, /handwritingImageFile\?: string/)
-  assert.match(source, /readImageFileDataUri\(preparedQuestionImageRoot\(\), prepared\.handwritingImageFile/)
+test("手写内容可作为独立图片附件发给分析模型", () => {
+  assert.match(source, /handwritingImages\?: \{ file: string; bytes: number \}\[\]/)
+  assert.match(source, /readImageFileDataUri\(preparedQuestionImageRoot\(\), entry\.file/)
   assert.match(source, /MAX_ANALYSIS_IMAGES/)
   assert.match(source, /analysisUserContent\(prompt, attachments, chatCompletions\)/)
-  assert.match(source, /附件 \$\{ref\}-H1：本题脑图绑定手写原图/)
-  assert.match(source, /未附带手写原图/)
+  assert.match(source, /附件 \$\{ref\}-H1\$\{attached\.length > 1 \? `–H\$\{attached\.length\}` : ""\}：本题手写内容/)
+  assert.match(source, /未附带手写内容图片/)
   assert.match(web, /bound-mindmap-handwriting/)
-  assert.match(web, /handwritingDataUri/)
-  assert.match(web, /手写原图发给分析模型/)
+  assert.match(web, /handwritingDataUris/)
+  assert.match(web, /手写不进入 OCR/)
 })
 
 test("OCR 学习集候选只包含实际有错题的学习集", () => {

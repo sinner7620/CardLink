@@ -80,7 +80,7 @@ async function bridgeInternal(command: string, payload: any): Promise<any> {
   if (command === "aiConfirmDevelopmentWarning" || command === "aiGetSettings" || command === "aiListReports" || command === "aiGetReport" ||
     command === "aiGetJob" || command === "aiPreviewAnalysis" || command === "aiStartAnalysis" ||
     command === "aiOpenEvidence" || command === "aiCancelJob" || command === "aiListStudySets" || command === "aiListMistakeStudySets" ||
-    command === "aiSaveSettings" || command === "aiSetCredential" || command === "aiTestProvider" || command === "aiTestMinerU" ||
+    command === "aiSaveSettings" || command === "aiSetCredential" || command === "aiClearCredential" || command === "aiTestProvider" || command === "aiTestMinerU" ||
     command === "aiGetCacheStats" || command === "aiListPreparedQuestions" || command === "aiGetPreparedQuestion" || command === "aiClearOCRCache" || command === "aiDeleteReport" || command === "aiRunDueSchedules" ||
     command === "aiStartQuestionPreparation" || command === "aiGetQuestionPreparationJob" || command === "aiGetPreparationQuestion" ||
     command === "aiSubmitPreparationImage" || command === "aiFailPreparationQuestion" || command === "aiAdvanceQuestionPreparation" || command === "aiCancelQuestionPreparation" ||

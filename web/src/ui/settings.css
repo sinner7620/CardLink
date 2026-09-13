@@ -2,131 +2,11 @@
 
 @layer mn-ui-base {/* settings.css — 阶段一页面样式所有权模块；规则按原始级联顺序迁移。 */
 
-.aiSettingsPage{display:grid;gap:10px;width:min(920px,100%);margin:0 auto}.aiSettingsToolbar{display:flex;justify-content:space-between;align-items:center;min-height:30px}.aiSettingsToolbar button{border:0;background:transparent;color:var(--mn-accent);font-weight:700}.aiSettingsToolbar span{font-size:11px;color:var(--rd-muted)}.aiSettingRow,.aiCompactSettings label{display:flex;align-items:center;justify-content:space-between;min-height:38px}.aiSettingsPage input,.aiSettingsPage select{border:1px solid var(--study-line);border-radius:8px;background:#fff;color:var(--study-ink);padding:7px;font-size:11px}.aiSubjectSettings>article,.aiProviderSettings>article{padding:9px;border-top:1px solid var(--study-line)}.aiSubjectSettings article header,.aiProviderSettings article header{display:flex;align-items:center;justify-content:space-between;gap:8px}.aiSubjectSettings article header input{flex:1}.aiSubjectSettings button,.aiProviderSettings button,.aiSubjectAdd button,.aiCompactSettings button{border:0;border-radius:8px;background:var(--rd-accent-tint);color:var(--mn-accent);padding:7px 9px;font-size:10px}.aiSubjectAdd{display:flex;gap:7px;margin:0 0 7px}.aiSubjectAdd input{flex:1}.aiStudySets{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:5px;margin:8px 0}.aiStudySets label{display:flex;align-items:center;gap:6px;font-size:11px}.aiStudySets .owned{opacity:.45}.aiSchedule{display:flex;align-items:center;gap:7px;font-size:11px}.aiProviderSettings article>div{display:grid;grid-template-columns:minmax(160px,1fr) minmax(120px,.7fr) auto auto;gap:6px;margin-top:7px}.aiProviderSettings header label{font-weight:700;font-size:12px}.aiProviderSettings header b{font-size:10px;color:var(--study-muted)}.aiCompactSettings>div{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:6px}.aiCompactSettings label{padding:0 7px;border:1px solid var(--study-line);border-radius:8px;font-size:11px}@media(max-width:600px){.aiProviderSettings article>div{grid-template-columns:1fr 1fr}.aiOverview>header{align-items:flex-start}.aiOverviewActions{width:100%;justify-content:space-between}.aiPreflight{flex-wrap:wrap}.aiPreflight button{margin-left:0}}
-.aiStorageSettings>div{display:flex;align-items:center;justify-content:space-between}.aiStorageSettings>div button,.aiStorageSettings>article button{border:0;background:var(--rd-accent-tint);color:var(--mn-accent);padding:7px;border-radius:8px}.aiReportCount{font-size:11px;color:var(--study-muted)}.aiStorageSettings>article{display:flex;align-items:center;justify-content:space-between;padding:7px;border-top:1px solid var(--study-line)}.aiStorageSettings>article strong,.aiStorageSettings>article small{display:block;font-size:11px}.aiStorageSettings>article small{color:var(--study-muted)}
 
 .settingsGroups {
   display: grid;
 }
 
-@layer mn-ui-priority {
-  .aiSettingsPage {
-    --ai-border: #e2e7ef;
-    --ai-muted: #667085;
-    display: grid;
-    gap: 14px;
-    width: min(820px, 100%);
-    margin: 0 auto;
-    padding: 2px 0 28px;
-    font-optical-sizing: auto;
-  }
-  .aiSettingsPage .aiSettingsToolbar {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 12px;
-    min-height: 44px;
-  }
-  .aiSettingsToolbar > button {
-    min-height: 34px;
-    padding: 0 10px;
-    border: 1px solid var(--ai-border);
-    border-radius: 9px;
-    background: #fff;
-    color: #445169;
-    font-weight: 650;
-  }
-  .aiSettingsToolbar > div { min-width: 0; }
-  .aiSettingsToolbar h1 { margin: 0; color: #172033; font-size: 20px; line-height: 1.18; letter-spacing: -.018em; }
-  .aiSettingsToolbar p { margin: 3px 0 0; color: var(--ai-muted); font-size: 10px; line-height: 1.4; }
-  .aiSettingsToolbar > span { min-width: 54px; color: var(--mn-accent); font-size: 10px; font-weight: 650; text-align: right; }
-  .aiSettingsComposer {
-    display: grid;
-    gap: 0;
-    overflow: hidden;
-    counter-reset: ai-section;
-    border: 1px solid var(--ai-border);
-    border-radius: 14px;
-    background: #fff;
-    box-shadow: 0 5px 18px rgba(27,43,73,.045);
-  }
-  .aiSettingsComposer > .settingsGroup {
-    counter-increment: ai-section;
-    padding: 0 16px 16px;
-    border: 0;
-    border-bottom: 1px solid #edf0f5;
-    border-radius: 0;
-    background: transparent;
-    box-shadow: none;
-  }
-  .aiSettingsComposer > .settingsGroup:last-child { border-bottom: 0; }
-  .aiSettingsComposer > .settingsGroup > h2 {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-height: 54px;
-    margin: 0;
-    color: #253044;
-    font-size: 13px;
-    line-height: 1.3;
-  }
-  .aiSettingsComposer > .settingsGroup > h2::before {
-    content: counter(ai-section);
-    display: grid;
-    place-items: center;
-    width: 26px;
-    height: 26px;
-    flex: 0 0 26px;
-    border-radius: 50%;
-    background: #eaf0ff;
-    color: var(--mn-accent);
-    font-size: 11px;
-    font-weight: 800;
-  }
-  .aiSettingsComposer .settingsGroup > div { grid-template-columns: 1fr; }
-  .aiSettingsComposer .aiSettingRow {
-    min-height: 46px;
-    padding: 0 2px;
-    border: 0;
-    border-radius: 0;
-  }
-  .aiSettingsComposer .aiSettingRow strong { color: #344054; font-size: 11px; }
-  .aiSettingsComposer .aiSettingRow small { margin-top: 3px; color: var(--ai-muted); font-size: 9.5px; }
-  .aiSettingsComposer .aiSubjectAdd { margin: 0 0 10px; }
-  .aiSettingsComposer .aiSubjectAdd input { min-height: 36px; padding: 0 10px; }
-  .aiSettingsComposer .aiSubjectAdd button { min-width: 58px; text-align: center; }
-  .aiSettingsComposer .aiSubjectSettings > article,
-  .aiSettingsComposer .aiProviderSettings > article { padding: 0; border-top: 1px solid #edf0f5; }
-  .aiSettingsComposer .aiSummaryRow {
-    min-height: 55px;
-    padding: 9px 2px;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-  }
-  .aiSettingsComposer .aiSummaryRow:hover { background: #f7f9fc; }
-  .aiSettingsComposer .aiEditor {
-    margin: 0 0 10px;
-    padding: 11px;
-    border: 0;
-    border-radius: 10px;
-    background: #f5f7fa;
-  }
-  .aiSettingsComposer input:focus,
-  .aiSettingsComposer select:focus { outline: none; border-color: #8aa6e9; box-shadow: 0 0 0 3px rgba(83,105,184,.10); }
-  .aiSettingsComposer input[type="checkbox"] { accent-color: var(--mn-accent); }
-  @media (max-width: 600px) {
-    .aiSettingsPage .aiSettingsToolbar { grid-template-columns: auto minmax(0, 1fr); }
-    .aiSettingsToolbar > span { grid-column: 2; min-height: 0; margin-top: -8px; text-align: left; }
-    .aiSettingsComposer > .settingsGroup { padding-inline: 12px; }
-  }
-  @media (prefers-reduced-transparency: reduce) {
-    .aiSettingsComposer { box-shadow: none; }
-  }
-  @media (prefers-contrast: more) {
-    .aiSettingsComposer, .aiSettingsToolbar > button { border-color: #98a2b3; }
-  }
-}
 .settingsGroup {
   background: #fff;
   border: 1px solid #dfe4ed;
@@ -513,142 +393,266 @@ svg.sfIconGlyph {
 .reviewDayEditor input {
   width: 42px;
 }
-  /* AI 配置页摘要行：与 settingsGroup button 同层覆盖（层顺序优先于特异性） */
-  .settingsGroup .aiSummaryRow {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    column-gap: 8px;
-    align-items: center;
-    width: 100%;
-    min-height: 52px;
-    padding: 8px 10px;
-    background: #fff;
-    border: 1px solid #e2e8f0;
-    border-radius: 10px;
-    text-align: left;
-    cursor: pointer;
-  }
-  .settingsGroup .aiSummaryRow + .aiSummaryRow { margin-top: 6px; }
-  .settingsGroup .aiSummaryRow strong {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    color: #17345f;
-  }
-  .settingsGroup .aiSummaryRow small {
-    display: block;
-    margin-top: 2px;
-    font-size: 10px;
-    color: #71819a;
-  }
-  .settingsGroup .aiSummaryRow > b {
-    font-size: 10px;
-    color: var(--mn-accent);
-    white-space: nowrap;
-  }
-  .aiDefaultBadge { padding: 2px 6px; border-radius: 99px; background: var(--rd-accent-tint); color: var(--mn-accent); font-size: 9px; font-style: normal; }
-  .aiEditor {
-    display: grid;
-    gap: 8px;
-    margin-top: 7px;
-    padding: 9px;
-    border: 1px dashed #e2e8f0;
-    border-radius: 10px;
-    background: var(--study-soft);
-  }
-  .aiEditorField { display: grid; gap: 4px; font-size: 10px; color: var(--study-muted); }
-  .aiEditorField > input { width: 100%; box-sizing: border-box; }
-  .settingsGroup .aiEditorActions { display: flex; flex-wrap: wrap; gap: 6px; }
-  .settingsGroup .aiEditorActions button { border: 0; border-radius: 8px; background: var(--rd-accent-tint); color: var(--mn-accent); padding: 7px 9px; font-size: 10px; }
-  .settingsGroup .aiEditorActions .aiDangerButton { background: #fff1f1; color: #b42318; }
-  .aiEditor .aiStudySets { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); max-height: 190px; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding: 2px; margin: 0; }
-  .settingsGroup .aiSummaryRow::after { content: none; }
-  .settingsGroup .aiEditorActions button { display: inline-block; width: auto; min-height: 0; }
-  .settingsGroup .aiEditorActions button::after { content: none; }
-  .aiEditor .aiStudySets label { display: flex; align-items: center; gap: 6px; min-width: 0; }
 }
 
-@layer mn-ui-final {
-  .aiSettingsPage { --ai-border:#e2e7ef; --ai-muted:#667085; display:grid; grid-auto-rows:max-content; align-content:start; gap:14px; width:min(856px,100%); margin:0 auto; padding:calc(var(--mn-topbar-height) + 12px) 18px 28px; box-sizing:border-box; font-optical-sizing:auto; }
-  .aiSettingsPage .aiSettingsToolbar { position:sticky; top:0; z-index:4; display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:12px; min-height:44px; padding:7px 0; background:rgba(247,248,251,.88); -webkit-backdrop-filter:blur(16px) saturate(150%); backdrop-filter:blur(16px) saturate(150%); }
-  .aiSettingsToolbar > button { min-height:34px; padding:0 10px; border:1px solid var(--ai-border); border-radius:9px; background:#fff; color:#445169; font-weight:650; }
-  .aiSettingsToolbar > div { min-width:0; }
-  .aiSettingsToolbar h1 { margin:0; color:#172033; font-size:20px; line-height:1.18; letter-spacing:-.018em; }
-  .aiSettingsToolbar p { margin:3px 0 0; color:var(--ai-muted); font-size:10px; line-height:1.4; }
-  .aiSettingsToolbar > span { min-width:54px; color:var(--mn-accent); font-size:10px; font-weight:650; text-align:right; }
-  .aiSettingsComposer { display:grid; gap:0; overflow:hidden; counter-reset:ai-section; border:1px solid var(--ai-border); border-radius:14px; background:#fff; box-shadow:0 5px 18px rgba(27,43,73,.045); }
-  .aiSettingsComposer > .settingsGroup { counter-increment:ai-section; padding:0 16px 16px; border:0; border-bottom:1px solid #edf0f5; border-radius:0; background:transparent; box-shadow:none; }
-  .aiSettingsComposer > .settingsGroup:last-child { border-bottom:0; }
-  .aiSettingsComposer > .settingsGroup > h2 { display:flex; align-items:center; gap:10px; min-height:54px; margin:0; color:#253044; font-size:13px; line-height:1.3; }
-  .aiSettingsComposer > .settingsGroup > h2::before { content:counter(ai-section); display:grid; place-items:center; width:26px; height:26px; flex:0 0 26px; border-radius:50%; background:#eaf0ff; color:var(--mn-accent); font-size:11px; font-weight:800; }
-  .aiSettingsComposer .settingsGroup > div { grid-template-columns:1fr; }
-  .aiSettingsComposer .aiSettingRow { min-height:46px; padding:0 2px; border:0; border-radius:0; }
-  .aiSettingsComposer .aiSettingRow strong { color:#344054; font-size:11px; }
-  .aiSettingsComposer .aiSettingRow small { margin-top:3px; color:var(--ai-muted); font-size:9.5px; }
-  .aiSettingsComposer .aiSubjectAdd { margin:0 0 10px; }
-  .aiSettingsComposer .aiSubjectAdd input { min-height:36px; padding:0 10px; }
-  .aiSettingsComposer .aiSubjectAdd button { min-width:58px; text-align:center; }
-  .aiSettingsComposer .aiSubjectSettings > article,
-  .aiSettingsComposer .aiProviderSettings > article { padding:0; border-top:1px solid #edf0f5; }
-  .aiSettingsComposer .aiSummaryRow { min-height:55px; padding:9px 2px; border:0; border-radius:0; background:transparent; }
-  .aiSettingsComposer .aiSummaryRow:hover { background:#f7f9fc; }
-  .aiSettingsComposer .aiEditor { margin:0 0 10px; padding:11px; border:0; border-radius:10px; background:#f5f7fa; }
-  .aiSettingsComposer input:focus,
-  .aiSettingsComposer select:focus { outline:none; border-color:#8aa6e9; box-shadow:0 0 0 3px rgba(83,105,184,.10); }
-  .aiSettingsComposer input[type="checkbox"] { accent-color:var(--mn-accent); }
-  @media (max-width:600px) {
-    .aiSettingsPage { padding-right:10px; padding-left:10px; }
-    .aiSettingsPage .aiSettingsToolbar { grid-template-columns:auto minmax(0,1fr); }
-    .aiSettingsToolbar > span { grid-column:2; min-height:0; margin-top:-8px; text-align:left; }
-    .aiSettingsComposer > .settingsGroup { padding-inline:12px; }
-  }
-  @media (prefers-reduced-transparency:reduce) { .aiSettingsComposer { box-shadow:none; } .aiSettingsPage .aiSettingsToolbar { background:#f7f8fb; -webkit-backdrop-filter:none; backdrop-filter:none; } }
-  @media (prefers-contrast:more) { .aiSettingsComposer,.aiSettingsToolbar > button { border-color:#98a2b3; } }
-}
 
-@layer mn-ui-final {
-  .aiSettingsComposer .settingsGroup > .aiPreparationWorkspace { display:grid; grid-template-columns:minmax(190px,.72fr) minmax(300px,1.28fr); gap:14px; align-items:start; }
-  .aiPreparationControls { display:grid; gap:12px; }
-  .aiPreparationControls > label { display:grid; gap:6px; color:#344054; font-size:11px; font-weight:700; }
-  .aiPreparationControls select { width:100%; min-height:38px; box-sizing:border-box; }
-  .aiPreparationControls > p { margin:0; color:var(--ai-muted); font-size:10px; line-height:1.65; }
-  .aiPreparationEmpty { padding:9px 10px; border-radius:9px; background:#f5f7fa; color:var(--ai-muted); font-size:10px; line-height:1.5; }
-  .aiOcrHint { display:block; color:var(--ai-muted); font-size:9.5px; line-height:1.55; }
-  .aiCredentialState { align-self:center; color:var(--ai-muted); font-size:9.5px; }
-  .aiPreparationCounts { display:grid; grid-template-columns:repeat(3,1fr); gap:7px; margin:0; }
-  .aiPreparationCounts > div { display:grid; gap:3px; padding:9px; border:1px solid #e7ebf2; border-radius:10px; background:#f8faff; }
-  .aiPreparationCounts dt { color:var(--ai-muted); font-size:9px; }
-  .aiPreparationCounts dd { margin:0; color:#253044; font-size:17px; font-weight:800; }
-  .aiPreparationMonitor { display:grid; gap:11px; min-width:0; }
-  .aiPreparationPreview { min-height:270px; max-height:430px; overflow:auto; border:1px solid #dfe5ee; border-radius:12px; background:#f5f7fa; }
-  .aiPreparationPreview > div { min-height:270px; display:grid; place-content:center; justify-items:center; gap:8px; padding:24px; box-sizing:border-box; color:#7a8699; font-size:10px; text-align:center; }
-  .aiPreparationPreview > div svg { width:28px; height:28px; opacity:.55; }
-  .aiPreparationPreview iframe { width:100%; min-height:400px; border:0; background:#fff; }
-  .aiPreparationPreview img { display:block; width:100%; height:auto; background:#fff; }
-  .aiPreparationProgress { display:grid; gap:6px; }
-  .aiPreparationProgressLabel { display:flex; align-items:center; justify-content:space-between; color:#475467; font-size:10px; }
-  .aiPreparationProgressLabel b { color:var(--mn-accent); font-size:10px; }
-  .aiPreparationProgress progress { width:100%; height:7px; overflow:hidden; border:0; border-radius:99px; accent-color:var(--mn-accent); }
-  .aiPreparationProgress > small { overflow:hidden; color:var(--ai-muted); font-size:9px; line-height:1.4; text-overflow:ellipsis; white-space:nowrap; }
-  .aiPreparationOcr { display:grid; gap:6px; margin-top:5px; }
-  .aiPreparationOcr strong { color:#344054; font-size:10px; }
-  .aiPreparationOcr pre { min-height:92px; max-height:210px; overflow:auto; margin:0; padding:10px; border:1px solid #e4e8ef; border-radius:10px; background:#fbfcfe; color:#344054; font:10px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
-  .aiStorageSettings > .aiStorageSummary { display:flex; grid-template-columns:1fr auto; align-items:center; gap:12px; padding:10px 0; }
-  .aiStorageSummary > span { display:grid; gap:3px; }
-  .aiStorageSummary > span small { color:var(--ai-muted); font-size:10px; }
-  .aiOcrBrowser { display:grid; gap:10px; margin-top:4px; padding:12px; border:1px solid #e1e6ee; border-radius:12px; background:#f8faff; }
-  .aiOcrBrowser > header { display:grid; grid-template-columns:minmax(180px,1fr) auto; align-items:end; gap:10px; }
-  .aiOcrBrowser > header label { display:grid; gap:5px; color:#344054; font-size:10px; font-weight:700; }
-  .aiOcrBrowser > header select { width:100%; min-height:36px; }
-  .aiOcrBrowser > header small,.aiOcrBrowser > footer { color:var(--ai-muted); font-size:9px; }
-  .aiOcrCompare { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:10px; min-height:280px; }
-  .aiOcrCompare > figure,.aiOcrCompare > section { min-width:0; margin:0; overflow:auto; border:1px solid #e1e6ee; border-radius:10px; background:#fff; }
-  .aiOcrCompare figcaption,.aiOcrCompare h3 { position:sticky; top:0; z-index:1; margin:0; padding:9px 10px; border-bottom:1px solid #e8ebf1; background:rgba(255,255,255,.96); color:#344054; font-size:10px; }
-  .aiOcrCompare img { display:block; width:100%; height:auto; }
-  .aiOcrRenderedText { min-height:230px; border:0; border-radius:0; }
-  .aiOcrMissingImage,.aiOcrRenderedEmpty { display:grid; min-height:230px; place-items:center; padding:18px; color:var(--ai-muted); font-size:10px; text-align:center; }
-  .aiOcrBrowserEmpty { display:flex; align-items:center; gap:8px; padding:12px; border:1px dashed #d9e0ea; border-radius:10px; color:var(--ai-muted); font-size:10px; }
-  .aiOcrBrowserEmpty svg { width:18px; height:18px; }
-  @media (max-width:700px) { .aiSettingsComposer .settingsGroup > .aiPreparationWorkspace,.aiOcrCompare { grid-template-columns:1fr; } .aiPreparationPreview { max-height:360px; } .aiOcrBrowser > header { grid-template-columns:1fr; align-items:start; } }
+
+/* ── AI 错题分析配置页：2026-09 全量重做（iOS 设置风格；本区块为唯一样式来源） ── */
+.aiSettingsPage {
+  --ai-border: #e2e7ef;
+  --ai-separator: #eef0f4;
+  --ai-muted: #6d7280;
+  --ai-press: rgba(15, 23, 42, .05);
+  --ai-tint: #e8edfb;
+  display: grid;
+  grid-auto-rows: max-content;
+  align-content: start;
+  gap: 14px;
+  width: min(856px, 100%);
+  margin: 0 auto;
+  padding: calc(var(--mn-topbar-height) + 12px) 18px 32px;
+  box-sizing: border-box;
+  font-optical-sizing: auto;
+}
+.aiSettingsPage .aiSettingsToolbar {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 8px 0;
+  background: rgba(247, 248, 251, .88);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  backdrop-filter: blur(16px) saturate(150%);
+}
+.aiSettingsToolbar > button {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--ai-border);
+  border-radius: 11px;
+  background: #fff;
+  color: #445169;
+  font-size: 14px;
+  font-weight: 600;
+}
+.aiSettingsToolbar > button:active { background: var(--ai-press); }
+.aiSettingsToolbar > div { min-width: 0; }
+.aiSettingsToolbar h1 { margin: 0; color: #171923; font-size: 21px; line-height: 1.16; letter-spacing: -.02em; font-weight: 700; }
+.aiSettingsToolbar p { margin: 3px 0 0; color: var(--ai-muted); font-size: 12px; line-height: 1.45; }
+.aiSettingsToolbar > span { min-width: 54px; color: var(--mn-accent); font-size: 12px; font-weight: 600; text-align: right; }
+.aiSettingsComposer { display: grid; gap: 14px; }
+.aiSettingsComposer .settingsGroup {
+  display: grid;
+  align-content: start;
+  padding: 6px 16px 14px;
+  border: 1px solid var(--ai-border);
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, .04);
+}
+.aiSettingsComposer .settingsGroup > h2 {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  margin: 0;
+  color: #3f4756;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+.aiSettingsComposer .settingsGroup > h2::before { content: none; }
+.aiRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  padding: 9px 0;
+  text-align: left;
+}
+.aiRowMain { display: grid; gap: 3px; min-width: 0; }
+.aiRowMain strong { color: #1b1f27; font-size: 14px; font-weight: 600; letter-spacing: -.01em; }
+.aiRowMain small { color: var(--ai-muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.aiRow select { max-width: 62%; }
+.aiRowButton { width: 100%; border: 0; background: transparent; cursor: pointer; font: inherit; }
+.aiRowButton > b { color: var(--mn-accent); font-size: 13px; font-weight: 500; white-space: nowrap; }
+.aiRowButton:active { background: var(--ai-press); border-radius: 10px; }
+.aiSettingsComposer .settingsGroup article { border-top: 1px solid var(--ai-separator); }
+.aiSettingsComposer .settingsGroup article:first-of-type { border-top: 0; }
+.aiEditor {
+  display: grid;
+  gap: 10px;
+  margin: 2px 0 12px;
+  padding: 12px;
+  border-radius: 12px;
+  background: #f5f6f8;
+}
+.aiEditorField { display: grid; gap: 5px; font-size: 12px; color: var(--ai-muted); }
+.aiEditorField > input,
+.aiEditorField > select { width: 100%; box-sizing: border-box; }
+.aiEditorActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.aiEditorActions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--ai-tint);
+  color: var(--mn-accent);
+  font-size: 13px;
+  font-weight: 600;
+}
+.aiEditorActions button:active { filter: brightness(.92); }
+.aiEditorActions .aiDangerButton { background: #ffe9e7; color: #c0362c; }
+.aiSwitch {
+  position: relative;
+  width: 51px;
+  height: 31px;
+  flex: 0 0 51px;
+  padding: 0;
+  border: 0;
+  border-radius: 99px;
+  background: #e9e9eb;
+  cursor: pointer;
+  transition: background .22s ease;
+}
+.aiSwitch i {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 27px;
+  height: 27px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, .18), 0 0 1px rgba(0, 0, 0, .1);
+  transition: transform .22s ease;
+}
+.aiSwitch.on { background: #34c759; }
+.aiSwitch.on i { transform: translateX(20px); }
+.aiSettingsPage input,
+.aiSettingsPage select {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--ai-border);
+  border-radius: 10px;
+  background: #fff;
+  color: #1b1f27;
+  font-size: 14px;
+}
+.aiSettingsPage input:focus,
+.aiSettingsPage select:focus { outline: none; border-color: #8aa6e9; box-shadow: 0 0 0 3px rgba(83, 105, 184, .10); }
+.aiSettingsPage input[type="checkbox"] { min-height: 0; accent-color: var(--mn-accent); }
+.aiSubjectAdd { display: flex; gap: 8px; margin: 2px 0 10px; }
+.aiSubjectAdd input { flex: 1; }
+.aiSubjectAdd button {
+  min-height: 44px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--ai-tint);
+  color: var(--mn-accent);
+  font-size: 13px;
+  font-weight: 600;
+}
+.aiStudySets {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px;
+  max-height: 200px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 2px;
+  margin: 0;
+}
+.aiStudySets label { display: flex; align-items: center; gap: 7px; font-size: 13px; color: #333a46; min-width: 0; }
+.aiStudySets .owned { opacity: .4; }
+.aiDefaultBadge { padding: 2px 8px; border-radius: 99px; background: var(--rd-accent-tint); color: var(--mn-accent); font-size: 12px; font-style: normal; font-weight: 600; }
+.aiOcrHint { display: block; color: var(--ai-muted); font-size: 12px; line-height: 1.55; }
+.aiCredentialState { align-self: center; color: var(--ai-muted); font-size: 12px; }
+.aiEmpty { padding: 24px; color: var(--ai-muted); font-size: 13px; text-align: center; }
+.aiAdvancedSection { padding-top: 12px; border-top: 1px solid var(--ai-separator); }
+.aiAdvancedSection > h3 { margin: 0 0 8px; color: #6d7280; font-size: 13px; font-weight: 600; }
+.aiStorageSummary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; }
+.aiStorageSummary > span { display: grid; gap: 3px; }
+.aiStorageSummary > span strong { font-size: 14px; color: #1b1f27; }
+.aiStorageSummary > span small { color: var(--ai-muted); font-size: 12px; }
+.aiStorageSummary button, .aiStorageSettings > article button {
+  min-height: 40px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--ai-tint);
+  color: var(--mn-accent);
+  font-size: 13px;
+  font-weight: 600;
+}
+.aiStorageSettings > article { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-top: 1px solid var(--ai-separator); }
+.aiStorageSettings > article strong { display: block; font-size: 14px; color: #1b1f27; }
+.aiStorageSettings > article small { display: block; margin-top: 2px; font-size: 12px; color: var(--ai-muted); }
+.aiPreparationWorkspace { display: grid; grid-template-columns: minmax(190px, .72fr) minmax(300px, 1.28fr); gap: 14px; align-items: start; }
+.aiPreparationControls { display: grid; gap: 12px; }
+.aiPreparationControls > label { display: grid; gap: 6px; color: #1b1f27; font-size: 13px; font-weight: 600; }
+.aiPreparationControls select { width: 100%; min-height: 44px; box-sizing: border-box; }
+.aiPreparationControls > p { margin: 0; color: var(--ai-muted); font-size: 12px; line-height: 1.6; }
+.aiPreparationEmpty { padding: 10px; border-radius: 10px; background: #f5f6f8; color: var(--ai-muted); font-size: 12px; line-height: 1.5; }
+.aiPreparationCounts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin: 0; }
+.aiPreparationCounts > div { display: grid; gap: 3px; padding: 10px; border: 1px solid #e7ebf2; border-radius: 10px; background: #f8faff; }
+.aiPreparationCounts dt { color: var(--ai-muted); font-size: 12px; }
+.aiPreparationCounts dd { margin: 0; color: #1b1f27; font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+.aiPreparationMonitor { display: grid; gap: 11px; min-width: 0; }
+.aiPreparationPreview { min-height: 270px; max-height: 430px; overflow: auto; border: 1px solid #dfe5ee; border-radius: 12px; background: #f5f6f8; }
+.aiPreparationPreview > div { min-height: 270px; display: grid; place-content: center; justify-items: center; gap: 8px; padding: 24px; box-sizing: border-box; color: #7a8699; font-size: 12px; text-align: center; }
+.aiPreparationPreview > div svg { width: 28px; height: 28px; opacity: .55; }
+.aiPreparationPreview iframe { width: 100%; min-height: 400px; border: 0; background: #fff; }
+.aiPreparationPreview img { display: block; width: 100%; height: auto; background: #fff; }
+.aiPreparationProgress { display: grid; gap: 6px; }
+.aiPreparationProgressLabel { display: flex; align-items: center; justify-content: space-between; color: #475467; font-size: 12px; }
+.aiPreparationProgressLabel b { color: var(--mn-accent); font-size: 12px; }
+.aiPreparationProgress progress { width: 100%; height: 7px; overflow: hidden; border: 0; border-radius: 99px; accent-color: var(--mn-accent); }
+.aiPreparationProgress > small { overflow: hidden; color: var(--ai-muted); font-size: 12px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.aiPreparationOcr { display: grid; gap: 6px; margin-top: 5px; }
+.aiPreparationOcr strong { color: #1b1f27; font-size: 12px; }
+.aiPreparationOcr pre { min-height: 92px; max-height: 210px; overflow: auto; margin: 0; padding: 10px; border: 1px solid #e4e8ef; border-radius: 10px; background: #fbfcfe; color: #1b1f27; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.aiOcrBrowser { display: grid; gap: 10px; margin-top: 4px; padding: 12px; border: 1px solid #e1e6ee; border-radius: 12px; background: #f8faff; }
+.aiOcrBrowser > header { display: grid; grid-template-columns: minmax(180px, 1fr) auto; align-items: end; gap: 10px; }
+.aiOcrBrowser > header label { display: grid; gap: 5px; color: #1b1f27; font-size: 12px; font-weight: 600; }
+.aiOcrBrowser > header select { width: 100%; min-height: 44px; }
+.aiOcrBrowser > header small, .aiOcrBrowser > footer { color: var(--ai-muted); font-size: 12px; }
+.aiOcrCompare { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; min-height: 280px; }
+.aiOcrCompare > figure, .aiOcrCompare > section { min-width: 0; margin: 0; overflow: auto; border: 1px solid #e1e6ee; border-radius: 10px; background: #fff; }
+.aiOcrCompare figcaption, .aiOcrCompare h3 { position: sticky; top: 0; z-index: 1; margin: 0; padding: 9px 10px; border-bottom: 1px solid #e8ebf1; background: rgba(255, 255, 255, .96); color: #1b1f27; font-size: 12px; font-weight: 600; }
+.aiOcrCompare img { display: block; width: 100%; height: auto; }
+.aiOcrRenderedText { min-height: 230px; border: 0; border-radius: 0; }
+.aiOcrMissingImage, .aiOcrRenderedEmpty { display: grid; min-height: 230px; place-items: center; padding: 18px; color: var(--ai-muted); font-size: 12px; text-align: center; }
+.aiOcrBrowserEmpty { display: flex; align-items: center; gap: 8px; padding: 12px; border: 1px dashed #d9e0ea; border-radius: 10px; color: var(--ai-muted); font-size: 12px; }
+.aiOcrBrowserEmpty svg { width: 18px; height: 18px; }
+@media (max-width: 700px) {
+  .aiPreparationWorkspace, .aiOcrCompare { grid-template-columns: 1fr; }
+  .aiPreparationPreview { max-height: 360px; }
+  .aiOcrBrowser > header { grid-template-columns: 1fr; align-items: start; }
+}
+@media (max-width: 600px) {
+  .aiSettingsPage { padding-right: 10px; padding-left: 10px; }
+  .aiSettingsPage .aiSettingsToolbar { grid-template-columns: auto minmax(0, 1fr); }
+  .aiSettingsToolbar > span { grid-column: 2; min-height: 0; margin-top: -8px; text-align: left; }
+  .aiSettingsComposer .settingsGroup { padding-inline: 12px; }
+  .aiOverview > header { align-items: flex-start; }
+  .aiOverviewActions { width: 100%; justify-content: space-between; }
+  .aiPreflight { flex-wrap: wrap; }
+  .aiPreflight button { margin-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aiSwitch, .aiSwitch i { transition: none; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .aiSettingsPage .aiSettingsToolbar { background: #f7f8fb; -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
+@media (prefers-contrast: more) {
+  .aiSettingsComposer .settingsGroup, .aiSettingsToolbar > button { border-color: #98a2b3; }
 }

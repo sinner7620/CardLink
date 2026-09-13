@@ -1300,9 +1300,10 @@ function normalizeAISettingsView(value) {
     subjects,
     credentials: input.credentials && typeof input.credentials === "object" ? input.credentials : {},
     ocrEngine: input.ocrEngine === "glm-ocr" ? "glm-ocr" : "mineru",
-    mineru: { enabled: false, policy: "auto", enableFormula: true, enableTable: true, credentialRef: "mineru-token", ...(input.mineru || {}) },
+    mineru: { enabled: false, enableFormula: true, enableTable: true, credentialRef: "mineru-token", ...(input.mineru || {}) },
     glmOcr: { baseUrl: "https://open.bigmodel.cn/api/paas/v4", credentialRef: "ocr-glm", model: "glm-ocr", timeoutMs: 120000, ...(input.glmOcr || {}) },
-    privacy: { includeAnswer: true, includeSourcePath: true, includeReviewHistory: true, includeCustomCategories: true, handwriting: false, mindMapHandwriting: false, handwritingToModel: false, images: "when-needed", ...(input.privacy || {}) },
+    privacy: { includeAnswer: true, includeSourcePath: true, includeReviewHistory: true, includeCustomCategories: true,
+      handwriting: input.privacy?.handwriting === true || input.privacy?.mindMapHandwriting === true || input.privacy?.handwritingToModel === true, ...(input.privacy || {}) },
   }
 }
 
@@ -1327,10 +1328,11 @@ const BOUND_HANDWRITING_LABELS = {
   unreadable: "检测到脑图绑定手写，但媒体数据不可读"
 }
 
-function QuestionPreparationWorkspace({ studySets, ocrEngine, includeMindMapHandwriting, onStorageChanged, onStatus }) {
+function QuestionPreparationWorkspace({ studySets, ocrEngine, includeHandwriting, onStorageChanged, onStatus }) {
   const [studySetId, setStudySetId] = useState("")
   const [job, setJob] = useState(null)
   const [questionHtml, setQuestionHtml] = useState("")
+  const [handwritingRender, setHandwritingRender] = useState(false)
   const [previewImage, setPreviewImage] = useState("")
   const [busy, setBusy] = useState(false)
   const requestedRef = useRef("")
@@ -1371,7 +1373,7 @@ function QuestionPreparationWorkspace({ studySets, ocrEngine, includeMindMapHand
     setQuestionHtml("")
     setPreviewImage("")
     MNBridge.send("aiGetPreparationQuestion", { jobId: job.id, recordId: current.recordId })
-      .then(result => setQuestionHtml(result.questionHtml || ""))
+      .then(result => { setQuestionHtml(result.questionHtml || ""); setHandwritingRender(result.includeHandwriting === true) })
       .catch(reason => onStatus(reason?.message || String(reason)))
   }, [job?.id, job?.current?.recordId, job?.current?.stage])
 
@@ -1429,22 +1431,32 @@ function QuestionPreparationWorkspace({ studySets, ocrEngine, includeMindMapHand
         window.setTimeout(finish, 5000)
       })))
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+      // 先逐个捕获手写内容元素，再隐藏后截整卡：OCR 截图永远不含手写。
+      const handwritingDataUris = []
+      const handwritingNodes = []
+      if (handwritingRender) {
+        const boundSection = doc.querySelector(".bound-mindmap-handwriting")
+        if (boundSection) handwritingNodes.push(boundSection)
+        for (const drawing of Array.from(doc.querySelectorAll("canvas[data-drawing]"))) {
+          const holder = drawing.closest("figure") || drawing
+          if (!handwritingNodes.includes(holder)) handwritingNodes.push(holder)
+        }
+        for (const node of handwritingNodes) {
+          try {
+            const nodeScale = Math.max(.75, Math.min(1.5, 6000 / Math.max(1, node.scrollHeight || 1)))
+            const nodeCanvas = await html2canvas(node, { backgroundColor: "#ffffff", logging: false, useCORS: true, scale: nodeScale })
+            handwritingDataUris.push(nodeCanvas.toDataURL("image/jpeg", .9))
+          } catch {}
+        }
+      }
+      for (const node of handwritingNodes) node.style.visibility = "hidden"
       const width = Math.max(640, doc.documentElement.scrollWidth, doc.body.scrollWidth)
       const height = Math.max(1, doc.documentElement.scrollHeight, doc.body.scrollHeight)
       const scale = Math.max(.5, Math.min(1.5, 12000 / height))
       const canvas = await html2canvas(doc.body, { backgroundColor: "#ffffff", logging: false, useCORS: true, scale, width, height, windowWidth: width, windowHeight: height })
       const imageDataUri = canvas.toDataURL("image/jpeg", .9)
       setPreviewImage(imageDataUri)
-      // 脑图绑定手写区已在渲染文档内：单独截图另存为独立附件，供分析模型直传，失败不阻断 OCR。
-      let handwritingDataUri = ""
-      try {
-        const handwritingSection = doc.querySelector(".bound-mindmap-handwriting")
-        if (handwritingSection) {
-          const handwritingCanvas = await html2canvas(handwritingSection, { backgroundColor: "#ffffff", logging: false, useCORS: true, scale })
-          handwritingDataUri = handwritingCanvas.toDataURL("image/jpeg", .9)
-        }
-      } catch {}
-      await MNBridge.send("aiSubmitPreparationImage", { jobId: job.id, recordId: current.recordId, imageDataUri, handwritingDataUri })
+      await MNBridge.send("aiSubmitPreparationImage", { jobId: job.id, recordId: current.recordId, imageDataUri, handwritingDataUris })
     } catch (reason) {
       const message = reason?.message || String(reason)
       onStatus(message)
@@ -1459,7 +1471,7 @@ function QuestionPreparationWorkspace({ studySets, ocrEngine, includeMindMapHand
   return <div className="aiPreparationWorkspace">
     <div className="aiPreparationControls">
       <label><span>选择含错题的学习集</span><select value={studySetId} disabled={running} onChange={event => setStudySetId(event.target.value)}>{studySets.map(set => <option key={set.id} value={set.id}>{set.title}（{set.mistakeCount} 题）</option>)}</select></label>
-      <p>逐题按发送范围筛选原题卡片{includeMindMapHandwriting ? "及其脑图绑定手写" : ""}。需要 OCR 时才渲染为图片并发送给 {ocrEngine === "glm-ocr" ? "GLM-OCR" : "MinerU"}。不上传图片时直接读取可用文字；没有可用文字的题目会提示失败。渲染若含脑图绑定手写，会另存一份手写原图（是否随分析发送由发送范围中的开关决定）。分析前会核对题目、手写和发送范围，旧 OCR 可能需要重新准备。</p>
+      <p>逐题渲染去除手写后的整张题目卡片，交给 {ocrEngine === "glm-ocr" ? "GLM-OCR" : "MinerU"} 识别成文字；未开启题目识别时无法准备题目。{includeHandwriting ? "已开启手写内容：手写部分会另存为独立图片，随对应题目发送给分析模型，不进入 OCR。" : "未开启手写内容：手写不会以任何形式发送。"}分析前会核对题目、手写和发送范围，旧 OCR 可能需要重新准备。</p>
       <div className="aiEditorActions"><button type="button" disabled={!studySetId || busy || running} onClick={start}>{busy ? "正在启动…" : "开始准备错题"}</button>{running && <button type="button" className="aiDangerButton" onClick={cancel}>取消</button>}</div>
       {!studySets.length && <small className="aiPreparationEmpty">当前没有包含错题的学习集，无需 OCR。</small>}
       {job && <dl className="aiPreparationCounts"><div><dt>题目总数</dt><dd>{job.total || 0}</dd></div><div><dt>成功</dt><dd>{job.success || 0}</dd></div><div><dt>失败</dt><dd>{job.failed || 0}</dd></div></dl>}
@@ -1518,6 +1530,10 @@ function OCRResultBrowser({ items, onStatus }) {
   </section>
 }
 
+function AISwitch({ checked, onChange, label }) {
+  return <button type="button" role="switch" aria-checked={checked} aria-label={label} className={`aiSwitch${checked ? " on" : ""}`} onClick={() => onChange(!checked)}><i /></button>
+}
+
 function AISettingsPage({ onBack, onEnabledChanged }) {
   const [settings, setSettings] = useState(null), [studySets, setStudySets] = useState([]), [mistakeStudySets, setMistakeStudySets] = useState([]), [newSubject, setNewSubject] = useState(""), [status, setStatus] = useState(""), [cacheStats, setCacheStats] = useState(null), [reportList, setReportList] = useState([]), [preparedQuestions, setPreparedQuestions] = useState([])
   const [expandedKey, setExpandedKey] = useState("")
@@ -1530,10 +1546,12 @@ function AISettingsPage({ onBack, onEnabledChanged }) {
   if (!settings) return <section className="aiSettingsPage" ref={pageRef}><div className="aiEmpty">正在读取…</div></section>
   const profiles = Array.isArray(settings.profiles) ? settings.profiles : []
   const subjects = Array.isArray(settings.subjects) ? settings.subjects : []
+  const activeProfile = profiles.find(item => item.id === settings.defaultProfileId)
   function patchProfile(id, change) { save({ ...settings, profiles: profiles.map(item => item.id === id ? { ...item, ...change } : item) }) }
   function patchSubject(id, change) { save({ ...settings, subjects: subjects.map(item => item.id === id ? { ...item, ...change } : item) }) }
   function addSubject() { const name = newSubject.trim(); if (!name) return; save({ ...settings, subjects: [...subjects, { id: `subject-${Date.now().toString(36)}`, name, studySetIds: [], schedule: { enabled: false, frequency: "weekly", hour: 9, weekday: 1, monthday: 1 } }] }); setNewSubject("") }
   function credentialLabel(ref) { const state = settings.credentials?.[ref]; return state?.configured ? `已配置 ····${state.maskedSuffix || ""}` : "未配置" }
+  async function clearCredential(ref) { try { await MNBridge.send("aiClearCredential", { credentialRef: ref }); setSettings(normalizeAISettingsView(await MNBridge.send("aiGetSettings"))); setStatus("已清除密钥") } catch (reason) { setStatus(reason?.message || String(reason)) } }
   async function testProvider(profile) {
     setStatus(`正在测试 ${profile.name}…`)
     try {
@@ -1543,82 +1561,93 @@ function AISettingsPage({ onBack, onEnabledChanged }) {
       setStatus(reason?.message || String(reason))
     }
   }
+  const privacyRows = [
+    ["includeAnswer", "参考答案", "第一个绑定的参考答案文字"],
+    ["includeSourcePath", "章节路径", "题目在原脑图中的位置"],
+    ["includeReviewHistory", "复习历史", "掌握等级与复测记录"],
+    ["includeCustomCategories", "自定义标签", "错题上手动添加的标签"]
+  ]
   return <section className="aiSettingsPage" ref={pageRef}>
     <header className="aiSettingsToolbar">
       <button onClick={onBack} aria-label="返回设置">‹ 返回</button>
-      <div><h1>AI 错题分析</h1><p>按科目整理错题，并生成带原题引用的学习建议。</p></div>
+      <div><h1>AI 错题分析</h1><p>科目、AI 服务与发送范围</p></div>
       <span role="status">{status}</span>
     </header>
     <div className="aiSettingsComposer">
-    <div className="settingsGroup"><h2>启用与状态</h2><div><label className="aiSettingRow"><span><strong>AI 总开关</strong><small>关闭后不加载 AI 模块，也不会发送任何内容</small></span><input type="checkbox" checked={settings.enabled} onChange={event => save({ ...settings, enabled: event.target.checked })} /></label></div></div>
-    <div className="settingsGroup aiSubjectSettings"><h2>科目与学习集</h2>
-      <div className="aiSubjectAdd"><input value={newSubject} onChange={event => setNewSubject(event.target.value)} placeholder="科目名称" /><button onClick={addSubject}>添加</button></div>
-      {settings.subjects.map(subject => { const key = `subject-${subject.id}`; return <article key={subject.id}>
-        <button type="button" className="aiSummaryRow" aria-expanded={expandedKey === key} onClick={() => toggleEditor(key)}>
-          <span><strong>{subject.name}</strong><small>{subject.studySetIds.length} 个学习集 · {subject.schedule.enabled ? `定期${AI_FREQUENCY_LABELS[subject.schedule.frequency] || "生成"}` : "未开启定期"}</small></span>
-          <b>{expandedKey === key ? "收起" : "编辑"}</b>
+      <div className="settingsGroup aiEnableGroup">
+        <div className="aiRow">
+          <span className="aiRowMain"><strong>启用 AI 错题分析</strong><small>关闭后不加载 AI 模块，也不会发送任何内容</small></span>
+          <AISwitch checked={settings.enabled} onChange={value => save({ ...settings, enabled: value })} label="启用 AI 错题分析" />
+        </div>
+      </div>
+      <div className="settingsGroup aiServiceGroup"><h2>AI 服务</h2>
+        <div className="aiRow">
+          <span className="aiRowMain"><strong>分析错题 AI</strong><small>{activeProfile ? `${activeProfile.name} · ${activeProfile.model}` : "尚未选择服务"}</small></span>
+          <select value={settings.defaultProfileId} aria-label="选择分析错题 AI" onChange={event => save({ ...settings, defaultProfileId: event.target.value })}>{profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select>
+        </div>
+        <button type="button" className="aiRow aiRowButton" aria-expanded={expandedKey === "ocr"} onClick={() => toggleEditor("ocr")}>
+          <span className="aiRowMain"><strong>题目识别（OCR）</strong><small>{settings.mineru.enabled ? `${settings.ocrEngine === "glm-ocr" ? "GLM-OCR · 智谱" : "MinerU"} · 公式${settings.mineru.enableFormula ? "开" : "关"} · 表格${settings.mineru.enableTable ? "开" : "关"}` : "已关闭 · 题目不会发送"}</small></span>
+          <b>{expandedKey === "ocr" ? "收起" : "编辑"}</b>
         </button>
-        {expandedKey === key && <div className="aiEditor">
-          <label className="aiEditorField"><span>科目名称</span><input value={subject.name} onChange={event => patchSubject(subject.id, { name: event.target.value })} /></label>
-          <div className="aiEditorField"><span>所属学习集（每个学习集只能归属一个科目）</span><div className="aiStudySets">{studySets.map(set => { const owner = settings.subjects.find(item => item.id !== subject.id && item.studySetIds.includes(set.id)); return <label key={set.id} className={owner ? "owned" : ""}><input type="checkbox" disabled={!!owner} checked={subject.studySetIds.includes(set.id)} onChange={event => patchSubject(subject.id, { studySetIds: event.target.checked ? [...subject.studySetIds, set.id] : subject.studySetIds.filter(id => id !== set.id) })} /><span>{set.title}</span></label> })}</div></div>
-          <label className="aiSchedule"><input type="checkbox" checked={subject.schedule.enabled} onChange={event => patchSubject(subject.id, { schedule: { ...subject.schedule, enabled: event.target.checked } })} /><span>定期生成</span><select value={subject.schedule.frequency} onChange={event => patchSubject(subject.id, { schedule: { ...subject.schedule, frequency: event.target.value } })}><option value="daily">每天</option><option value="weekly">每周</option><option value="monthly">每月</option></select></label>
-          <div className="aiEditorActions"><button className="aiDangerButton" onClick={() => save({ ...settings, subjects: settings.subjects.filter(item => item.id !== subject.id) })}>删除科目</button></div>
+        {expandedKey === "ocr" && <div className="aiEditor">
+          <div className="aiRow"><span className="aiRowMain"><strong>启用题目识别</strong><small>整张题目卡片（不含手写）识别成文字后发送；关闭后题目不会发送</small></span><AISwitch checked={settings.mineru.enabled} onChange={value => save({ ...settings, mineru: { ...settings.mineru, enabled: value } })} label="启用题目识别" /></div>
+          <label className="aiRow"><span className="aiRowMain"><strong>识别引擎</strong></span><select value={settings.ocrEngine} onChange={event => save({ ...settings, ocrEngine: event.target.value })}><option value="mineru">MinerU</option><option value="glm-ocr">GLM-OCR（智谱）</option></select></label>
+          {settings.ocrEngine === "mineru" ? <>
+            <div className="aiRow"><span className="aiRowMain"><strong>公式识别</strong></span><AISwitch checked={settings.mineru.enableFormula} onChange={value => save({ ...settings, mineru: { ...settings.mineru, enableFormula: value } })} label="公式识别" /></div>
+            <div className="aiRow"><span className="aiRowMain"><strong>表格识别</strong></span><AISwitch checked={settings.mineru.enableTable} onChange={value => save({ ...settings, mineru: { ...settings.mineru, enableTable: value } })} label="表格识别" /></div>
+            <div className="aiEditorActions"><button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: settings.mineru.credentialRef, persistence: "session" }).then(() => MNBridge.send("aiGetSettings")).then(value => setSettings(normalizeAISettingsView(value)))}>本次 Token</button><button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: settings.mineru.credentialRef, persistence: "local" }).then(() => MNBridge.send("aiGetSettings")).then(value => setSettings(normalizeAISettingsView(value)))}>本地保存</button><button className="aiDangerButton" onClick={() => clearCredential(settings.mineru.credentialRef)}>清除密钥</button><button onClick={() => MNBridge.send("aiTestMinerU").then(() => setStatus("MinerU 已连接")).catch(reason => setStatus(reason.message || String(reason)))}>测试</button><span className="aiCredentialState">{credentialLabel(settings.mineru.credentialRef)}</span></div>
+          </> : <>
+            <label className="aiEditorField"><span>API 地址</span><input value={settings.glmOcr.baseUrl} aria-label="GLM-OCR API 地址" onChange={event => save({ ...settings, glmOcr: { ...settings.glmOcr, baseUrl: event.target.value } })} /></label>
+            <label className="aiEditorField"><span>模型</span><input value="glm-ocr" aria-label="GLM-OCR 模型" disabled /></label>
+            <small className="aiOcrHint">整张题目卡片以 JPG 发送给 OCR 服务识别为文字；官方限制单图不超过 10 MB。</small>
+            <div className="aiEditorActions"><button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: settings.glmOcr.credentialRef, persistence: "session" }).then(() => MNBridge.send("aiGetSettings")).then(value => setSettings(normalizeAISettingsView(value)))}>本次 API Key</button><button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: settings.glmOcr.credentialRef, persistence: "local" }).then(() => MNBridge.send("aiGetSettings")).then(value => setSettings(normalizeAISettingsView(value)))}>本地保存</button><button className="aiDangerButton" onClick={() => clearCredential(settings.glmOcr.credentialRef)}>清除密钥</button><span className="aiCredentialState">{credentialLabel(settings.glmOcr.credentialRef)}</span></div>
+          </>}
         </div>}
-      </article> })}
-    </div>
-    <div className="settingsGroup aiProviderSettings"><h2>AI 服务</h2>
-      {settings.profiles.map(profile => { const key = `profile-${profile.id}`; return <article key={profile.id}>
-        <button type="button" className="aiSummaryRow" aria-expanded={expandedKey === key} onClick={() => toggleEditor(key)}>
-          <span><strong>{profile.name}{settings.defaultProfileId === profile.id && <em className="aiDefaultBadge">默认</em>}</strong><small>{profile.type === "deepseek" ? "DeepSeek" : "OpenAI 兼容"} · {profile.model}</small></span>
-          <b>{credentialLabel(profile.credentialRef)}</b>
-        </button>
-        {expandedKey === key && <div className="aiEditor">
-          <label className="aiEditorField"><span>API 地址</span><input value={profile.baseUrl} aria-label="API 地址" onChange={event => patchProfile(profile.id, { baseUrl: event.target.value })} /></label>
-          <label className="aiEditorField"><span>模型</span><input value={profile.model} aria-label="模型" onChange={event => patchProfile(profile.id, { model: event.target.value })} /></label>
-          <div className="aiEditorActions">
-            <button onClick={() => save({ ...settings, defaultProfileId: profile.id })}>{settings.defaultProfileId === profile.id ? "默认服务" : "设为默认"}</button>
-            <button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: profile.credentialRef, persistence: "session" }).then(() => MNBridge.send("aiGetSettings")).then(setSettings)}>本次密钥</button>
-            <button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: profile.credentialRef, persistence: "local" }).then(() => MNBridge.send("aiGetSettings")).then(setSettings)}>本地保存</button>
-            <button onClick={() => testProvider(profile)}>测试</button>
-          </div>
-        </div>}
-      </article> })}
-    </div>
-    <div className="settingsGroup aiCompactSettings"><h2>题目识别</h2>
-      <button type="button" className="aiSummaryRow" aria-expanded={expandedKey === "mineru"} onClick={() => toggleEditor("mineru")}>
-        <span><strong>OCR 引擎</strong><small>{settings.mineru.enabled ? `${settings.ocrEngine === "glm-ocr" ? "GLM-OCR" : "MinerU"} · ${settings.ocrEngine === "glm-ocr" ? "整卡文档解析" : `${AI_POLICY_LABELS[settings.mineru.policy] || "自动"} · 公式${settings.mineru.enableFormula ? "开" : "关"} 表格${settings.mineru.enableTable ? "开" : "关"}`}` : "已关闭"}</small></span>
-        <b>{expandedKey === "mineru" ? "收起" : "编辑"}</b>
-      </button>
-      {expandedKey === "mineru" && <div className="aiEditor">
-        <label className="aiSettingRow"><span>启用题目识别</span><input type="checkbox" checked={settings.mineru.enabled} onChange={event => save({ ...settings, mineru: { ...settings.mineru, enabled: event.target.checked } })} /></label>
-        <label className="aiSettingRow"><span>OCR 引擎</span><select value={settings.ocrEngine} onChange={event => save({ ...settings, ocrEngine: event.target.value })}><option value="mineru">MinerU</option><option value="glm-ocr">GLM-OCR（智谱）</option></select></label>
-        <label className="aiSettingRow"><span>OCR 策略</span><select value={settings.mineru.policy} onChange={event => save({ ...settings, mineru: { ...settings.mineru, policy: event.target.value } })}><option value="auto">有图片或手写时识别</option><option value="all">整卡识别</option><option value="image-only">仅无题干文字的图片题</option><option value="never">不使用 OCR</option></select></label>
-        {settings.ocrEngine === "mineru" ? <>
-          <label className="aiSettingRow"><span>公式识别</span><input type="checkbox" checked={settings.mineru.enableFormula} onChange={event => save({ ...settings, mineru: { ...settings.mineru, enableFormula: event.target.checked } })} /></label>
-          <label className="aiSettingRow"><span>表格识别</span><input type="checkbox" checked={settings.mineru.enableTable} onChange={event => save({ ...settings, mineru: { ...settings.mineru, enableTable: event.target.checked } })} /></label>
-          <div className="aiEditorActions"><button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: settings.mineru.credentialRef, persistence: "session" }).then(() => MNBridge.send("aiGetSettings")).then(setSettings)}>本次 Token</button><button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: settings.mineru.credentialRef, persistence: "local" }).then(() => MNBridge.send("aiGetSettings")).then(setSettings)}>本地保存</button><button onClick={() => MNBridge.send("aiTestMinerU").then(() => setStatus("MinerU 已连接")).catch(reason => setStatus(reason.message || String(reason)))}>测试</button></div>
-        </> : <>
-          <label className="aiEditorField"><span>API 地址</span><input value={settings.glmOcr.baseUrl} aria-label="GLM-OCR API 地址" onChange={event => save({ ...settings, glmOcr: { ...settings.glmOcr, baseUrl: event.target.value } })} /></label>
-          <label className="aiEditorField"><span>模型</span><input value="glm-ocr" aria-label="GLM-OCR 模型" disabled /></label>
-          <small className="aiOcrHint">整张题目卡片以 JPG Base64 发送；官方限制单图不超过 10 MB，返回 Markdown 文本。</small>
-          <div className="aiEditorActions"><button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: settings.glmOcr.credentialRef, persistence: "session" }).then(() => MNBridge.send("aiGetSettings")).then(setSettings)}>本次 API Key</button><button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: settings.glmOcr.credentialRef, persistence: "local" }).then(() => MNBridge.send("aiGetSettings")).then(setSettings)}>本地保存</button><span className="aiCredentialState">{credentialLabel(settings.glmOcr.credentialRef)}</span></div>
-        </>}
+        {profiles.map(profile => { const key = `profile-${profile.id}`; return <article key={profile.id}>
+          <button type="button" className="aiRow aiRowButton" aria-expanded={expandedKey === key} onClick={() => toggleEditor(key)}>
+            <span className="aiRowMain"><strong>{profile.name}{settings.defaultProfileId === profile.id && <em className="aiDefaultBadge">分析用</em>}</strong><small>{profile.type === "deepseek" ? "DeepSeek" : "OpenAI 兼容"} · {profile.model} · {credentialLabel(profile.credentialRef)}</small></span>
+            <b>{expandedKey === key ? "收起" : "编辑"}</b>
+          </button>
+          {expandedKey === key && <div className="aiEditor">
+            <label className="aiEditorField"><span>名称</span><input value={profile.name} aria-label="服务名称" onChange={event => patchProfile(profile.id, { name: event.target.value })} /></label>
+            <label className="aiEditorField"><span>API 地址</span><input value={profile.baseUrl} aria-label="API 地址" onChange={event => patchProfile(profile.id, { baseUrl: event.target.value })} /></label>
+            <label className="aiEditorField"><span>模型</span><input value={profile.model} aria-label="模型" onChange={event => patchProfile(profile.id, { model: event.target.value })} /></label>
+            <div className="aiEditorActions">
+              <button onClick={() => save({ ...settings, defaultProfileId: profile.id })}>{settings.defaultProfileId === profile.id ? "当前分析服务" : "设为分析服务"}</button>
+              <button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: profile.credentialRef, persistence: "session" }).then(() => MNBridge.send("aiGetSettings")).then(value => setSettings(normalizeAISettingsView(value)))}>本次密钥</button>
+              <button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: profile.credentialRef, persistence: "local" }).then(() => MNBridge.send("aiGetSettings")).then(value => setSettings(normalizeAISettingsView(value)))}>本地保存</button>
+              <button className="aiDangerButton" onClick={() => clearCredential(profile.credentialRef)}>清除密钥</button>
+              <button onClick={() => testProvider(profile)}>测试</button>
+            </div>
+          </div>}
+        </article> })}
+      </div>
+      <div className="settingsGroup aiPrivacyGroup"><h2>发送内容</h2>
+        {privacyRows.map(([key, label, hint]) => <div key={key} className="aiRow"><span className="aiRowMain"><strong>{label}</strong><small>{hint}</small></span><AISwitch checked={settings.privacy[key]} onChange={value => save({ ...settings, privacy: { ...settings.privacy, [key]: value } })} label={label} /></div>)}
+        <div className="aiRow"><span className="aiRowMain"><strong>手写内容</strong><small>卡片内手写与脑图绑定手写统一处理；手写不进入 OCR，开启后以图片随对应题目发送给分析模型</small></span><AISwitch checked={settings.privacy.handwriting} onChange={value => save({ ...settings, privacy: { ...settings.privacy, handwriting: value } })} label="手写内容" /></div>
+        <small className="aiOcrHint">题目始终以整卡识别文字发送；图片只可能是手写内容，且仅发送给分析模型，不会发给识别服务。</small>
+      </div>
+      <div className="settingsGroup aiSubjectGroup"><h2>科目与学习集</h2>
+        <div className="aiSubjectAdd"><input value={newSubject} onChange={event => setNewSubject(event.target.value)} placeholder="新科目名称" aria-label="新科目名称" /><button onClick={addSubject}>添加</button></div>
+        {subjects.map(subject => { const key = `subject-${subject.id}`; return <article key={subject.id}>
+          <button type="button" className="aiRow aiRowButton" aria-expanded={expandedKey === key} onClick={() => toggleEditor(key)}>
+            <span className="aiRowMain"><strong>{subject.name}</strong><small>{subject.studySetIds.length} 个学习集 · {subject.schedule.enabled ? `按${AI_FREQUENCY_LABELS[subject.schedule.frequency] || "周"}间隔检查生成` : "未开启定期检查"}</small></span>
+            <b>{expandedKey === key ? "收起" : "编辑"}</b>
+          </button>
+          {expandedKey === key && <div className="aiEditor">
+            <label className="aiEditorField"><span>科目名称</span><input value={subject.name} onChange={event => patchSubject(subject.id, { name: event.target.value })} /></label>
+            <div className="aiEditorField"><span>所属学习集（每个学习集只能归属一个科目）</span><div className="aiStudySets">{studySets.map(set => { const owner = subjects.find(item => item.id !== subject.id && item.studySetIds.includes(set.id)); return <label key={set.id} className={owner ? "owned" : ""}><input type="checkbox" disabled={!!owner} checked={subject.studySetIds.includes(set.id)} onChange={event => patchSubject(subject.id, { studySetIds: event.target.checked ? [...subject.studySetIds, set.id] : subject.studySetIds.filter(id => id !== set.id) })} /><span>{set.title}</span></label> })}</div></div>
+            <div className="aiRow"><span className="aiRowMain"><strong>定期检查生成</strong><small>打开插件时按间隔检查；不会在后台准点运行，内容无变化不重复生成</small></span><AISwitch checked={subject.schedule.enabled} onChange={value => patchSubject(subject.id, { schedule: { ...subject.schedule, enabled: value } })} label="定期检查生成" /></div>
+            {subject.schedule.enabled && <label className="aiEditorField"><span>检查间隔</span><select value={subject.schedule.frequency} onChange={event => patchSubject(subject.id, { schedule: { ...subject.schedule, frequency: event.target.value } })}><option value="daily">每天</option><option value="weekly">每周</option><option value="monthly">每月</option></select></label>}
+            <div className="aiEditorActions"><button className="aiDangerButton" onClick={() => save({ ...settings, subjects: subjects.filter(item => item.id !== subject.id) })}>删除科目</button></div>
+          </div>}
+        </article> })}
+        {!subjects.length && <small className="aiOcrHint">添加科目并把学习集归入其中，才能按科目生成总结。</small>}
+      </div>
+      {settings.enabled && <div className="settingsGroup aiAdvancedGroup"><h2>高级</h2>
+        <section className="aiAdvancedSection aiPreparationSettings"><h3>错题题目准备</h3><QuestionPreparationWorkspace studySets={mistakeStudySets} ocrEngine={settings.ocrEngine} includeHandwriting={settings.privacy.handwriting} onStorageChanged={loadStorage} onStatus={setStatus} /></section>
+        <section className="aiAdvancedSection aiStorageSettings"><h3>缓存与报告</h3><div className="aiStorageSummary"><span><strong>OCR 缓存</strong><small>API 缓存 {cacheStats?.ocrEntries || 0} · 已准备题目 {cacheStats?.preparedEntries || 0} · 报告 {cacheStats?.reportCount || 0}</small></span><button onClick={() => MNBridge.send("aiClearOCRCache").then(loadStorage)}>清空 OCR</button></div><OCRResultBrowser items={preparedQuestions} onStatus={setStatus} />{reportList.slice(0, 8).map(item => <article key={item.id}><span><strong>{item.subjectName}</strong><small>{new Date(item.createdAt).toLocaleDateString()}</small></span><button onClick={() => MNBridge.send("aiDeleteReport", { reportId: item.id }).then(loadStorage)}>删除</button></article>)}</section>
       </div>}
-    </div>
-    <div className="settingsGroup aiCompactSettings"><h2>发送内容</h2>
-      <button type="button" className="aiSummaryRow" aria-expanded={expandedKey === "privacy"} onClick={() => toggleEditor("privacy")}>
-        <span><strong>发送给 AI 的内容</strong><small>{[settings.privacy.includeAnswer && "答案", settings.privacy.includeSourcePath && "章节", settings.privacy.includeReviewHistory && "历史", settings.privacy.includeCustomCategories && "标签", settings.privacy.handwriting && "卡片内手写", settings.privacy.mindMapHandwriting && "脑图绑定手写", settings.privacy.handwritingToModel && "手写原图"].filter(Boolean).join("、") || "仅题目文字"} · {AI_IMAGE_LABELS[settings.privacy.images]}</small></span>
-        <b>{expandedKey === "privacy" ? "收起" : "编辑"}</b>
-      </button>
-      {expandedKey === "privacy" && <div className="aiEditor">
-        {[["includeAnswer", "参考答案"], ["includeSourcePath", "章节路径"], ["includeReviewHistory", "复习历史"], ["includeCustomCategories", "自定义标签"], ["handwriting", "卡片内手写"], ["mindMapHandwriting", "脑图绑定手写"]].map(([key, label]) => <label key={key} className="aiSettingRow"><span>{label}</span><input type="checkbox" checked={settings.privacy[key]} onChange={event => save({ ...settings, privacy: { ...settings.privacy, [key]: event.target.checked } })} /></label>)}
-        <label className="aiSettingRow"><span><strong>手写原图发给分析模型</strong><small>把准备时另存的脑图绑定手写原图，随题目文字一起直接发送给分析模型（需模型支持图片输入）。须开启上方「脑图绑定手写」且图片上传不为「禁止」；改动后已准备题目无需重新准备</small></span><input type="checkbox" checked={settings.privacy.handwritingToModel} onChange={event => save({ ...settings, privacy: { ...settings.privacy, handwritingToModel: event.target.checked } })} /></label>
-        <small className="aiOcrHint">图片上传开关只控制发送给 OCR 的截图，禁止时也不上传手写。卡片内手写与脑图手写分别筛选；OCR 策略为「不使用」时不会上传。分析模型默认只接收筛选后文字，仅开启手写原图后才会附带手写图片。</small>
-        <label className="aiSettingRow"><span>图片上传</span><select value={settings.privacy.images} onChange={event => save({ ...settings, privacy: { ...settings.privacy, images: event.target.value } })}><option value="when-needed">有图片时允许 OCR</option><option value="always">允许整卡 OCR</option><option value="never">禁止图片上传（含手写）</option></select></label>
-      </div>}
-    </div>
-    {settings.enabled && <div className="settingsGroup aiPreparationSettings"><h2>错题题目准备</h2><QuestionPreparationWorkspace studySets={mistakeStudySets} ocrEngine={settings.ocrEngine} includeMindMapHandwriting={settings.privacy.mindMapHandwriting} onStorageChanged={loadStorage} onStatus={setStatus} /></div>}
-    {settings.enabled && <div className="settingsGroup aiStorageSettings"><h2>缓存与报告</h2><div className="aiStorageSummary"><span><strong>OCR 缓存</strong><small>API 缓存 {cacheStats?.ocrEntries || 0} · 已准备题目 {cacheStats?.preparedEntries || 0} · 报告 {cacheStats?.reportCount || 0}</small></span><button onClick={() => MNBridge.send("aiClearOCRCache").then(loadStorage)}>清空 OCR</button></div><OCRResultBrowser items={preparedQuestions} onStatus={setStatus} />{reportList.slice(0, 8).map(item => <article key={item.id}><span><strong>{item.subjectName}</strong><small>{new Date(item.createdAt).toLocaleDateString()}</small></span><button onClick={() => MNBridge.send("aiDeleteReport", { reportId: item.id }).then(loadStorage)}>删除</button></article>)}</div>}
     </div>
   </section>
 }
