@@ -310,6 +310,20 @@ test("题目准备可读取并渲染卡片绑定的脑图手写", () => {
   assert.match(web, /当前 MarginNote 版本不支持读取脑图绑定手写/)
 })
 
+test("手写原图可作为独立附件发给分析模型", () => {
+  assert.match(source, /handwritingToModel: boolean/)
+  assert.match(source, /handwritingToModel: false/)
+  assert.match(source, /handwritingImageFile\?: string/)
+  assert.match(source, /readImageFileDataUri\(preparedQuestionImageRoot\(\), prepared\.handwritingImageFile/)
+  assert.match(source, /MAX_ANALYSIS_IMAGES/)
+  assert.match(source, /analysisUserContent\(prompt, attachments, chatCompletions\)/)
+  assert.match(source, /附件 \$\{ref\}-H1：本题脑图绑定手写原图/)
+  assert.match(source, /未附带手写原图/)
+  assert.match(web, /bound-mindmap-handwriting/)
+  assert.match(web, /handwritingDataUri/)
+  assert.match(web, /手写原图发给分析模型/)
+})
+
 test("OCR 学习集候选只包含实际有错题的学习集", () => {
   assert.match(source, /command === "aiListMistakeStudySets"/)
   assert.match(source, /const counts = new Map<string, number>\(\)/)

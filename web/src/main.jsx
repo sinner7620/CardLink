@@ -1302,7 +1302,7 @@ function normalizeAISettingsView(value) {
     ocrEngine: input.ocrEngine === "glm-ocr" ? "glm-ocr" : "mineru",
     mineru: { enabled: false, policy: "auto", enableFormula: true, enableTable: true, credentialRef: "mineru-token", ...(input.mineru || {}) },
     glmOcr: { baseUrl: "https://open.bigmodel.cn/api/paas/v4", credentialRef: "ocr-glm", model: "glm-ocr", timeoutMs: 120000, ...(input.glmOcr || {}) },
-    privacy: { includeAnswer: true, includeSourcePath: true, includeReviewHistory: true, includeCustomCategories: true, handwriting: false, mindMapHandwriting: false, images: "when-needed", ...(input.privacy || {}) },
+    privacy: { includeAnswer: true, includeSourcePath: true, includeReviewHistory: true, includeCustomCategories: true, handwriting: false, mindMapHandwriting: false, handwritingToModel: false, images: "when-needed", ...(input.privacy || {}) },
   }
 }
 
@@ -1435,7 +1435,16 @@ function QuestionPreparationWorkspace({ studySets, ocrEngine, includeMindMapHand
       const canvas = await html2canvas(doc.body, { backgroundColor: "#ffffff", logging: false, useCORS: true, scale, width, height, windowWidth: width, windowHeight: height })
       const imageDataUri = canvas.toDataURL("image/jpeg", .9)
       setPreviewImage(imageDataUri)
-      await MNBridge.send("aiSubmitPreparationImage", { jobId: job.id, recordId: current.recordId, imageDataUri })
+      // 脑图绑定手写区已在渲染文档内：单独截图另存为独立附件，供分析模型直传，失败不阻断 OCR。
+      let handwritingDataUri = ""
+      try {
+        const handwritingSection = doc.querySelector(".bound-mindmap-handwriting")
+        if (handwritingSection) {
+          const handwritingCanvas = await html2canvas(handwritingSection, { backgroundColor: "#ffffff", logging: false, useCORS: true, scale })
+          handwritingDataUri = handwritingCanvas.toDataURL("image/jpeg", .9)
+        }
+      } catch {}
+      await MNBridge.send("aiSubmitPreparationImage", { jobId: job.id, recordId: current.recordId, imageDataUri, handwritingDataUri })
     } catch (reason) {
       const message = reason?.message || String(reason)
       onStatus(message)
@@ -1450,7 +1459,7 @@ function QuestionPreparationWorkspace({ studySets, ocrEngine, includeMindMapHand
   return <div className="aiPreparationWorkspace">
     <div className="aiPreparationControls">
       <label><span>选择含错题的学习集</span><select value={studySetId} disabled={running} onChange={event => setStudySetId(event.target.value)}>{studySets.map(set => <option key={set.id} value={set.id}>{set.title}（{set.mistakeCount} 题）</option>)}</select></label>
-      <p>逐题按发送范围筛选原题卡片{includeMindMapHandwriting ? "及其脑图绑定手写" : ""}。需要 OCR 时才渲染为图片并发送给 {ocrEngine === "glm-ocr" ? "GLM-OCR" : "MinerU"}。不上传图片时直接读取可用文字；没有可用文字的题目会提示失败。分析前会核对题目、手写和发送范围，旧 OCR 可能需要重新准备。</p>
+      <p>逐题按发送范围筛选原题卡片{includeMindMapHandwriting ? "及其脑图绑定手写" : ""}。需要 OCR 时才渲染为图片并发送给 {ocrEngine === "glm-ocr" ? "GLM-OCR" : "MinerU"}。不上传图片时直接读取可用文字；没有可用文字的题目会提示失败。渲染若含脑图绑定手写，会另存一份手写原图（是否随分析发送由发送范围中的开关决定）。分析前会核对题目、手写和发送范围，旧 OCR 可能需要重新准备。</p>
       <div className="aiEditorActions"><button type="button" disabled={!studySetId || busy || running} onClick={start}>{busy ? "正在启动…" : "开始准备错题"}</button>{running && <button type="button" className="aiDangerButton" onClick={cancel}>取消</button>}</div>
       {!studySets.length && <small className="aiPreparationEmpty">当前没有包含错题的学习集，无需 OCR。</small>}
       {job && <dl className="aiPreparationCounts"><div><dt>题目总数</dt><dd>{job.total || 0}</dd></div><div><dt>成功</dt><dd>{job.success || 0}</dd></div><div><dt>失败</dt><dd>{job.failed || 0}</dd></div></dl>}
@@ -1598,12 +1607,13 @@ function AISettingsPage({ onBack, onEnabledChanged }) {
     </div>
     <div className="settingsGroup aiCompactSettings"><h2>发送内容</h2>
       <button type="button" className="aiSummaryRow" aria-expanded={expandedKey === "privacy"} onClick={() => toggleEditor("privacy")}>
-        <span><strong>发送给 AI 的内容</strong><small>{[settings.privacy.includeAnswer && "答案", settings.privacy.includeSourcePath && "章节", settings.privacy.includeReviewHistory && "历史", settings.privacy.includeCustomCategories && "标签", settings.privacy.handwriting && "卡片内手写", settings.privacy.mindMapHandwriting && "脑图绑定手写"].filter(Boolean).join("、") || "仅题目文字"} · {AI_IMAGE_LABELS[settings.privacy.images]}</small></span>
+        <span><strong>发送给 AI 的内容</strong><small>{[settings.privacy.includeAnswer && "答案", settings.privacy.includeSourcePath && "章节", settings.privacy.includeReviewHistory && "历史", settings.privacy.includeCustomCategories && "标签", settings.privacy.handwriting && "卡片内手写", settings.privacy.mindMapHandwriting && "脑图绑定手写", settings.privacy.handwritingToModel && "手写原图"].filter(Boolean).join("、") || "仅题目文字"} · {AI_IMAGE_LABELS[settings.privacy.images]}</small></span>
         <b>{expandedKey === "privacy" ? "收起" : "编辑"}</b>
       </button>
       {expandedKey === "privacy" && <div className="aiEditor">
         {[["includeAnswer", "参考答案"], ["includeSourcePath", "章节路径"], ["includeReviewHistory", "复习历史"], ["includeCustomCategories", "自定义标签"], ["handwriting", "卡片内手写"], ["mindMapHandwriting", "脑图绑定手写"]].map(([key, label]) => <label key={key} className="aiSettingRow"><span>{label}</span><input type="checkbox" checked={settings.privacy[key]} onChange={event => save({ ...settings, privacy: { ...settings.privacy, [key]: event.target.checked } })} /></label>)}
-        <small className="aiOcrHint">图片开关控制发送给 OCR 的截图，禁止时也不上传手写。卡片内手写与脑图手写分别筛选；OCR 策略为“不使用”时不会上传。分析模型仍只接收筛选后文字。</small>
+        <label className="aiSettingRow"><span><strong>手写原图发给分析模型</strong><small>把准备时另存的脑图绑定手写原图，随题目文字一起直接发送给分析模型（需模型支持图片输入）。须开启上方「脑图绑定手写」且图片上传不为「禁止」；改动后已准备题目无需重新准备</small></span><input type="checkbox" checked={settings.privacy.handwritingToModel} onChange={event => save({ ...settings, privacy: { ...settings.privacy, handwritingToModel: event.target.checked } })} /></label>
+        <small className="aiOcrHint">图片上传开关只控制发送给 OCR 的截图，禁止时也不上传手写。卡片内手写与脑图手写分别筛选；OCR 策略为「不使用」时不会上传。分析模型默认只接收筛选后文字，仅开启手写原图后才会附带手写图片。</small>
         <label className="aiSettingRow"><span>图片上传</span><select value={settings.privacy.images} onChange={event => save({ ...settings, privacy: { ...settings.privacy, images: event.target.value } })}><option value="when-needed">有图片时允许 OCR</option><option value="always">允许整卡 OCR</option><option value="never">禁止图片上传（含手写）</option></select></label>
       </div>}
     </div>

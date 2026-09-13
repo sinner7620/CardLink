@@ -78,3 +78,13 @@ export function packAnalysisItems(items: AnalysisItem[], budget = 120000) {
   }
   return { text: selected.map(item => item.text).join("\n\n"), selected, evidence, omitted: items.length - selected.length }
 }
+
+export interface ModelImageAttachment { reference: string; dataUri: string }
+/** 分析请求的用户消息内容：文字在前，图片走服务实际支持的图像字段，绝不把 Base64 拼进 prompt 文本。 */
+export function analysisUserContent(prompt: string, attachments: ModelImageAttachment[], chatCompletions: boolean) {
+  const textPart = chatCompletions ? { type: "text", text: prompt } : { type: "input_text", text: prompt }
+  const imageParts = attachments.map(item => chatCompletions
+    ? { type: "image_url", image_url: { url: item.dataUri } }
+    : { type: "input_image", image_url: item.dataUri })
+  return [textPart, ...imageParts]
+}

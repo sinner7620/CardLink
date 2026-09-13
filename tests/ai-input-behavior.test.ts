@@ -1,6 +1,6 @@
 import { test, mock } from "node:test"
 import assert from "node:assert/strict"
-import { packAnalysisItems, planQuestionInput, preparationPolicyFingerprint, preparedInputMatches, type PreparationPolicy } from "../src/ai-input"
+import { packAnalysisItems, planQuestionInput, preparationPolicyFingerprint, preparedInputMatches, analysisUserContent, type PreparationPolicy } from "../src/ai-input"
 
 const policy: PreparationPolicy = {
   privacy: { images: "when-needed", handwriting: false, mindMapHandwriting: false }, ocrEngine: "glm-ocr",
@@ -277,4 +277,17 @@ test("真实报告引用排除读取失败与容量外题目，覆盖数等于�
   assert.equal(report.coverage.analyzed, 1)
   assert.equal(report.coverage.budgetOmitted, 1)
   assert.equal(report.coverage.unavailable, 1)
+})
+
+test("分析请求图片附件走服务实际支持的图像字段，不把 Base64 拼进 prompt 文本", () => {
+  const attachments = [{ reference: "Q001-H1", dataUri: "data:image/jpeg;base64,QQ==" }]
+  const chat = analysisUserContent("题目文本", attachments, true)
+  assert.deepEqual(chat[0], { type: "text", text: "题目文本" })
+  assert.deepEqual(chat[1], { type: "image_url", image_url: { url: "data:image/jpeg;base64,QQ==" } })
+  assert.doesNotMatch(chat[0].text, /base64/)
+  const responses = analysisUserContent("题目文本", attachments, false)
+  assert.deepEqual(responses[0], { type: "input_text", text: "题目文本" })
+  assert.deepEqual(responses[1], { type: "input_image", image_url: "data:image/jpeg;base64,QQ==" })
+  const textOnly = analysisUserContent("纯文本", [], true)
+  assert.deepEqual(textOnly, [{ type: "text", text: "纯文本" }])
 })
