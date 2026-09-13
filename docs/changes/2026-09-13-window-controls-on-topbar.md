@@ -28,3 +28,7 @@
 - 交付前对最终输入重跑 check、test（257 通过）、build；产物 `dist/CardLink-v2.4.1-b10.mnaddon`。
 - 已复制到 `E:\iCloudDrive\同步文件夹\CardLink-v2.4.1-b10.mnaddon`；SHA-256（源与复制件一致）：`8e8b9931f782fb5e79bd3a45008cf6e1857c63f91624efa663919557138f318a`。
 - 未推送 GitHub/Gitee 发布；远端发布需另行授权。
+
+## 跟进（同日）：静止态完全无底色
+
+按钮基础样式（controls.css `.iconButton`）自带白色背景，在顶栏上仍形成底色块。`.topBar .iconButton` 规则补充 `background: transparent`：静止态完全透明（实测 computed 为 rgba(0,0,0,0)、无边框、无阴影），悬停时仍显示临时浅灰反馈。257 项测试通过。
