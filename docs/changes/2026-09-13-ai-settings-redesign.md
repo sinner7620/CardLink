@@ -70,3 +70,10 @@
 - **浏览器自查**：通过本地 ui-preview（构建产物 + mock 桥）实际打开配置页截图验证——switch 开/关形状、行布局、两个编辑器展开、下拉切换 DeepSeek 后单入口跟随，均正常；确认页面无重复渲染（截图中的双顶栏为截图拼接伪影，DOM 仅一个 shell）。
 - 同轮：导出快速预览缩放按用户指示改为固定 60%（见 2026-09-13-export-preview-scale.md）；「启用题目识别」提示文案更正为"关闭后图片题不会发送，文字题仍直接读取"。
 - `pnpm check`、256 项测试、`pnpm build` 通过。真机视觉仍需验收。
+
+## 交付（2.4.1-b7）
+
+- 版本升至 `2.4.1-b7`（package.json），发布说明 `RELEASE_NOTES_v2.4.1-b7.md`；正式渠道身份 `marginnote.extension.mn4-answer-matcher` / `CardLink`，已解包核对 mnaddon.json。
+- 交付前对最终输入重跑 check、test（256 通过）、build；产物 `dist/CardLink-v2.4.1-b7.mnaddon`。
+- 已复制到 `E:\iCloudDrive\同步文件夹\CardLink-v2.4.1-b7.mnaddon`；SHA-256（源与复制件一致）：`a56b487d06015a5100c7b175d11d2703f91cf91cc97d1b38ab89acc52779f3f2`。
+- 未推送 GitHub/Gitee 发布；远端发布需另行授权。
