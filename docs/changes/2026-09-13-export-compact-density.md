@@ -37,3 +37,10 @@
 - 样张复测：auto 模式 + 答案文末，首页完整 10 道纯题目（单题 100px），与紧凑档一致。
 - 测试改为断言 auto 布局承载 60% 卡片渲染与书写区隐藏；`pnpm check`、257 项测试、`pnpm build` 通过。
 - 注意：b8 安装包打包含独立紧凑选项，本跟进在其之后；需要更新包时另起版本。
+
+## 交付（2.4.1-b9）
+
+- 版本升至 `2.4.1-b9`（package.json），发布说明 `RELEASE_NOTES_v2.4.1-b9.md`；正式渠道身份 `marginnote.extension.mn4-answer-matcher` / `CardLink`，已解包核对 mnaddon.json。
+- 交付前对最终输入重跑 check、test（257 通过）、build；产物 `dist/CardLink-v2.4.1-b9.mnaddon`（含「紧凑逻辑并入自动模式」跟进）。
+- 已复制到 `E:\iCloudDrive\同步文件夹\CardLink-v2.4.1-b9.mnaddon`；SHA-256（源与复制件一致）：`9a57dd9a7a3ac6212f626f7c3dbe9d778be1c198b0c7cec3c7675344b5feaf3a`。
+- 未推送 GitHub/Gitee 发布；远端发布需另行授权。
