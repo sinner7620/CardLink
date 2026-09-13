@@ -470,9 +470,9 @@ body,
 .windowControlCapsule {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: 44px;
-  width: 88px;
-  height: 36px;
+  grid-auto-columns: 36px;
+  width: 72px;
+  height: 32px;
   overflow: hidden;
   border-radius: 999px;
   background: rgba(252, 252, 253, .96);
@@ -481,8 +481,8 @@ body,
 }
 .windowControlCapsule .iconButton {
   box-sizing: border-box;
-  width: 44px;
-  height: 36px;
+  width: 36px;
+  height: 32px;
   border: 0;
   border-radius: 0;
   background: transparent;

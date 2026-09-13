@@ -291,7 +291,7 @@ test("整条顶栏除按钮组外可拖动、Tab 居中且顶栏为白色", () =
   assert.match(source, /const refreshButton = <button className="iconButton"/)
   assert.match(source, /const closeButton = <button className="iconButton"/)
   assert.match(source, /className="windowControlCapsule"/)
-  assert.match(css, /\.windowControlCapsule \{[\s\S]*width: 88px;[\s\S]*height: 36px;/)
+  assert.match(css, /\.windowControlCapsule \{[\s\S]*width: 72px;[\s\S]*height: 32px;/)
   assert.match(css, /@keyframes windowControlJelly/)
   assert.match(css, /prefers-reduced-motion: reduce/)
   assert.match(css, /\.topBar \{[\s\S]*background: #fff/)
