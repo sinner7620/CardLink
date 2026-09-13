@@ -32,3 +32,9 @@
 ## 跟进（同日）：静止态完全无底色
 
 按钮基础样式（controls.css `.iconButton`）自带白色背景，在顶栏上仍形成底色块。`.topBar .iconButton` 规则补充 `background: transparent`：静止态完全透明（实测 computed 为 rgba(0,0,0,0)、无边框、无阴影），悬停时仍显示临时浅灰反馈。257 项测试通过。
+
+## 跟进（同日）：收紧按钮间距与静止态透明
+
+- 顶栏按钮原 44px 宽 + 7px 容器间距导致图标中心距 51px、视觉分散；改为按钮 42px 宽、`.topBar .topTools` 间距 0（图标中心距 42px，比原胶囊 44px 更近），触控热区由 a11y 的 ::after 外扩 6px 保持。
+- `.topBar .iconButton` 补充 `background: transparent`（基础样式白底在顶栏形成底色块），静止态完全透明，悬停浅灰反馈保留。
+- 257 项测试通过；浏览器实测中心距 42px、背景 rgba(0,0,0,0)。

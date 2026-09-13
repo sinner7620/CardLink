@@ -467,11 +467,15 @@ body,
 .topTools-right {
   justify-self: end;
 }
-/* 窗口控制按钮直接位于顶栏：无胶囊容器、无底色，尺寸对齐导航按钮；
+/* 窗口控制按钮直接位于顶栏：无胶囊容器、无底色、彼此收紧；
+   触控热区由 a11y.css 的 ::after 外扩 6px 保持；
    悬停底色与按压缩放由下方 .topBar .iconButton 规则承担。 */
+.topBar .topTools {
+  gap: 0;
+}
 .topBar .iconButton {
   box-sizing: border-box;
-  width: 44px;
+  width: 42px;
   height: 36px;
   border: 0;
   background: transparent;
