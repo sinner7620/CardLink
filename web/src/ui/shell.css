@@ -467,13 +467,14 @@ body,
 .topTools-right {
   justify-self: end;
 }
-/* 窗口控制按钮直接位于顶栏：无胶囊容器，尺寸对齐导航按钮；
+/* 窗口控制按钮直接位于顶栏：无胶囊容器、无底色，尺寸对齐导航按钮；
    悬停底色与按压缩放由下方 .topBar .iconButton 规则承担。 */
 .topBar .iconButton {
   box-sizing: border-box;
   width: 44px;
   height: 36px;
   border: 0;
+  background: transparent;
   box-shadow: none;
 }
 @media (max-width: 800px) {
