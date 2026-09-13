@@ -1,5 +1,7 @@
 import katex from "katex"
 import { Marked } from "marked"
+import { imageMimeFromBase64 } from "./base64"
+import { escapeHtml } from "./html-utils"
 
 type MathToken = {
   type: "blockMath" | "inlineMath"
@@ -89,6 +91,41 @@ markdown.use({
   ]
 })
 
-export function renderMarkdown(source: string): string {
-  return markdown.parse(source, { async: false }) as string
+export type MarkdownMediaResolver = (hash: string) => string | undefined
+
+const MARGINNOTE_MARKDOWN_IMAGE_URL = /^marginnote4app:\/\/markdownimg\/(?:png|jpe?g|gif|webp)\/([^?#]+)(?:[?#].*)?$/i
+const MARGINNOTE_MARKDOWN_IMAGE_IN_TEXT = /!\[[^\]]*\]\(marginnote4app:\/\/markdownimg\/(?:png|jpe?g|gif|webp)\/[^\s)"'<>]+\)/gi
+
+function decodeMediaHash(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
+function resolveMarginNoteMarkdownImages(html: string, resolveMedia: MarkdownMediaResolver): string {
+  return html.replace(/<img\b[^>]*>/gi, tag => {
+    const sourceAttribute = tag.match(/\bsrc=(['"])(.*?)\1/i)
+    const source = sourceAttribute?.[2] || ""
+    const match = source.match(MARGINNOTE_MARKDOWN_IMAGE_URL)
+    if (!match || !sourceAttribute) return tag
+    const mediaId = decodeMediaHash(match[1])
+    const base64 = resolveMedia(mediaId)
+    if (!base64) return tag
+    const resolvedSource = `data:${imageMimeFromBase64(base64)};base64,${base64}`
+    const withSource = tag.replace(sourceAttribute[0], `src="${resolvedSource}"`)
+    return /\bdata-media-id=/i.test(withSource)
+      ? withSource
+      : withSource.replace(/<img\b/i, `<img data-media-id="${escapeHtml(mediaId)}"`)
+  })
+}
+
+export function hasUnsupportedMarginNoteUrl(source: string): boolean {
+  return /marginnote(?:3|4)app:\/\//i.test(String(source || "").replace(MARGINNOTE_MARKDOWN_IMAGE_IN_TEXT, ""))
+}
+
+export function renderMarkdown(source: string, resolveMedia?: MarkdownMediaResolver): string {
+  const html = markdown.parse(source, { async: false }) as string
+  return resolveMedia ? resolveMarginNoteMarkdownImages(html, resolveMedia) : html
 }

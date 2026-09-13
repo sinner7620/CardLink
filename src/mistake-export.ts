@@ -62,6 +62,17 @@ interface MarkdownAsset {
 export function extractMarkdownAssets(markdown: string): { markdown: string; assets: MarkdownAsset[] } {
   const assets: MarkdownAsset[] = []
   let output = String(markdown || "").replace(
+    /!\[([^\]]*)\]\(marginnote4app:\/\/markdownimg\/(png|jpe?g|gif|webp)\/([^)]+)\)/gi,
+    (_, alt: string, rawExtension: string, mediaId: string) => {
+      const extension = rawExtension.toLowerCase().replace("jpeg", "jpg")
+      const fileName = `asset-${String(assets.length + 1).padStart(4, "0")}.${extension}`
+      let decodedMediaId = mediaId
+      try { decodedMediaId = decodeURIComponent(mediaId) } catch { /* 保留原始哈希 */ }
+      assets.push({ fileName, mediaId: decodedMediaId })
+      return `![${alt}](assets/${fileName})`
+    }
+  )
+  output = output.replace(
     /!\[([^\]]*)\]\(mnmedia:\/\/(png|jpg|gif|webp)\/([^)]+)\)/g,
     (_, alt: string, extension: string, mediaId: string) => {
       const fileName = `asset-${String(assets.length + 1).padStart(4, "0")}.${extension}`

@@ -1,4 +1,5 @@
 # 设计规范：Apple 设计准则对照（插件适配版）
+> 历史设计对照，以下“已达成”是原记录结论，未在本轮重新验收。当前图标形变与减弱动态要求以 [AGENTS.md](../../AGENTS.md) 为准。
 依据 emilkowalski/skills apple-design（WWDC Fluid Interactions 的 web 移植版）17 节，逐条落到本插件：
 ## 已达成
 - #1 响应性：全交互 :active 按压反馈（a11y.css）；桥接观测层即时埋点
@@ -9,7 +10,7 @@
 - #14 排版：字号 ≥11px；辅助灰对比度 AA
 - #15 不困住用户：迁移倒计时仅首次；破坏性操作两段确认
 ## 按决策取消/延后
-- #13 媒体查询降级（prefers-*）：用户取消（beta.22）
+- #13 历史 beta.22 曾取消媒体查询降级；该记录不覆盖现行 Morphicons 和 CSS 减弱动态要求。
 - 触控 Pointer Events 统一、rubber-band：deferred（需真机调参）
 ## 设计语言（定稿）
 - 主强调 #0e8dfd；选中态 = 灰底 #d8d8dd + 蓝字/蓝图标

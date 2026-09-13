@@ -521,6 +521,7 @@ function App() {
         const detail = await MNBridge.send("mistakeDetail", { recordId: currentSelectedId })
         if (seq !== loadSeqRef.current) return
         setDetail(detail)
+        setData(current => patchReviewedMistake(current, detail.record))
       }
     } catch (reason) {
       if (seq === loadSeqRef.current && (!quiet || firstPagePublished)) setError(reason.message || String(reason))
@@ -628,7 +629,9 @@ function App() {
     setBusy(true)
     setError("")
     try {
-      setDetail(await MNBridge.send("mistakeDetail", { recordId }))
+      const nextDetail = await MNBridge.send("mistakeDetail", { recordId })
+      setDetail(nextDetail)
+      setData(current => patchReviewedMistake(current, nextDetail.record))
     } catch (reason) {
       setDetail(null)
       setError(reason.message || String(reason))
@@ -783,7 +786,7 @@ function App() {
       {locateHint && <div className="locateHintBanner" role="alert">{locateHint}</div>}
       {pendingNotice && <div className="pendingNotice" role="status"><i /><span>{pendingNotice}</span></div>}
       <div className="pageHeading"><h1>{tab === "overview" ? "错题总览" : tab === "mistakes" ? "错题浏览" : tab === "review" ? "到期复习" : tab === "export" ? "导出错题" : settingsPane === "ai" ? "AI 错题分析（开发中…）" : "设置"}</h1><p>{tab === "overview" ? "掌握情况、到期复习和最近错题概览" : tab === "mistakes" ? "全部错题保留在原脑图中，可添加标签、核对答案并定位原题" : tab === "export" ? "从当前错题记录生成可另存的 PDF 或 Markdown 文件" : settingsPane === "ai" ? "科目、模型与数据范围" : "跨脑图答案与错题工作台"}</p></div>
-      {error && <div className="error">{error}</div>}
+      {error && <div className="workbenchError" role="alert"><span>{error}</span><button type="button" aria-label="关闭错误提示" onClick={() => setError("")}>×</button></div>}
       {busy && <div className="loading"><i />正在读取 MarginNote 数据…</div>}
       {data?.mistakes?.recordsComplete === false && streamLoading && <div className="dataStreamStatus" role="status">正在载入错题 {data.mistakes.records.length}/{data.mistakes.totalCount}…</div>}
 
@@ -821,6 +824,7 @@ function App() {
       />}
 
       {tab === "review" && <DueReviewList
+        onRecordChanged={record => setData(current => patchReviewedMistake(current, record))}
         focusRecordId={reviewFocusId}
         records={(data?.mistakes?.records || []).filter(item => item.noteAvailable)}
         reviewCurves={data?.mistakes?.reviewCurves}
@@ -1259,7 +1263,7 @@ function AIOverview({ ready, enabled, onOpenSettings }) {
     <header><strong>AI 错题总结（开发中…）</strong><div className="aiOverviewActions"><select value={subjectId} onChange={event => setSubjectId(event.target.value)} aria-label="选择科目"><option value="">选择科目</option>{(settings?.subjects || []).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button disabled={!selected || running || !settings?.enabled} onClick={inspect}>生成总结</button></div></header>
     {!settings?.enabled ? <div className="aiEmpty">AI 分析未开启</div> : !selected ? <div className="aiEmpty">请先在设置中配置科目</div> : <>
       {latest && <div className="aiReportMeta"><span>{latest.stale ? "数据已变化" : "最新报告"}</span><b>{new Date(latest.createdAt).toLocaleDateString()}</b><em>{latest.model}</em></div>}
-      {preview && <div className="aiPreflight"><b>{preview.recordCount} 道错题</b><span>{preview.withHistory} 道有复习记录</span><span>{preview.withoutAnswerBinding} 道未绑定答案</span><button onClick={start}>确认生成</button></div>}
+      {preview && <div className="aiPreflight"><b>{preview.recordCount} 道错题</b><span>本次候选 {preview.analyzableCount} 道 · 可用 {preview.preparedCount} 道</span><span>{preview.needsPreparation || 0} 道需准备或检查发送范围</span><span>{preview.withHistory} 道有复习记录</span><span>{preview.withoutAnswerBinding} 道未绑定答案</span><button disabled={!preview.preparedCount} onClick={start}>确认生成</button></div>}
       {running && <div className="aiJob"><i style={{ width: `${job.progress || 0}%` }} /><span>{job.detail || (job.status === "preparing" ? "读取错题" : job.status === "ocr" ? "识别图片" : job.status === "analyzing" ? "生成总结" : "保存报告")} · {job.progress || 0}%</span><button onClick={() => MNBridge.send("aiCancelJob", { jobId: job.id })}>取消</button></div>}
       {error && <div className="aiInlineError">{error}</div>}
       {report && <AIReport report={report} openEvidence={openEvidence} />}
@@ -1303,8 +1307,8 @@ function normalizeAISettingsView(value) {
 }
 
 const AI_FREQUENCY_LABELS = { daily: "每天", weekly: "每周", monthly: "每月" }
-const AI_POLICY_LABELS = { auto: "自动", all: "全部图片", "image-only": "纯图片题", never: "不使用" }
-const AI_IMAGE_LABELS = { "when-needed": "图片必要时上传", always: "图片总是上传", never: "图片不发送" }
+const AI_POLICY_LABELS = { auto: "有图片或手写时识别", all: "整卡识别", "image-only": "仅无题干文字的图片题", never: "不使用 OCR" }
+const AI_IMAGE_LABELS = { "when-needed": "有图片时允许 OCR", always: "允许整卡 OCR", never: "禁止图片上传（含手写）" }
 
 const OCR_STAGE_LABELS = {
   "waiting-render": "等待渲染",
@@ -1446,7 +1450,7 @@ function QuestionPreparationWorkspace({ studySets, ocrEngine, includeMindMapHand
   return <div className="aiPreparationWorkspace">
     <div className="aiPreparationControls">
       <label><span>选择含错题的学习集</span><select value={studySetId} disabled={running} onChange={event => setStudySetId(event.target.value)}>{studySets.map(set => <option key={set.id} value={set.id}>{set.title}（{set.mistakeCount} 题）</option>)}</select></label>
-      <p>逐题把整张原题卡片{includeMindMapHandwriting ? "及其脑图绑定手写" : ""}渲染为图片并发送给 {ocrEngine === "glm-ocr" ? "GLM-OCR" : "MinerU"}。识别文本独立保存在本地，后续 AI 总结直接读取文本。</p>
+      <p>逐题按发送范围筛选原题卡片{includeMindMapHandwriting ? "及其脑图绑定手写" : ""}。需要 OCR 时才渲染为图片并发送给 {ocrEngine === "glm-ocr" ? "GLM-OCR" : "MinerU"}。不上传图片时直接读取可用文字；没有可用文字的题目会提示失败。分析前会核对题目、手写和发送范围，旧 OCR 可能需要重新准备。</p>
       <div className="aiEditorActions"><button type="button" disabled={!studySetId || busy || running} onClick={start}>{busy ? "正在启动…" : "开始准备错题"}</button>{running && <button type="button" className="aiDangerButton" onClick={cancel}>取消</button>}</div>
       {!studySets.length && <small className="aiPreparationEmpty">当前没有包含错题的学习集，无需 OCR。</small>}
       {job && <dl className="aiPreparationCounts"><div><dt>题目总数</dt><dd>{job.total || 0}</dd></div><div><dt>成功</dt><dd>{job.success || 0}</dd></div><div><dt>失败</dt><dd>{job.failed || 0}</dd></div></dl>}
@@ -1495,10 +1499,10 @@ function OCRResultBrowser({ items, onStatus }) {
   return <section className="aiOcrBrowser" aria-label="OCR 结果对比">
     <header>
       <label><span>选择题目</span><select value={selectedId} onChange={event => setSelectedId(event.target.value)}>{items.map((item, index) => <option key={item.recordId} value={item.recordId}>{index + 1}. {item.sourceTitle}</option>)}</select></label>
-      <small>{selected?.sourceNotebookTitle || "原学习集"} · {selected?.provider === "bigmodel" ? "GLM-OCR" : "MinerU"}{selected?.includedMindMapHandwriting ? ` · 含 ${selected.boundHandwritingCount || 1} 项脑图手写` : ""}</small>
+      <small>{selected?.sourceNotebookTitle || "原学习集"} · {selected?.provider === "local" ? "直接读取文字" : selected?.provider === "bigmodel" ? "GLM-OCR" : "MinerU"}{selected?.includedMindMapHandwriting ? ` · 含 ${selected.boundHandwritingCount || 1} 项脑图手写` : ""}</small>
     </header>
     <div className="aiOcrCompare">
-      <figure><figcaption>发送给 OCR 的原题卡片</figcaption>{detail?.imageDataUri ? <img src={detail.imageDataUri} alt={`${selected?.sourceTitle || "题目"} OCR 原图`} /> : <div className="aiOcrMissingImage">{loading ? "正在读取图片…" : "历史记录未保存原题图片，请重新 OCR 此题"}</div>}</figure>
+      <figure><figcaption>发送给 OCR 的原题卡片</figcaption>{detail?.imageDataUri ? <img src={detail.imageDataUri} alt={`${selected?.sourceTitle || "题目"} OCR 原图`} /> : <div className="aiOcrMissingImage">{loading ? "正在读取图片…" : detail?.provider === "local" ? "此题直接读取文字，未上传图片" : "历史记录未保存原题图片，请重新 OCR 此题"}</div>}</figure>
       <section><h3>OCR 文本渲染</h3>{loading ? <div className="aiOcrRenderedEmpty">正在读取 OCR 文本…</div> : detail?.questionText ? <div className="markdownPreview aiOcrRenderedText" dangerouslySetInnerHTML={{ __html: renderMarkdownPreview(detail.questionText) }} /> : <div className="aiOcrRenderedEmpty">没有可显示的 OCR 文本</div>}</section>
     </div>
     {detail?.processedAt && <footer>识别时间：{new Date(detail.processedAt).toLocaleString()}</footer>}
@@ -1579,8 +1583,8 @@ function AISettingsPage({ onBack, onEnabledChanged }) {
       {expandedKey === "mineru" && <div className="aiEditor">
         <label className="aiSettingRow"><span>启用题目识别</span><input type="checkbox" checked={settings.mineru.enabled} onChange={event => save({ ...settings, mineru: { ...settings.mineru, enabled: event.target.checked } })} /></label>
         <label className="aiSettingRow"><span>OCR 引擎</span><select value={settings.ocrEngine} onChange={event => save({ ...settings, ocrEngine: event.target.value })}><option value="mineru">MinerU</option><option value="glm-ocr">GLM-OCR（智谱）</option></select></label>
+        <label className="aiSettingRow"><span>OCR 策略</span><select value={settings.mineru.policy} onChange={event => save({ ...settings, mineru: { ...settings.mineru, policy: event.target.value } })}><option value="auto">有图片或手写时识别</option><option value="all">整卡识别</option><option value="image-only">仅无题干文字的图片题</option><option value="never">不使用 OCR</option></select></label>
         {settings.ocrEngine === "mineru" ? <>
-          <label className="aiSettingRow"><span>OCR 策略</span><select value={settings.mineru.policy} onChange={event => save({ ...settings, mineru: { ...settings.mineru, policy: event.target.value } })}><option value="auto">自动</option><option value="all">全部图片</option><option value="image-only">纯图片题</option><option value="never">不使用</option></select></label>
           <label className="aiSettingRow"><span>公式识别</span><input type="checkbox" checked={settings.mineru.enableFormula} onChange={event => save({ ...settings, mineru: { ...settings.mineru, enableFormula: event.target.checked } })} /></label>
           <label className="aiSettingRow"><span>表格识别</span><input type="checkbox" checked={settings.mineru.enableTable} onChange={event => save({ ...settings, mineru: { ...settings.mineru, enableTable: event.target.checked } })} /></label>
           <div className="aiEditorActions"><button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: settings.mineru.credentialRef, persistence: "session" }).then(() => MNBridge.send("aiGetSettings")).then(setSettings)}>本次 Token</button><button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: settings.mineru.credentialRef, persistence: "local" }).then(() => MNBridge.send("aiGetSettings")).then(setSettings)}>本地保存</button><button onClick={() => MNBridge.send("aiTestMinerU").then(() => setStatus("MinerU 已连接")).catch(reason => setStatus(reason.message || String(reason)))}>测试</button></div>
@@ -1599,7 +1603,8 @@ function AISettingsPage({ onBack, onEnabledChanged }) {
       </button>
       {expandedKey === "privacy" && <div className="aiEditor">
         {[["includeAnswer", "参考答案"], ["includeSourcePath", "章节路径"], ["includeReviewHistory", "复习历史"], ["includeCustomCategories", "自定义标签"], ["handwriting", "卡片内手写"], ["mindMapHandwriting", "脑图绑定手写"]].map(([key, label]) => <label key={key} className="aiSettingRow"><span>{label}</span><input type="checkbox" checked={settings.privacy[key]} onChange={event => save({ ...settings, privacy: { ...settings.privacy, [key]: event.target.checked } })} /></label>)}
-        <label className="aiSettingRow"><span>图片上传</span><select value={settings.privacy.images} onChange={event => save({ ...settings, privacy: { ...settings.privacy, images: event.target.value } })}><option value="when-needed">必要时</option><option value="always">总是</option><option value="never">不发送</option></select></label>
+        <small className="aiOcrHint">图片开关控制发送给 OCR 的截图，禁止时也不上传手写。卡片内手写与脑图手写分别筛选；OCR 策略为“不使用”时不会上传。分析模型仍只接收筛选后文字。</small>
+        <label className="aiSettingRow"><span>图片上传</span><select value={settings.privacy.images} onChange={event => save({ ...settings, privacy: { ...settings.privacy, images: event.target.value } })}><option value="when-needed">有图片时允许 OCR</option><option value="always">允许整卡 OCR</option><option value="never">禁止图片上传（含手写）</option></select></label>
       </div>}
     </div>
     {settings.enabled && <div className="settingsGroup aiPreparationSettings"><h2>错题题目准备</h2><QuestionPreparationWorkspace studySets={mistakeStudySets} ocrEngine={settings.ocrEngine} includeMindMapHandwriting={settings.privacy.mindMapHandwriting} onStorageChanged={loadStorage} onStatus={setStatus} /></div>}
@@ -1717,7 +1722,7 @@ function retainReviewDetail(current, recordId, detail) {
   return next
 }
 
-function DueReviewList({ records, reviewCurves, action, manualTodayIds, setManualTodayIds, showLocateHint, focusRecordId }) {
+function DueReviewList({ records, reviewCurves, action, manualTodayIds, setManualTodayIds, showLocateHint, focusRecordId, onRecordChanged }) {
   const [answerDetail, setAnswerDetail] = useState(null)
   const [answerLoadingId, setAnswerLoadingId] = useState("")
   const [activeFilter, setActiveFilter] = useState("today")
@@ -1866,6 +1871,7 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, setManua
           // 请求协调器的复用缓存有界；当前实际展开的题目必须全部保留，
           // 否则展开超过 6 题时先完成的卡片会被淘汰并退回永久加载态。
           setQuestionsById(current => ({ ...current, [recordId]: question }))
+          if (question.record) onRecordChanged?.(question.record)
           setQuestionErrorsById(current => {
             if (!current[recordId]) return current
             const next = { ...current }; delete next[recordId]; return next
@@ -1910,6 +1916,7 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, setManua
       if (detail) {
         setDetailsById(current => retainReviewDetail(current, recordId, detail))
         setAnswerDetail(detail)
+        onRecordChanged?.(detail.record)
       }
     } finally {
       setAnswerLoadingId("")

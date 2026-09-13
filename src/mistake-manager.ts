@@ -1,6 +1,7 @@
 import { delay, MN, NodeNote, popup, setTimeInterval, showHUD, UndoManager } from "marginnote"
 import type { MbBookNote } from "marginnote"
 import { renderCardHtml } from "./card-html"
+import { appendBoundMindMapHandwriting, readBoundMindMapHandwriting } from "./bound-handwriting"
 import { answerCardHtml, refreshIndex } from "./matcher"
 import { findAnswersForQuestion } from "./answer-lookup"
 import {
@@ -879,6 +880,11 @@ export async function removeMistakeById(recordId: string): Promise<void> {
   const state = loadMistakeState()
   const record = state.records[recordId]
   if (!record) return
+  if (sourceNoteMissing(record)) {
+    removeMistakeRecord(state, recordId)
+    saveMistakeState(state)
+    return
+  }
   // Remove the source tags first and only delete the record when the write
   // actually committed: otherwise the recovery scan would see the leftover
   // tags and resurrect the mistake on the next pass.
@@ -892,6 +898,15 @@ export async function removeMistakeById(recordId: string): Promise<void> {
   }
   removeMistakeRecord(state, recordId)
   saveMistakeState(state)
+}
+
+// 仅在用户主动取消时清理原卡片已不存在的记录；读取异常不代表卡片已删除。
+function sourceNoteMissing(record: MistakeRecord): boolean {
+  try {
+    return !MN.db.getNoteById(record.sourceNoteId)
+  } catch {
+    return false
+  }
 }
 
 export interface MistakeWorkbenchRecord extends MistakeRecord {
@@ -1100,7 +1115,9 @@ export async function removeMistakesByIds(recordIds: unknown): Promise<BatchMist
 
   if (records.length) {
     const buckets = new Map<string, MistakeRecord[]>()
+    const missingSourceIds = new Set(records.filter(sourceNoteMissing).map(record => record.recordId))
     for (const record of records) {
+      if (missingSourceIds.has(record.recordId)) continue
       const bucket = buckets.get(record.sourceNotebookId) ?? []
       bucket.push(record)
       buckets.set(record.sourceNotebookId, bucket)
@@ -1116,8 +1133,8 @@ export async function removeMistakesByIds(recordIds: unknown): Promise<BatchMist
       }
     })))
     const committed = new Set(committedIds)
-    const removedRecords = records.filter(record => committed.has(record.sourceNotebookId))
-    // 只删除标签确实被清掉的记录；未提交的学习集保留记录，避免恢复扫描复活错题。
+    const removedRecords = records.filter(record => missingSourceIds.has(record.recordId) || committed.has(record.sourceNotebookId))
+    // 原卡片不存在时直接清理记录；现存卡片仍须验证标签清除成功。
     for (const record of removedRecords) removeMistakeRecord(state, record.recordId)
     saveMistakeState(state)
     const blocked = records.length - removedRecords.length
@@ -1204,6 +1221,11 @@ export interface MistakeDetailData {
 
 export interface MistakeQuestionData {
   questionHtml: string
+  record?: Pick<MistakeRecord, "recordId" | "sourceTitle" | "updatedAt">
+}
+
+function previewQuestionHtml(record: MistakeRecord): string {
+  return appendBoundMindMapHandwriting(questionHtml(record), readBoundMindMapHandwriting(record.sourceNotebookId, record.sourceNoteId), true)
 }
 
 /**
@@ -1213,9 +1235,18 @@ export interface MistakeQuestionData {
  * 把每一道题都升级成昂贵的完整详情请求。答案按钮仍按需走 mistakeDetail。
  */
 export function mistakeQuestionById(recordId: string): MistakeQuestionData {
-  const record = loadMistakeState().records[recordId]
+  const state = loadMistakeState()
+  let record = state.records[recordId]
   if (!record) throw new Error("错题记录不存在")
-  return { questionHtml: questionHtml(record) }
+  const note = MN.db.getNoteById(record.sourceNoteId)
+  if (!note) throw new Error("原题卡片不存在或尚未同步")
+  const title = new NodeNote(note, record.sourceNotebookId).title?.trim() || record.sourceTitle
+  if (title !== record.sourceTitle) {
+    record = { ...record, sourceTitle: title, updatedAt: new Date(Math.max(Date.now(), (Date.parse(record.updatedAt) || 0) + 1)).toISOString() }
+    upsertMistakeRecord(state, record)
+    saveMistakeState(state)
+  }
+  return { questionHtml: previewQuestionHtml(record), record: { recordId, sourceTitle: record.sourceTitle, updatedAt: record.updatedAt } }
 }
 
 /**
@@ -1319,8 +1350,13 @@ export function mistakeDetailById(recordId: string): MistakeDetailData {
     saveMistakeState(state)
     throw new Error("该错题的标签已在 MarginNote 内被移除，记录已同步取消")
   }
-  const record = synced.record
-  if (synced.changed) {
+  const titleChanged = synced.record.sourceTitle !== stored.sourceTitle
+  const record = titleChanged ? {
+    ...synced.record,
+    // 标题变化也属于列表快照变化；确保同毫秒内的编辑能使 revision 失效。
+    updatedAt: new Date(Math.max(Date.now(), (Date.parse(stored.updatedAt) || 0) + 1)).toISOString()
+  } : synced.record
+  if (synced.changed || titleChanged) {
     upsertMistakeRecord(state, record)
     saveMistakeState(state)
   }
@@ -1329,7 +1365,7 @@ export function mistakeDetailById(recordId: string): MistakeDetailData {
   const node = new NodeNote(note, record.sourceNotebookId)
   const { answers, answerStatus, lookupDurationMs, answerHtmlDurationMs } = answerCandidatesForRecord(record, node)
   const questionHtmlStartedAt = Date.now()
-  const renderedQuestionHtml = questionHtml(record)
+  const renderedQuestionHtml = previewQuestionHtml(record)
   const questionHtmlDurationMs = Date.now() - questionHtmlStartedAt
   const detail = {
     record: {

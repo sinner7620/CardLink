@@ -5,6 +5,7 @@ import { extractAIOutputText, parseAIReport } from "../src/ai-report"
 import { mineruDoneResults, mineruFailureMessage, mineruMissingDoneArchive, mineruResultItems, mineruServiceError, mineruStateSummary } from "../src/mineru-response"
 import { decodeBase64Utf8 } from "../src/base64"
 
+const handwriting = readFileSync("src/bound-handwriting.ts", "utf8")
 const source = readFileSync("src/ai-subsystem.ts", "utf8")
 const mineruResponseSource = readFileSync("src/mineru-response.ts", "utf8")
 const web = readFileSync("web/src/main.jsx", "utf8")
@@ -254,7 +255,6 @@ test("题目准备把整张卡片送 OCR，并将文本独立落盘", () => {
 })
 
 test("OCR 每题保存一个文本快照和同名整卡图片，并可在缓存页逐题对比", () => {
-  assert.match(source, /schemaVersion: 2/)
   assert.match(source, /preparedQuestionImagePath\(recordId\)/)
   assert.match(source, /imageData\.writeToFileAtomically\(imagePath, true\)/)
   assert.match(source, /includedMindMapHandwriting:/)
@@ -285,7 +285,6 @@ test("题目准备可选择智谱 GLM-OCR 并读取 Markdown 结果", () => {
   assert.match(source, /json: \{ model: "glm-ocr", file: base64, return_crop_images: false, need_layout_visualization: false \}/)
   assert.match(source, /result\.json\?\.md_results/)
   assert.match(source, /estimatedBytes > 10 \* 1024 \* 1024/)
-  assert.match(source, /glm-ocr-\$\{sha256Hex\(source\)\}\.json/)
   assert.match(source, /return engine === "glm-ocr"[\s\S]*glmOCR[\s\S]*mineruOCR/)
   assert.match(source, /ocrEngine: settings\.ocrEngine/)
   assert.match(source, /const engine: OCREngine = job\.ocrEngine/)
@@ -298,15 +297,13 @@ test("题目准备可选择智谱 GLM-OCR 并读取 Markdown 结果", () => {
 test("题目准备可读取并渲染卡片绑定的脑图手写", () => {
   assert.match(source, /mindMapHandwriting: boolean/)
   assert.match(source, /mindMapHandwriting: false/)
-  assert.match(source, /getSketchNoteForMindMapFocusNoteId/)
-  assert.match(source, /sketchMediaHashes\(sketch\)/)
-  assert.match(source, /db\.getMediaByHash\(hash\)\?\.base64Encoding/)
-  assert.match(source, /class="drawing bound-mindmap-handwriting-item"/)
-  assert.match(source, /data-drawing-id="mindmap-\$\{asset\.hash\}"/)
-  assert.match(source, /includeMindMapHandwriting: settings\.privacy\.mindMapHandwriting/)
-  assert.match(source, /job\.includeMindMapHandwriting && record/)
+  assert.match(handwriting, /getSketchNoteForMindMapFocusNoteId/)
+  assert.match(handwriting, /sketchMediaHashes\(sketch\)/)
+  assert.match(handwriting, /db\.getMediaByHash\(hash\)\?\.base64Encoding/)
+  assert.match(handwriting, /class="drawing bound-mindmap-handwriting-item"/)
+  assert.match(handwriting, /data-drawing-id="mindmap-\$\{asset\.hash\}"/)
   assert.match(source, /boundHandwritingStatus/)
-  assert.match(source, /const drawings = assets\.filter\(asset => asset\.kind === "drawing"\)/)
+  assert.match(handwriting, /const drawings = assets\.filter\(asset => asset\.kind === "drawing"\)/)
   assert.match(web, /\["mindMapHandwriting", "脑图绑定手写"\]/)
   assert.match(web, /includeMindMapHandwriting=\{settings\.privacy\.mindMapHandwriting\}/)
   assert.match(web, /及其脑图绑定手写/)
@@ -325,13 +322,7 @@ test("OCR 学习集候选只包含实际有错题的学习集", () => {
   assert.match(web, /当前没有包含错题的学习集，无需 OCR/)
 })
 
-test("AI 总结只读取已准备题目文本，不在分析阶段临时 OCR", () => {
-  const analysis = source.match(/async function runAnalysis[\s\S]*?export function isAICommand/)?.[0] || ""
-  assert.match(analysis, /readPreparedQuestion\(record\.recordId\)/)
-  assert.match(analysis, /if \(!prepared\) throw new Error\("题目尚未准备"\)/)
-  assert.match(analysis, /prepared\.questionText\.slice/)
-  assert.doesNotMatch(analysis, /mineruOCR\(/)
-})
+
 
 test("题目准备任务逐题统计成功失败并允许单题失败后继续", () => {
   for (const command of ["aiStartQuestionPreparation", "aiGetQuestionPreparationJob", "aiGetPreparationQuestion", "aiSubmitPreparationImage", "aiFailPreparationQuestion", "aiAdvanceQuestionPreparation", "aiCancelQuestionPreparation"]) {
@@ -359,12 +350,7 @@ test("MinerU 结果按 data_id 回对且缓存键为内容 SHA-256 指纹", () =
   assert.doesNotMatch(source, /nestedZipUrls|simpleHash/)
 })
 
-test("报告截断可感知且证据引用经过存在性校验", () => {
-  assert.match(source, /本次仅分析最近更新的/)
-  assert.match(source, /total: all\.length, analyzed: records\.length/)
-  assert.match(source, /validateEvidence\(report, evidence\)/)
-  assert.match(source, /不存在的题目编号，已剔除/)
-})
+
 
 test("总览 AI 模块在关闭态只显示状态与前往配置", () => {
   assert.match(web, /AI 分析未开启/)

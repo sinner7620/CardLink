@@ -1,8 +1,12 @@
-# 边界与设计决策（现状定基）
+# 边界与设计决策
+
+> 本文保留历史设计背景；未在本轮全量核对实现。现行工作规则见 [AGENTS.md](../AGENTS.md)，旧的 deferred 条目不自动触发整改任务。
 ## 明确不做
-- UIWebView 迁移（等官方）；recordId=notebookId:noteId 结构保留；beta 双通道保留
+- UIWebView 迁移（历史暂缓）；recordId=notebookId:noteId 结构保留
+- 当前交付使用正式插件身份和 `mnChannel: "stable"`；预发布版本号不切换插件身份，旧 beta 双通道约定不再作为交付规则。
 - PKDrawing 解码算法重写（只合并副本）；标题归一化小数点（决策不做）
-- prefers-* 可访问性降级（用户取消）；10 秒倒计时（仅首次保留）
+- 减弱动态遵循 AGENTS.md：Morphicons 使用 `reducedMotion: "user"`，普通 CSS 动效尊重 `prefers-reduced-motion`。历史取消描述不适用于该要求。
+- 10 秒倒计时（历史记录：仅首次保留；非新增交互要求）
 - DST 修正（决策不做）；工作台候选懒渲染（暂缓）
 ## Deferred（需真机回归）
 - 断点标量规则 clamp 化深扫；组件内 z-index 全量治理；候选懒渲染；Pointer Events 统一；rubber-band

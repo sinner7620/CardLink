@@ -726,7 +726,13 @@ test("PaintNote 同时包含底图和 drawing 时会叠加显示手写层", () =
   assert.match(html, /media-question-image/)
   assert.match(html, /drawing-answer-drawing/)
   assert.match(html, /data-drawing-overlay="true"/)
-  assert.match(html, /Math\.max\(img\.naturalHeight,Math\.ceil\(bounds\.maxY\+pad\)\)/)
+})
+
+test("摘录图片的笔迹与底图放入同一叠加容器", () => {
+  const html = renderCardHtml({ excerptPic: { paint: "photo", drawing: "ink" } }, "题目", () => undefined, () => "iVBORw==", () => "aW5r")
+  const body = html.slice(html.indexOf("<body>"), html.indexOf("<script>"))
+  assert.match(body, /<figure class="paint-note"><img[^>]+><canvas[^>]+data-drawing-overlay="true"><\/canvas><\/figure>/)
+  assert.equal((body.match(/<figure/g) || []).length, 1)
 })
 
 test("OTA 版本比较支持正式版和 GitHub 测试版标签", () => {
@@ -826,6 +832,26 @@ test("答案卡片文字支持 Markdown 和行内、块级 LaTeX", () => {
   assert.match(html, /<span class="katex"><math/)
   assert.match(html, /<math[^>]*display="block"/)
   assert.match(html, /<code>\$x\$<\/code>/)
+})
+
+test("答案卡片显示 marginnote4app Markdown 图片并保留媒体哈希供导出", () => {
+  const mediaId = "410b3288f3673b1260db964c4e789625"
+  const note = {
+    comments: [{
+      type: "TextNote",
+      text: `![题目图片 1](marginnote4app://markdownimg/png/${mediaId})\n\n<!-- YANKEAN_QUESTION:CSE408:709 -->\n\n<!-- YANKEAN_SOURCE:https://zhenti.kaoyansou.cn/cse408 -->`
+    }]
+  }
+  const requested: string[] = []
+  const html = renderCardHtml(note, "问题", () => undefined, hash => {
+    requested.push(hash)
+    return "iVBORw0KGgo="
+  })
+  assert.deepEqual(requested, [mediaId])
+  assert.match(html, new RegExp(`data-media-id="${mediaId}"`))
+  assert.match(html, /src="data:image\/png;base64,iVBORw0KGgo="/)
+  assert.match(html, /alt="题目图片 1"/)
+  assert.match(html, /YANKEAN_QUESTION:CSE408:709/)
 })
 
 

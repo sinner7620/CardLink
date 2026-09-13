@@ -65,6 +65,7 @@ class FakeUndoManager {
 }
 
 const marginnoteMock = {
+  isNSNull: () => false,
   delay: async () => {},
   fetch: async () => { throw new Error("no network in tests") },
   popup: async () => ({ buttonIndex: 0 }),
@@ -161,6 +162,122 @@ function mistakeStateRecords(): Record<string, any> {
   const parsed = typeof raw === "string" ? JSON.parse(raw) : raw
   return parsed?.records ?? {}
 }
+
+test("取消已删除原卡片的错题：直接持久化删除，不访问学习集写入", async () => {
+  const notebookId = `nbDeleted${seq++}`
+  const noteId = `${notebookId}-note`
+  const id = await seedRecord(notebookId, noteId, 0)
+  delete notesById[noteId]
+  await manager.removeMistakeById(id)
+  assert.equal(mistakeStateRecords()[id], undefined)
+  assert.ok(!undoCalls.some(call => call.notebookId === notebookId))
+  assert.ok(!syncDirty.includes(notebookId))
+})
+
+test("批量取消：同学习集缺失卡片不阻塞正常卡片，返回实际删除记录", async () => {
+  const notebookId = `nbMixed${seq++}`
+  const deleted = await seedRecord(notebookId, `${notebookId}-deleted`, 0)
+  const live = await seedRecord(notebookId, `${notebookId}-live`, 0, { cardTags: ["错题_不会", "用户标签"] })
+  delete notesById[`${notebookId}-deleted`]
+  const result = await manager.removeMistakesByIds([deleted, live, deleted, "nonexistent-record"])
+  assert.equal(result.changed, 2)
+  assert.equal(result.missing, 1)
+  assert.deepEqual(result.records.map(record => record.recordId), [deleted, live])
+  assert.equal(mistakeStateRecords()[deleted], undefined)
+  assert.equal(mistakeStateRecords()[live], undefined)
+  assert.deepEqual(tagsOf(notesById[`${notebookId}-live`]), ["用户标签"])
+})
+
+test("批量取消：同学习集标签写入失败仍可清理缺失卡片，保留失败记录", async () => {
+  const notebookId = `nbBlockedRemove${seq++}`
+  const deleted = await seedRecord(notebookId, `${notebookId}-deleted`, 0)
+  const liveNote = `${notebookId}-live`
+  const live = await seedRecord(notebookId, liveNote, 0)
+  delete notesById[`${notebookId}-deleted`]
+  noWriteNotes.add(liveNote)
+  const result = await manager.removeMistakesByIds([deleted, live])
+  assert.equal(result.changed, 1)
+  assert.deepEqual(result.records.map(record => record.recordId), [deleted])
+  assert.equal(mistakeStateRecords()[deleted], undefined)
+  assert.ok(mistakeStateRecords()[live])
+  await manager.removeMistakeById(live)
+  assert.ok(mistakeStateRecords()[live])
+})
+
+test("取消时数据库读取抛错不能被当成原卡片已删除", async () => {
+  const notebookId = `nbReadError${seq++}`
+  const noteId = `${notebookId}-note`
+  const id = await seedRecord(notebookId, noteId, 0)
+  const original = marginnoteMock.MN.db.getNoteById
+  marginnoteMock.MN.db.getNoteById = key => {
+    if (key === noteId) throw new Error("读取失败")
+    return original(key)
+  }
+  try {
+    await manager.removeMistakeById(id)
+    assert.ok(mistakeStateRecords()[id])
+    const result = await manager.removeMistakesByIds([id])
+    assert.equal(result.changed, 0)
+    assert.ok(mistakeStateRecords()[id])
+  } finally {
+    marginnoteMock.MN.db.getNoteById = original
+  }
+})
+
+test("原卡仅改标题后读取详情：保存新标题并使列表缓存失效，不改变复习计划", async () => {
+  const notebookId = `nbRename${seq++}`
+  const noteId = `${notebookId}-note`
+  const id = await seedRecord(notebookId, noteId, 0)
+  const before = mistakeStateRecords()[id]
+  const oldList = manager.mistakeWorkbenchData()
+  notesById[noteId].title = "修改后的题目标题"
+  const detail = manager.mistakeDetailById(id)
+  assert.equal(detail.record.sourceTitle, "修改后的题目标题")
+  const saved = mistakeStateRecords()[id]
+  assert.equal(saved.sourceTitle, detail.record.sourceTitle)
+  assert.equal(saved.nextReviewAt, before.nextReviewAt)
+  assert.equal(saved.reviewCount, before.reviewCount)
+  assert.deepEqual(saved.history, before.history)
+  const nextList = manager.mistakeWorkbenchData()
+  assert.notEqual(nextList.revision, oldList.revision)
+  assert.equal(nextList.records.find(record => record.recordId === id)?.sourceTitle, detail.record.sourceTitle)
+  manager.mistakeDetailById(id)
+  assert.equal(manager.mistakeWorkbenchRevision(), nextList.revision, "标题未变化时不反复更新版本")
+})
+
+test("待复习轻量原题读取同步标题，绑定手写仅加入本地预览", async () => {
+  const notebookId = `nbQuestion${seq++}`
+  const noteId = `${notebookId}-note`
+  const id = await seedRecord(notebookId, noteId, 0)
+  const db = marginnoteMock.MN.db as any
+  const queried: string[][] = []
+  db.getSketchNoteForMindMapFocusNoteId = (nb: string, note: string) => {
+    queried.push([nb, note]); return { drawing: "bound-ink" }
+  }
+  db.getMediaByHash = () => ({ base64Encoding: () => "aW5r" })
+  try {
+    notesById[noteId].title = "待复习改名"
+    const question = manager.mistakeQuestionById(id)
+    assert.equal(question.record?.sourceTitle, "待复习改名")
+    assert.equal(mistakeStateRecords()[id].sourceTitle, "待复习改名")
+    assert.deepEqual(queried, [[notebookId, noteId]])
+    assert.match(question.questionHtml, /data-bound-handwriting hidden/)
+    assert.match(question.questionHtml, /data-drawing-id="mindmap-bound-ink"/)
+    const aiQuestion = manager.createMistakeContentReader().readQuestion(id)
+    assert.doesNotMatch(aiQuestion.questionHtml, /data-bound-handwriting hidden/)
+    assert.equal(queried.length, 1, "AI只读提取不主动读取或夹带绑定笔迹")
+    const { readBoundMindMapHandwriting, appendBoundMindMapHandwriting } = await import("../src/bound-handwriting")
+    db.getSketchNoteForMindMapFocusNoteId = () => null
+    assert.equal(readBoundMindMapHandwriting(notebookId, noteId).status, "none")
+    db.getSketchNoteForMindMapFocusNoteId = () => { throw Error("不可读") }
+    assert.equal(readBoundMindMapHandwriting(notebookId, noteId).status, "unreadable")
+    const html = appendBoundMindMapHandwriting("<article></article>", { status: "included", assets: [{ hash: "ink", base64: "aW5r", kind: "drawing" }] })
+    assert.doesNotMatch(html, /data-bound-handwriting hidden/, "OCR显式启用时绑定笔迹保持可见")
+  } finally {
+    delete db.getSketchNoteForMindMapFocusNoteId
+    delete db.getMediaByHash
+  }
+})
 
 test("并发错题分页初始化互不覆盖各自 transferId", async () => {
   await loadModules()

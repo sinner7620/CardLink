@@ -22,11 +22,70 @@ function surface() {
   return { win, card, root, events, scrollCalls: () => scrollCalls }
 }
 
+test("缩小后短卡水平垂直居中，长卡仅水平居中且保留滚动高度", () => {
+  const { win, card } = surface()
+  card.scrollHeight = 500
+  const controller = mountCardPreview(win, wireFramePinchZoom)
+  controller.setScale(.6)
+  assert.equal(card.style.left, "80px")
+  assert.equal(card.style.top, "100px")
+  assert.equal(win.document.body.style.width, "400px")
+  assert.equal(win.document.body.style.height, "500px")
+  card.scrollHeight = 1000
+  controller.setScale(.7)
+  assert.equal(card.style.left, "60px")
+  assert.equal(card.style.top, "0px")
+  assert.equal(win.document.body.style.height, "700px")
+  controller.destroy()
+})
+
+test("预览空白处双击切换绑定手写，单指拖动和双指缩放不触发切换", () => {
+  const { win, card, events } = surface()
+  const handwriting = { hidden: true }
+  win.document.querySelector = (selector: string) => selector === ".card" ? card : handwriting
+  const controller = mountCardPreview(win, wireFramePinchZoom)
+  const fire = (name: string, touches: any[] = []) => events.get(name)?.forEach(handler => handler({ touches, preventDefault() {} }))
+  fire("dblclick")
+  assert.equal(handwriting.hidden, false)
+  fire("dblclick")
+  assert.equal(handwriting.hidden, true)
+  fire("touchstart", [{ clientX: 10, clientY: 10 }])
+  fire("touchmove", [{ clientX: 10, clientY: 80 }])
+  fire("touchend")
+  assert.equal(handwriting.hidden, true)
+  for (let i = 0; i < 2; i++) {
+    fire("touchstart", [{ clientX: 10, clientY: 10 }])
+    fire("touchend")
+  }
+  assert.equal(handwriting.hidden, false)
+  fire("dblclick")
+  assert.equal(handwriting.hidden, false, "忽略双击触摸后的合成鼠标事件")
+  controller.destroy()
+  assert.equal(events.get("dblclick")?.size, 0)
+})
+
+test("图片笔迹叠加使用底图坐标，笔迹边界不能改变画布比例", () => {
+  const transforms: any[] = []
+  const img = { complete: true, naturalWidth: 400, naturalHeight: 200 }
+  const canvas: any = {
+    style: {}, parentElement: { querySelector: () => img },
+    getAttribute: (key: string) => key === "data-drawing-overlay" ? "true" : "ink",
+    getContext: () => ({ scale: (...args: any[]) => transforms.push(args), beginPath() {}, moveTo() {}, lineTo() {}, stroke() {} })
+  }
+  runInNewContext(pkDrawingRendererScript, {
+    __mnPkdrawingCore: { drawingData: () => [], decodeStrokes: () => [{ color: "black", points: [{ x: 10, y: 10, width: 1 }, { x: 450, y: 220, width: 1 }] }] },
+    document: { querySelectorAll: () => [canvas] }, devicePixelRatio: 2
+  })
+  assert.equal(canvas.width, 800)
+  assert.equal(canvas.height, 400)
+  assert.deepEqual(transforms, [[2, 2]])
+})
+
 test("HTML与iframe重复接入时只安装一个预览控制器，100%没有transform，清理释放手势", () => {
   const { win, card, events } = surface()
   const controller = mountCardPreview(win, wireFramePinchZoom)
   assert.equal(mountCardPreview(win, wireFramePinchZoom), controller)
-  assert.equal(events.get("touchmove")?.size, 1)
+  assert.equal(events.get("touchmove")?.size, 2)
   assert.equal(card.style.transform, "none")
   controller.setScale(1.5)
   assert.equal(card.style.transform, "scale(1.5)")

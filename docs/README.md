@@ -1,17 +1,18 @@
 # CardLink 代码文档
 
-> 版本基准：2.3.3-beta.71 · 本文档与代码一对一对应
+> 开发规则以 [AGENTS.md](../AGENTS.md) 和 [验证与交付流程](workflow.md) 为准。产品版本读取 [package.json](../package.json)。模块与页面说明多数起始于 2.3.3-beta.71，未全量复核，不代表当前代码逐文件一致。
 
 ## 文档地图
 
 | 目录 | 内容 |
 |---|---|
-| [modules/](modules/) | **一对一代码文档**：每个代码文件一份（职责/关键导出/边界/验收），按 src · web · native 三层组织 |
+| [modules/](modules/) | **模块参考**：职责、关键导出、边界和验收，按 src · web · native 三层组织；按相关契约变化维护 |
 | [pages/](pages/) | **功能页文档**：面板主页与全部功能页的结构、数据流、边界、验收 |
 | [design/](design/) | **设计规范**：Apple 设计准则对照、设计令牌速查、交互与动效规范 |
 | [changes/](changes/) | **逐轮变更记录**：每次修改的目的、实现、影响、验证与未验证项 |
 | [acceptance.md](acceptance.md) | **验收标准**（按功能页，含统一前置） |
 | [boundaries.md](boundaries.md) | **边界与设计决策**（明确不做 / deferred / 数据·口径·隐私·平台边界） |
+| [workflow.md](workflow.md) | **开发流程**：验证范围、版本与交付、历史文档和工作区整理 |
 
 ## 功能页（主页与页面）
 
@@ -107,9 +108,12 @@
 
 ## 维护约定
 
-- 每次代码、配置、测试、构建或 UI 修改，都必须同步创建或更新 `changes/YYYY-MM-DD-<topic>.md`
-- 发布相关修改还必须同步更新对应版本的 `RELEASE_NOTES_*.md`
+- 任务记录、验证和交付按 [AGENTS.md](../AGENTS.md) 与 [workflow.md](workflow.md) 执行，不在本索引重复定义门槛。
 - 改主题：只改 web/src/ui/tokens.css（+ 原生侧 src/ui-tokens.ts）
 - 面板样式按 `web/src/ui/` 页面所有权维护；禁止恢复全局覆盖层
 - 新增桥接命令：rails-core bridge 分发 + WebBridgeCommands（如涉及面板）+ tests/bridge-schema.test.ts 白名单
-- 新增代码文件：在 docs/modules/ 建立同名一对一文档
+- 架构、接口或用户行为改变时更新相关说明；无需为每个新增代码文件建立同名文档。
+
+## 历史资料
+
+`docs/2026-*.md` 调查报告、`handover-detail-ui.md`、根目录旧交接/重构材料，以及 `changes/` 和 `RELEASE_NOTES_v*.md` 都按各自日期与版本解读。它们不是当前缺陷清单，也不授权自动继续整改。本轮未审查业务代码，旧结论是否仍成立需在相关任务中核对。

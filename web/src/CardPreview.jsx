@@ -29,5 +29,5 @@ export const CardPreview = React.memo(function CardPreview({ html, title, zoom =
       controller.destroy()
     }
   }
-  return <iframe ref={frameRef} title={title} srcDoc={html} scrolling="auto" onLoad={loaded} style={{ colorScheme: "light" }} />
+  return <iframe ref={frameRef} title={title} aria-description={html?.includes("data-bound-handwriting hidden") ? "双击预览区域显示或隐藏脑图绑定手写" : undefined} srcDoc={html} scrolling="auto" onLoad={loaded} style={{ colorScheme: "light" }} />
 })

@@ -32,8 +32,8 @@ const rendererBody = String.raw`
       if(!img)throw Error('手写底图缺失');
       var overlay=function(){
         if(!img.naturalWidth||!img.naturalHeight)return;
-        var pad=8,w=Math.max(img.naturalWidth,Math.ceil(bounds.maxX+pad)),h=Math.max(img.naturalHeight,Math.ceil(bounds.maxY+pad));
-        canvas.parentElement.style.aspectRatio=w+' / '+h;
+        // 叠加层与底图共享原始坐标及比例，不能按笔迹边界扩展后再拉伸回底图。
+        var w=img.naturalWidth,h=img.naturalHeight;
         canvas.width=Math.ceil(w*devicePixelRatio);canvas.height=Math.ceil(h*devicePixelRatio);
         var c=canvas.getContext('2d');c.scale(devicePixelRatio,devicePixelRatio);paintLines(c,ss)
       };

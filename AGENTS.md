@@ -1,34 +1,40 @@
 # Repository Working Agreement
 
-## Mandatory Markdown change record
+## Scope and working style
 
-Every code, configuration, test, build, or UI modification must include a Markdown change record in the same working set.
+- Work in this formal project. Complete the requested scope; historical review findings do not automatically become new tasks.
+- Proceed with routine, reversible work already authorized. Ask only when missing information materially affects scope or authorization is absent.
+- Preserve unrelated working-tree changes. Stage only task files; do not clean untracked files or undo existing changes during routine tidying.
+- Add validation, compatibility branches or fallback layers for concrete requirements or observed failure modes, not hypothetical risks alone.
+- This file owns workflow rules; see `docs/workflow.md` for details. Historical reports describe their own revision, not current instructions.
 
-- Create or update `docs/changes/YYYY-MM-DD-<topic>.md` for every modification task.
-- Record the change purpose, implemented behavior, affected files or modules, compatibility/data impact, validation performed, and any unverified limitations.
-- Update the corresponding `RELEASE_NOTES_*.md` as well when the modification belongs to a release.
-- Keep documentation aligned with the final implementation; do not document planned behavior as completed behavior.
-- A modification task is not complete until its Markdown record has been written and checked.
+## Documentation
 
-## Mandatory version iteration and delivery
+- Create or update one `docs/changes/YYYY-MM-DD-<topic>.md` per coherent modification task, including rule/documentation changes. Continue that record for follow-up fixes within the task.
+- Record purpose, implemented behavior, affected files/modules, compatibility/data impact, validation actually performed and unverified limitations. Keep the record aligned with the final change.
+- Update architecture, interface or feature documentation when its contract changes. A new code file does not automatically require a matching documentation file.
+- Write `RELEASE_NOTES_v<version>.md` when delivering that version; emphasize user-visible changes and material limitations rather than repeating the engineering record.
 
-All development happens in this formal project. Every modification round that ships code/config/UI changes must iterate the version, unless the user explicitly confirms that the current round may overwrite the current version.
+## Validation
 
-- Bump `package.json` `version` for every round, format `2.3.3-beta.<N+1>`; never reuse a version number with different content. Drop the `-beta` suffix only for a formal release, decided by the user.
-- Exception: when the user explicitly confirms that a specific modification round may keep and overwrite the current version, do not bump `package.json`; update the existing matching release notes and change record, rebuild the same-version artifact, replace the delivery copy, and record the new matching SHA-256. This exception applies only to that confirmed round and must not be inferred for later rounds.
-- The plugin always builds the formal channel (`mnChannel: "stable"`, 正式插件 ID/标题). The version's `-beta` suffix only affects update-check prerelease matching and telemetry channel tags — never switch the plugin ID based on the version string.
-- Create the matching `RELEASE_NOTES_<version>.md` describing this round's fixes, verification, and unverified limitations.
-- Run `pnpm check`, `pnpm test`, `pnpm build`, then copy the built `.mnaddon` to `E:\iCloudDrive\同步文件夹\` and record its SHA-256 (must match the dist original) in the change record.
+- Choose checks by affected behavior using `docs/workflow.md`. Documentation-only work needs consistency/link/diff checks, not application tests or a build.
+- Prefer tests exercising behavior. Avoid tests that mirror implementation or freeze incidental source spelling; narrow static checks are appropriate for explicit structural contracts.
+- Reuse successful checks for unchanged inputs in the same task. Repeat when relevant code, dependencies, environment or new failure evidence changes, not solely after prose edits.
+- Report desktop/automated and MarginNote device checks separately. Missing device access limits the relevant claim, not unrelated completed work.
 
-## Mandatory animation spec (Morphicons)
+## Version and delivery
 
-All SVG icon morph animations must use the official Morphicons engine — no exceptions, no hand-written substitutes.
+- Ordinary development commits and documentation/rule-only changes do not automatically create an installable release or bump the product version.
+- Each delivered code/config/UI artifact uses a new version based on current `package.json`, unless the user explicitly authorizes same-version replacement for that round. Do not reuse a delivered version with different content by default.
+- Use `X.Y.Z-bN` for new prereleases and `X.Y.Z` for formal releases. The user decides formal promotion. Do not copy obsolete hardcoded version baselines or rename historical versions.
+- Always build the formal channel: `mnChannel: "stable"`, ID `marginnote.extension.mn4-answer-matcher`, title `CardLink`. Prerelease versions must not switch plugin identity.
+- Before delivering an installation package, run `pnpm check`, `pnpm test`, `pnpm build` for final artifact inputs. Verify package version/identity, copy the `.mnaddon` to `E:\iCloudDrive\同步文件夹\`, and record SHA-256 matching the dist original.
+- For explicitly authorized same-version replacement, update its release notes and task record, rebuild, replace the delivery copy and record the new matching hash. The exception does not carry forward.
+- GitHub/Gitee publishing follows user release authorization; local modification or commit alone is not a request to publish.
 
-- Always `createMorph` from `morphicons/dom` (official npm package). Forbidden: dual-path crossfade, CSS opacity/transform transitions, or bezier curves that imitate a morph (`scale/rotate + opacity` fake morphs included).
-- Spring presets are limited to the official ones: `"smooth"`, `"snappy"`, `"bouncy"`. Never pass custom `{ stiffness, damping }` unless the official presets demonstrably cannot fit.
-- Always create engines with `{ reducedMotion: "user" }` so 系统减弱动态 is honored.
-- Icons are consumed as data (a `d` string or Lucide `IconNode`), matching the official consumption model.
-- Non-morph motion (spinners, highlights, layout transitions) stays plain CSS and must respect `prefers-reduced-motion`.
-- Any new icon/state animation lands as a `createMorph`-based component; PRs introducing hand-rolled icon morphs are rejected in review.
+## SVG icon morph animations (Morphicons)
 
-
+- All SVG icon shape morphs use `createMorph` from official `morphicons/dom`. No hand-written substitutes, dual-path crossfades or scale/rotate plus opacity imitations.
+- Use official spring presets `"smooth"`, `"snappy"`, `"bouncy"`. Custom stiffness/damping is allowed only if those presets demonstrably cannot fit.
+- Create engines with `{ reducedMotion: "user" }`. Consume icons as data (`d` strings or Lucide `IconNode`).
+- Non-morph motion (spinners, highlights, layout transitions) uses CSS and respects `prefers-reduced-motion`; it does not require a morph engine.

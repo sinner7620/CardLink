@@ -72,6 +72,41 @@
   background: #fff0f0;
   color: #a43a3a;
 }
+.workbenchError {
+  position: absolute;
+  top: calc(var(--mn-topbar-height, 44px) + 8px);
+  left: 12px;
+  right: 12px;
+  z-index: 210;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #e8bcbc;
+  border-radius: 10px;
+  background: #fff0f0;
+  color: #8b2929;
+  box-shadow: 0 4px 14px rgba(0,0,0,.1);
+  font-size: 13px;
+}
+.workbenchError > span {
+  flex: 1;
+  min-width: 0;
+  max-height: 96px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+.workbenchError > button {
+  flex: none;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 22px;
+  cursor: pointer;
+}
 .dataStreamStatus {
   position: absolute;
   right: 14px;

@@ -160,6 +160,16 @@ test("MarginNote 图片使用媒体 ID 写出，不调用 NSData base64 解码",
   assert.match(bundle.markdown, /assets\/asset-0001\.png/)
 })
 
+test("MarginNote markdownimg 图片使用媒体 ID 写出", async () => {
+  const { extractMarkdownAssets } = await exportModule
+  const bundle = extractMarkdownAssets("![题目图片 1](marginnote4app://markdownimg/png/410b3288f3673b1260db964c4e789625)")
+  assert.deepEqual(bundle.assets, [{
+    fileName: "asset-0001.png",
+    mediaId: "410b3288f3673b1260db964c4e789625"
+  }])
+  assert.match(bundle.markdown, /!\[题目图片 1\]\(assets\/asset-0001\.png\)/)
+})
+
 test("PDF 导出只使用当前文档确认的 WebView、NSData 与 saveFileWithUti 边界", () => {
   const bridge = readFileSync("rails-native/WebBridgeCommands.js", "utf8")
   assert.match(bridge, /stagePdfRenderPage/)

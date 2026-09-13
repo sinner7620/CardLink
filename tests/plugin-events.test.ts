@@ -311,7 +311,7 @@ test("原题跳转：以真实焦点为成功判据，官方聚焦失败后才�
   assert.match(manager, /openSourceByMistakeId\(recordId: string\): Promise<\{ locateHint\?: string \}>/)
   assert.match(web, /<MistakeBrowser[\s\S]*showLocateHint=\{showLocateHint\}/)
   assert.match(web, /<DueReviewList[\s\S]*showLocateHint=\{showLocateHint\}/)
-  assert.match(web, /function DueReviewList\(\{ records, reviewCurves, action, manualTodayIds, setManualTodayIds, showLocateHint, focusRecordId \}\)/)
+  assert.match(web, /function DueReviewList\(\{[^}]*\bfocusRecordId\b[^}]*\}\)/)
   assert.match(navigation, /setUIStatusByConfigAsync/)
   assert.match(navigation, /selectNotesInMindmap/)
   assert.doesNotMatch(navigation, /retryPendingNavigation|focusPendingNote/)

@@ -1,5 +1,5 @@
 import { pkDrawingRendererScript } from "./pkdrawing-renderer"
-import { renderMarkdown } from "./markdown"
+import { hasUnsupportedMarginNoteUrl, renderMarkdown } from "./markdown"
 import { noteLinkTarget } from "./safe-note"
 import { imageMimeFromBase64 } from "./base64"
 import { escapeHtml } from "./html-utils"
@@ -66,11 +66,11 @@ function paintNoteBlock(
   return '<div class="missing-image">图片及手写资源不可用</div>'
 }
 
-function excerptBlock(note: any, resolveMedia: MediaResolver): string {
+function excerptBlock(note: any, resolveMedia: MediaResolver, resolveDrawing: DrawingResolver): string {
   const excerptText = textOf(note?.excerptText)
-  const image = imageBlock(note?.excerptPic?.paint, resolveMedia)
+  const image = paintNoteBlock(note?.excerptPic?.paint, note?.excerptPic?.drawing, resolveMedia, resolveDrawing)
   if (image) return image
-  return excerptText ? `<div class="text-block markdown-body">${renderMarkdown(excerptText)}</div>` : ""
+  return excerptText ? `<div class="text-block markdown-body">${renderMarkdown(excerptText, resolveMedia)}</div>` : ""
 }
 
 function noteBody(
@@ -85,7 +85,7 @@ function noteBody(
   visited.add(note)
   if (noteId) visited.add(noteId)
   const blocks: string[] = []
-  const excerpt = excerptBlock(note, resolveMedia)
+  const excerpt = excerptBlock(note, resolveMedia, resolveDrawing)
   if (excerpt) blocks.push(excerpt)
 
   for (const comment of arrayOf<any>(note?.comments)) {
@@ -112,8 +112,8 @@ function noteBody(
           const linkedBody = noteBody(linked, resolveNote, resolveMedia, resolveDrawing, visited)
           if (linkedBody) blocks.push(linkedBody)
         }
-      } else if (!text.includes("marginnote3app") && !text.includes("marginnote4app")) {
-        blocks.push(`<div class="text-block markdown-body">${renderMarkdown(text)}</div>`)
+      } else if (!hasUnsupportedMarginNoteUrl(text)) {
+        blocks.push(`<div class="text-block markdown-body">${renderMarkdown(text, resolveMedia)}</div>`)
       }
     } else if (type === "LinkNote") {
       const mergedBlocks: string[] = []
@@ -126,7 +126,7 @@ function noteBody(
       const mergedText = textOf(comment?.q_htext)
       if (mergedImage) mergedBlocks.push(mergedImage)
       if (!mergedImage && mergedText) {
-        mergedBlocks.push(`<div class="text-block markdown-body">${renderMarkdown(mergedText)}</div>`)
+        mergedBlocks.push(`<div class="text-block markdown-body">${renderMarkdown(mergedText, resolveMedia)}</div>`)
       }
 
       // Older cards may not carry q_htext/q_hpic. Only then fall back to resolving noteid.

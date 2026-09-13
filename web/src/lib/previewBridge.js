@@ -257,7 +257,8 @@ export async function previewSend(command, payload = null) {
     return previewPreparationPublic()
   }
   if (command === "aiCancelQuestionPreparation") { if (previewPreparationJob) previewPreparationJob.status = "cancelled"; return { cancelled: !!previewPreparationJob } }
-  if (command === "aiRunDueSchedules" || command === "aiGetJob" || command === "aiPreviewAnalysis") return { accepted: true, status: "missing" }
+  if (command === "aiPreviewAnalysis") return { subjectId: payload?.subjectId, recordCount: 3, analyzableCount: 3, preparedCount: 2, needsPreparation: 1, withHistory: 2, withoutAnswerBinding: 1 }
+  if (command === "aiRunDueSchedules" || command === "aiGetJob") return { accepted: true, status: "missing" }
   if (command === "dashboard") return {
     version: "2.4.0 · 完整界面预览",
     mistakes: workbenchPage(),

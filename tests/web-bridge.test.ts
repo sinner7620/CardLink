@@ -412,7 +412,7 @@ test("待复习队列包含真实原题、双重筛选和与预览一致的控�
   assert.match(source, /\[1, 3, 5\]\.map/)
   assert.match(source, /const \[manualTodayIds, setManualTodayIds\] = useState\(\[\]\)/)
   assert.match(source, /<DueReviewList[\s\S]*manualTodayIds=\{manualTodayIds\}[\s\S]*setManualTodayIds=\{setManualTodayIds\}/)
-  assert.match(source, /function DueReviewList\(\{ records, reviewCurves, action, manualTodayIds, setManualTodayIds, showLocateHint, focusRecordId \}\)/)
+  assert.match(source, /function DueReviewList\(\{[^}]*\bfocusRecordId\b[^}]*\}\)/)
   assert.equal((source.match(/const \[manualTodayIds, setManualTodayIds\] = useState\(\[\]\)/g) || []).length, 1)
   assert.match(css, /\.reviewQuestion/)
   assert.match(css, /\.reviewResults/)
