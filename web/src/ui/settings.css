@@ -397,7 +397,9 @@ svg.sfIconGlyph {
 
 
 
-/* ── AI 错题分析配置页：2026-09 全量重做（iOS 设置风格；本区块为唯一样式来源） ── */
+/* ── AI 错题分析配置页（2026-09 重做；选择器统一带 .aiSettingsPage 前缀，
+   压过 settings.css 基础层 .settingsGroup button / .settingsGroup > div 的
+   网格、行高与 › 箭头样式，保证 switch、行、按钮形状正确） ── */
 .aiSettingsPage {
   --ai-border: #e2e7ef;
   --ai-separator: #eef0f4;
@@ -428,7 +430,9 @@ svg.sfIconGlyph {
   -webkit-backdrop-filter: blur(16px) saturate(150%);
   backdrop-filter: blur(16px) saturate(150%);
 }
-.aiSettingsToolbar > button {
+.aiSettingsPage .aiSettingsToolbar > button {
+  display: inline-flex;
+  align-items: center;
   min-height: 44px;
   padding: 0 12px;
   border: 1px solid var(--ai-border);
@@ -438,13 +442,14 @@ svg.sfIconGlyph {
   font-size: 14px;
   font-weight: 600;
 }
-.aiSettingsToolbar > button:active { background: var(--ai-press); }
-.aiSettingsToolbar > div { min-width: 0; }
-.aiSettingsToolbar h1 { margin: 0; color: #171923; font-size: 21px; line-height: 1.16; letter-spacing: -.02em; font-weight: 700; }
-.aiSettingsToolbar p { margin: 3px 0 0; color: var(--ai-muted); font-size: 12px; line-height: 1.45; }
-.aiSettingsToolbar > span { min-width: 54px; color: var(--mn-accent); font-size: 12px; font-weight: 600; text-align: right; }
-.aiSettingsComposer { display: grid; gap: 14px; }
-.aiSettingsComposer .settingsGroup {
+.aiSettingsPage .aiSettingsToolbar > button::after { content: none; }
+.aiSettingsPage .aiSettingsToolbar > button:active { background: var(--ai-press); }
+.aiSettingsPage .aiSettingsToolbar > div { min-width: 0; }
+.aiSettingsPage .aiSettingsToolbar h1 { margin: 0; color: #171923; font-size: 21px; line-height: 1.16; letter-spacing: -.02em; font-weight: 700; }
+.aiSettingsPage .aiSettingsToolbar p { margin: 3px 0 0; color: var(--ai-muted); font-size: 12px; line-height: 1.45; }
+.aiSettingsPage .aiSettingsToolbar > span { min-width: 54px; color: var(--mn-accent); font-size: 12px; font-weight: 600; text-align: right; }
+.aiSettingsPage .aiSettingsComposer { display: grid; gap: 14px; }
+.aiSettingsPage .aiSettingsComposer .settingsGroup {
   display: grid;
   align-content: start;
   padding: 6px 16px 14px;
@@ -453,7 +458,7 @@ svg.sfIconGlyph {
   background: #fff;
   box-shadow: 0 2px 10px rgba(15, 23, 42, .04);
 }
-.aiSettingsComposer .settingsGroup > h2 {
+.aiSettingsPage .aiSettingsComposer .settingsGroup > h2 {
   display: flex;
   align-items: center;
   min-height: 44px;
@@ -463,8 +468,27 @@ svg.sfIconGlyph {
   font-weight: 600;
   letter-spacing: .01em;
 }
-.aiSettingsComposer .settingsGroup > h2::before { content: none; }
-.aiRow {
+.aiSettingsPage .aiSettingsComposer .settingsGroup > h2::before { content: none; }
+/* 组内按钮基线重置：解除 .settingsGroup button 的网格布局、行高、箭头与悬停底色 */
+.aiSettingsPage .settingsGroup button {
+  display: flex;
+  align-items: center;
+  grid-template-columns: none;
+  min-height: 0;
+  width: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  box-shadow: none;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.aiSettingsPage .settingsGroup button::after { content: none; }
+.aiSettingsPage .settingsGroup button:hover { background: transparent; }
+.aiSettingsPage .settingsGroup button:active { background: var(--ai-press); }
+.aiSettingsPage .aiRow {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -473,16 +497,15 @@ svg.sfIconGlyph {
   padding: 9px 0;
   text-align: left;
 }
-.aiRowMain { display: grid; gap: 3px; min-width: 0; }
-.aiRowMain strong { color: #1b1f27; font-size: 14px; font-weight: 600; letter-spacing: -.01em; }
-.aiRowMain small { color: var(--ai-muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
-.aiRow select { max-width: 62%; }
-.aiRowButton { width: 100%; border: 0; background: transparent; cursor: pointer; font: inherit; }
-.aiRowButton > b { color: var(--mn-accent); font-size: 13px; font-weight: 500; white-space: nowrap; }
-.aiRowButton:active { background: var(--ai-press); border-radius: 10px; }
-.aiSettingsComposer .settingsGroup article { border-top: 1px solid var(--ai-separator); }
-.aiSettingsComposer .settingsGroup article:first-of-type { border-top: 0; }
-.aiEditor {
+.aiSettingsPage .aiRowMain { display: grid; gap: 3px; min-width: 0; }
+.aiSettingsPage .aiRowMain strong { display: inline; color: #1b1f27; font-size: 14px; font-weight: 600; letter-spacing: -.01em; }
+.aiSettingsPage .aiRowMain small { display: block; margin: 0; color: var(--ai-muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.aiSettingsPage .aiRow select { max-width: 62%; }
+.aiSettingsPage .aiRowButton { width: 100%; }
+.aiSettingsPage .aiRowButton > b { color: var(--mn-accent); font-size: 13px; font-weight: 500; white-space: nowrap; }
+.aiSettingsPage .settingsGroup article { border-top: 1px solid var(--ai-separator); }
+.aiSettingsPage .settingsGroup article:first-of-type { border-top: 0; }
+.aiSettingsPage .aiEditor {
   display: grid;
   gap: 10px;
   margin: 2px 0 12px;
@@ -490,15 +513,16 @@ svg.sfIconGlyph {
   border-radius: 12px;
   background: #f5f6f8;
 }
-.aiEditorField { display: grid; gap: 5px; font-size: 12px; color: var(--ai-muted); }
-.aiEditorField > input,
-.aiEditorField > select { width: 100%; box-sizing: border-box; }
-.aiEditorActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.aiEditorActions button {
+.aiSettingsPage .aiEditorField { display: grid; gap: 5px; font-size: 12px; color: var(--ai-muted); }
+.aiSettingsPage .aiEditorField > input,
+.aiSettingsPage .aiEditorField > select { width: 100%; box-sizing: border-box; }
+.aiSettingsPage .aiEditorActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.aiSettingsPage .aiEditorActions button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   min-height: 44px;
+  width: auto;
   padding: 0 14px;
   border: 0;
   border-radius: 10px;
@@ -507,13 +531,18 @@ svg.sfIconGlyph {
   font-size: 13px;
   font-weight: 600;
 }
-.aiEditorActions button:active { filter: brightness(.92); }
-.aiEditorActions .aiDangerButton { background: #ffe9e7; color: #c0362c; }
-.aiSwitch {
+.aiSettingsPage .aiEditorActions button:hover { background: var(--ai-tint); }
+.aiSettingsPage .aiEditorActions button:active { filter: brightness(.92); background: var(--ai-tint); }
+.aiSettingsPage .aiEditorActions .aiDangerButton { background: #ffe9e7; color: #c0362c; }
+.aiSettingsPage .aiEditorActions .aiDangerButton:hover, .aiSettingsPage .aiEditorActions .aiDangerButton:active { background: #ffe9e7; }
+/* iOS switch：固定 51×31 轨道 + 27px 滑块，独立于按钮基线 */
+.aiSettingsPage .settingsGroup button.aiSwitch {
   position: relative;
+  display: inline-block;
+  flex: 0 0 51px;
   width: 51px;
   height: 31px;
-  flex: 0 0 51px;
+  min-height: 31px;
   padding: 0;
   border: 0;
   border-radius: 99px;
@@ -521,7 +550,7 @@ svg.sfIconGlyph {
   cursor: pointer;
   transition: background .22s ease;
 }
-.aiSwitch i {
+.aiSettingsPage .settingsGroup button.aiSwitch i {
   position: absolute;
   top: 2px;
   left: 2px;
@@ -532,8 +561,11 @@ svg.sfIconGlyph {
   box-shadow: 0 2px 5px rgba(0, 0, 0, .18), 0 0 1px rgba(0, 0, 0, .1);
   transition: transform .22s ease;
 }
-.aiSwitch.on { background: #34c759; }
-.aiSwitch.on i { transform: translateX(20px); }
+.aiSettingsPage .settingsGroup button.aiSwitch:hover { background: #e9e9eb; }
+.aiSettingsPage .settingsGroup button.aiSwitch.on { background: #34c759; }
+.aiSettingsPage .settingsGroup button.aiSwitch.on:hover { background: #34c759; }
+.aiSettingsPage .settingsGroup button.aiSwitch.on:active { background: #34c759; }
+.aiSettingsPage .settingsGroup button.aiSwitch.on i { transform: translateX(20px); }
 .aiSettingsPage input,
 .aiSettingsPage select {
   min-height: 44px;
@@ -547,9 +579,12 @@ svg.sfIconGlyph {
 .aiSettingsPage input:focus,
 .aiSettingsPage select:focus { outline: none; border-color: #8aa6e9; box-shadow: 0 0 0 3px rgba(83, 105, 184, .10); }
 .aiSettingsPage input[type="checkbox"] { min-height: 0; accent-color: var(--mn-accent); }
-.aiSubjectAdd { display: flex; gap: 8px; margin: 2px 0 10px; }
-.aiSubjectAdd input { flex: 1; }
-.aiSubjectAdd button {
+.aiSettingsPage .aiSubjectAdd { display: flex; gap: 8px; margin: 2px 0 10px; }
+.aiSettingsPage .aiSubjectAdd input { flex: 1; }
+.aiSettingsPage .aiSubjectAdd button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 44px;
   padding: 0 16px;
   border: 0;
@@ -559,7 +594,8 @@ svg.sfIconGlyph {
   font-size: 13px;
   font-weight: 600;
 }
-.aiStudySets {
+.aiSettingsPage .aiSubjectAdd button:hover { background: var(--ai-tint); }
+.aiSettingsPage .aiStudySets {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 6px;
@@ -570,19 +606,23 @@ svg.sfIconGlyph {
   padding: 2px;
   margin: 0;
 }
-.aiStudySets label { display: flex; align-items: center; gap: 7px; font-size: 13px; color: #333a46; min-width: 0; }
-.aiStudySets .owned { opacity: .4; }
-.aiDefaultBadge { padding: 2px 8px; border-radius: 99px; background: var(--rd-accent-tint); color: var(--mn-accent); font-size: 12px; font-style: normal; font-weight: 600; }
-.aiOcrHint { display: block; color: var(--ai-muted); font-size: 12px; line-height: 1.55; }
-.aiCredentialState { align-self: center; color: var(--ai-muted); font-size: 12px; }
-.aiEmpty { padding: 24px; color: var(--ai-muted); font-size: 13px; text-align: center; }
-.aiAdvancedSection { padding-top: 12px; border-top: 1px solid var(--ai-separator); }
-.aiAdvancedSection > h3 { margin: 0 0 8px; color: #6d7280; font-size: 13px; font-weight: 600; }
-.aiStorageSummary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; }
-.aiStorageSummary > span { display: grid; gap: 3px; }
-.aiStorageSummary > span strong { font-size: 14px; color: #1b1f27; }
-.aiStorageSummary > span small { color: var(--ai-muted); font-size: 12px; }
-.aiStorageSummary button, .aiStorageSettings > article button {
+.aiSettingsPage .aiStudySets label { display: flex; align-items: center; gap: 7px; font-size: 13px; color: #333a46; min-width: 0; }
+.aiSettingsPage .aiStudySets .owned { opacity: .4; }
+.aiSettingsPage .aiDefaultBadge { padding: 2px 8px; border-radius: 99px; background: var(--rd-accent-tint); color: var(--mn-accent); font-size: 12px; font-style: normal; font-weight: 600; }
+.aiSettingsPage .aiOcrHint { display: block; color: var(--ai-muted); font-size: 12px; line-height: 1.55; }
+.aiSettingsPage .aiCredentialState { align-self: center; color: var(--ai-muted); font-size: 12px; }
+.aiSettingsPage .aiEmpty { padding: 24px; color: var(--ai-muted); font-size: 13px; text-align: center; }
+.aiSettingsPage .aiAdvancedSection { padding-top: 12px; border-top: 1px solid var(--ai-separator); }
+.aiSettingsPage .aiAdvancedSection > h3 { margin: 0 0 8px; color: #6d7280; font-size: 13px; font-weight: 600; }
+.aiSettingsPage .aiStorageSummary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; }
+.aiSettingsPage .aiStorageSummary > span { display: grid; gap: 3px; }
+.aiSettingsPage .aiStorageSummary > span strong { font-size: 14px; color: #1b1f27; }
+.aiSettingsPage .aiStorageSummary > span small { color: var(--ai-muted); font-size: 12px; }
+.aiSettingsPage .aiStorageSummary button,
+.aiSettingsPage .aiStorageSettings > article button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 40px;
   padding: 0 14px;
   border: 0;
@@ -592,67 +632,69 @@ svg.sfIconGlyph {
   font-size: 13px;
   font-weight: 600;
 }
-.aiStorageSettings > article { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-top: 1px solid var(--ai-separator); }
-.aiStorageSettings > article strong { display: block; font-size: 14px; color: #1b1f27; }
-.aiStorageSettings > article small { display: block; margin-top: 2px; font-size: 12px; color: var(--ai-muted); }
-.aiPreparationWorkspace { display: grid; grid-template-columns: minmax(190px, .72fr) minmax(300px, 1.28fr); gap: 14px; align-items: start; }
-.aiPreparationControls { display: grid; gap: 12px; }
-.aiPreparationControls > label { display: grid; gap: 6px; color: #1b1f27; font-size: 13px; font-weight: 600; }
-.aiPreparationControls select { width: 100%; min-height: 44px; box-sizing: border-box; }
-.aiPreparationControls > p { margin: 0; color: var(--ai-muted); font-size: 12px; line-height: 1.6; }
-.aiPreparationEmpty { padding: 10px; border-radius: 10px; background: #f5f6f8; color: var(--ai-muted); font-size: 12px; line-height: 1.5; }
-.aiPreparationCounts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin: 0; }
-.aiPreparationCounts > div { display: grid; gap: 3px; padding: 10px; border: 1px solid #e7ebf2; border-radius: 10px; background: #f8faff; }
-.aiPreparationCounts dt { color: var(--ai-muted); font-size: 12px; }
-.aiPreparationCounts dd { margin: 0; color: #1b1f27; font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
-.aiPreparationMonitor { display: grid; gap: 11px; min-width: 0; }
-.aiPreparationPreview { min-height: 270px; max-height: 430px; overflow: auto; border: 1px solid #dfe5ee; border-radius: 12px; background: #f5f6f8; }
-.aiPreparationPreview > div { min-height: 270px; display: grid; place-content: center; justify-items: center; gap: 8px; padding: 24px; box-sizing: border-box; color: #7a8699; font-size: 12px; text-align: center; }
-.aiPreparationPreview > div svg { width: 28px; height: 28px; opacity: .55; }
-.aiPreparationPreview iframe { width: 100%; min-height: 400px; border: 0; background: #fff; }
-.aiPreparationPreview img { display: block; width: 100%; height: auto; background: #fff; }
-.aiPreparationProgress { display: grid; gap: 6px; }
-.aiPreparationProgressLabel { display: flex; align-items: center; justify-content: space-between; color: #475467; font-size: 12px; }
-.aiPreparationProgressLabel b { color: var(--mn-accent); font-size: 12px; }
-.aiPreparationProgress progress { width: 100%; height: 7px; overflow: hidden; border: 0; border-radius: 99px; accent-color: var(--mn-accent); }
-.aiPreparationProgress > small { overflow: hidden; color: var(--ai-muted); font-size: 12px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
-.aiPreparationOcr { display: grid; gap: 6px; margin-top: 5px; }
-.aiPreparationOcr strong { color: #1b1f27; font-size: 12px; }
-.aiPreparationOcr pre { min-height: 92px; max-height: 210px; overflow: auto; margin: 0; padding: 10px; border: 1px solid #e4e8ef; border-radius: 10px; background: #fbfcfe; color: #1b1f27; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-.aiOcrBrowser { display: grid; gap: 10px; margin-top: 4px; padding: 12px; border: 1px solid #e1e6ee; border-radius: 12px; background: #f8faff; }
-.aiOcrBrowser > header { display: grid; grid-template-columns: minmax(180px, 1fr) auto; align-items: end; gap: 10px; }
-.aiOcrBrowser > header label { display: grid; gap: 5px; color: #1b1f27; font-size: 12px; font-weight: 600; }
-.aiOcrBrowser > header select { width: 100%; min-height: 44px; }
-.aiOcrBrowser > header small, .aiOcrBrowser > footer { color: var(--ai-muted); font-size: 12px; }
-.aiOcrCompare { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; min-height: 280px; }
-.aiOcrCompare > figure, .aiOcrCompare > section { min-width: 0; margin: 0; overflow: auto; border: 1px solid #e1e6ee; border-radius: 10px; background: #fff; }
-.aiOcrCompare figcaption, .aiOcrCompare h3 { position: sticky; top: 0; z-index: 1; margin: 0; padding: 9px 10px; border-bottom: 1px solid #e8ebf1; background: rgba(255, 255, 255, .96); color: #1b1f27; font-size: 12px; font-weight: 600; }
-.aiOcrCompare img { display: block; width: 100%; height: auto; }
-.aiOcrRenderedText { min-height: 230px; border: 0; border-radius: 0; }
-.aiOcrMissingImage, .aiOcrRenderedEmpty { display: grid; min-height: 230px; place-items: center; padding: 18px; color: var(--ai-muted); font-size: 12px; text-align: center; }
-.aiOcrBrowserEmpty { display: flex; align-items: center; gap: 8px; padding: 12px; border: 1px dashed #d9e0ea; border-radius: 10px; color: var(--ai-muted); font-size: 12px; }
-.aiOcrBrowserEmpty svg { width: 18px; height: 18px; }
+.aiSettingsPage .aiStorageSummary button:hover,
+.aiSettingsPage .aiStorageSettings > article button:hover { background: var(--ai-tint); }
+.aiSettingsPage .aiStorageSettings > article { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-top: 1px solid var(--ai-separator); }
+.aiSettingsPage .aiStorageSettings > article strong { display: block; font-size: 14px; color: #1b1f27; }
+.aiSettingsPage .aiStorageSettings > article small { display: block; margin-top: 2px; font-size: 12px; color: var(--ai-muted); }
+.aiSettingsPage .aiPreparationWorkspace { display: grid; grid-template-columns: minmax(190px, .72fr) minmax(300px, 1.28fr); gap: 14px; align-items: start; }
+.aiSettingsPage .aiPreparationControls { display: grid; gap: 12px; }
+.aiSettingsPage .aiPreparationControls > label { display: grid; gap: 6px; color: #1b1f27; font-size: 13px; font-weight: 600; }
+.aiSettingsPage .aiPreparationControls select { width: 100%; min-height: 44px; box-sizing: border-box; }
+.aiSettingsPage .aiPreparationControls > p { margin: 0; color: var(--ai-muted); font-size: 12px; line-height: 1.6; }
+.aiSettingsPage .aiPreparationEmpty { padding: 10px; border-radius: 10px; background: #f5f6f8; color: var(--ai-muted); font-size: 12px; line-height: 1.5; }
+.aiSettingsPage .aiPreparationCounts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin: 0; }
+.aiSettingsPage .aiPreparationCounts > div { display: grid; gap: 3px; padding: 10px; border: 1px solid #e7ebf2; border-radius: 10px; background: #f8faff; }
+.aiSettingsPage .aiPreparationCounts dt { color: var(--ai-muted); font-size: 12px; }
+.aiSettingsPage .aiPreparationCounts dd { margin: 0; color: #1b1f27; font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+.aiSettingsPage .aiPreparationMonitor { display: grid; gap: 11px; min-width: 0; }
+.aiSettingsPage .aiPreparationPreview { min-height: 270px; max-height: 430px; overflow: auto; border: 1px solid #dfe5ee; border-radius: 12px; background: #f5f6f8; }
+.aiSettingsPage .aiPreparationPreview > div { min-height: 270px; display: grid; place-content: center; justify-items: center; gap: 8px; padding: 24px; box-sizing: border-box; color: #7a8699; font-size: 12px; text-align: center; }
+.aiSettingsPage .aiPreparationPreview > div svg { width: 28px; height: 28px; opacity: .55; }
+.aiSettingsPage .aiPreparationPreview iframe { width: 100%; min-height: 400px; border: 0; background: #fff; }
+.aiSettingsPage .aiPreparationPreview img { display: block; width: 100%; height: auto; background: #fff; }
+.aiSettingsPage .aiPreparationProgress { display: grid; gap: 6px; }
+.aiSettingsPage .aiPreparationProgressLabel { display: flex; align-items: center; justify-content: space-between; color: #475467; font-size: 12px; }
+.aiSettingsPage .aiPreparationProgressLabel b { color: var(--mn-accent); font-size: 12px; }
+.aiSettingsPage .aiPreparationProgress progress { width: 100%; height: 7px; overflow: hidden; border: 0; border-radius: 99px; accent-color: var(--mn-accent); }
+.aiSettingsPage .aiPreparationProgress > small { overflow: hidden; color: var(--ai-muted); font-size: 12px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.aiSettingsPage .aiPreparationOcr { display: grid; gap: 6px; margin-top: 5px; }
+.aiSettingsPage .aiPreparationOcr strong { color: #1b1f27; font-size: 12px; }
+.aiSettingsPage .aiPreparationOcr pre { min-height: 92px; max-height: 210px; overflow: auto; margin: 0; padding: 10px; border: 1px solid #e4e8ef; border-radius: 10px; background: #fbfcfe; color: #1b1f27; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.aiSettingsPage .aiOcrBrowser { display: grid; gap: 10px; margin-top: 4px; padding: 12px; border: 1px solid #e1e6ee; border-radius: 12px; background: #f8faff; }
+.aiSettingsPage .aiOcrBrowser > header { display: grid; grid-template-columns: minmax(180px, 1fr) auto; align-items: end; gap: 10px; }
+.aiSettingsPage .aiOcrBrowser > header label { display: grid; gap: 5px; color: #1b1f27; font-size: 12px; font-weight: 600; }
+.aiSettingsPage .aiOcrBrowser > header select { width: 100%; min-height: 44px; }
+.aiSettingsPage .aiOcrBrowser > header small, .aiSettingsPage .aiOcrBrowser > footer { color: var(--ai-muted); font-size: 12px; }
+.aiSettingsPage .aiOcrCompare { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; min-height: 280px; }
+.aiSettingsPage .aiOcrCompare > figure, .aiSettingsPage .aiOcrCompare > section { min-width: 0; margin: 0; overflow: auto; border: 1px solid #e1e6ee; border-radius: 10px; background: #fff; }
+.aiSettingsPage .aiOcrCompare figcaption, .aiSettingsPage .aiOcrCompare h3 { position: sticky; top: 0; z-index: 1; margin: 0; padding: 9px 10px; border-bottom: 1px solid #e8ebf1; background: rgba(255, 255, 255, .96); color: #1b1f27; font-size: 12px; font-weight: 600; }
+.aiSettingsPage .aiOcrCompare img { display: block; width: 100%; height: auto; }
+.aiSettingsPage .aiOcrRenderedText { min-height: 230px; border: 0; border-radius: 0; }
+.aiSettingsPage .aiOcrMissingImage, .aiSettingsPage .aiOcrRenderedEmpty { display: grid; min-height: 230px; place-items: center; padding: 18px; color: var(--ai-muted); font-size: 12px; text-align: center; }
+.aiSettingsPage .aiOcrBrowserEmpty { display: flex; align-items: center; gap: 8px; padding: 12px; border: 1px dashed #d9e0ea; border-radius: 10px; color: var(--ai-muted); font-size: 12px; }
+.aiSettingsPage .aiOcrBrowserEmpty svg { width: 18px; height: 18px; }
 @media (max-width: 700px) {
-  .aiPreparationWorkspace, .aiOcrCompare { grid-template-columns: 1fr; }
-  .aiPreparationPreview { max-height: 360px; }
-  .aiOcrBrowser > header { grid-template-columns: 1fr; align-items: start; }
+  .aiSettingsPage .aiPreparationWorkspace, .aiSettingsPage .aiOcrCompare { grid-template-columns: 1fr; }
+  .aiSettingsPage .aiPreparationPreview { max-height: 360px; }
+  .aiSettingsPage .aiOcrBrowser > header { grid-template-columns: 1fr; align-items: start; }
 }
 @media (max-width: 600px) {
   .aiSettingsPage { padding-right: 10px; padding-left: 10px; }
   .aiSettingsPage .aiSettingsToolbar { grid-template-columns: auto minmax(0, 1fr); }
-  .aiSettingsToolbar > span { grid-column: 2; min-height: 0; margin-top: -8px; text-align: left; }
-  .aiSettingsComposer .settingsGroup { padding-inline: 12px; }
+  .aiSettingsPage .aiSettingsToolbar > span { grid-column: 2; min-height: 0; margin-top: -8px; text-align: left; }
+  .aiSettingsPage .aiSettingsComposer .settingsGroup { padding-inline: 12px; }
   .aiOverview > header { align-items: flex-start; }
   .aiOverviewActions { width: 100%; justify-content: space-between; }
   .aiPreflight { flex-wrap: wrap; }
   .aiPreflight button { margin-left: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .aiSwitch, .aiSwitch i { transition: none; }
+  .aiSettingsPage .aiSwitch, .aiSettingsPage .settingsGroup button.aiSwitch i { transition: none; }
 }
 @media (prefers-reduced-transparency: reduce) {
   .aiSettingsPage .aiSettingsToolbar { background: #f7f8fb; -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
 @media (prefers-contrast: more) {
-  .aiSettingsComposer .settingsGroup, .aiSettingsToolbar > button { border-color: #98a2b3; }
+  .aiSettingsPage .aiSettingsComposer .settingsGroup, .aiSettingsPage .aiSettingsToolbar > button { border-color: #98a2b3; }
 }

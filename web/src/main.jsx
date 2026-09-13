@@ -1532,33 +1532,19 @@ function OCRResultBrowser({ items, onStatus }) {
   </section>
 }
 
-/** 导出快速预览：A4 HTML（186mm ≈ 703px）按预览面板宽度等比缩放，替代固定 760px 的 1:1 显示。 */
+/** 导出快速预览：A4 版面（760px）按固定 60% 等比缩放显示。 */
 const EXPORT_PREVIEW_FRAME_WIDTH = 760
+const EXPORT_PREVIEW_SCALE = 0.6
 function ExportHtmlPreview({ html }) {
-  const viewportRef = useRef(null)
-  const [scale, setScale] = useState(1)
   const [frameHeight, setFrameHeight] = useState(1080)
-  useLayoutEffect(() => {
-    const viewport = viewportRef.current
-    if (!viewport) return undefined
-    const update = () => {
-      const inner = viewport.clientWidth - 36
-      if (inner > 0) setScale(Math.min(1, inner / EXPORT_PREVIEW_FRAME_WIDTH))
-    }
-    update()
-    if (typeof ResizeObserver !== "function") return undefined
-    const observer = new ResizeObserver(update)
-    observer.observe(viewport)
-    return () => observer.disconnect()
-  }, [])
   function onLoad(event) {
     const doc = event.currentTarget.contentDocument
     if (doc?.body) setFrameHeight(Math.max(1080, doc.documentElement.scrollHeight || 0, doc.body.scrollHeight || 0))
   }
-  return <div className="actualPreviewViewport" ref={viewportRef}>
-    <div className="actualPreviewScaled" style={{ height: `${Math.round(frameHeight * scale)}px` }}>
+  return <div className="actualPreviewViewport">
+    <div className="actualPreviewScaled" style={{ height: `${Math.round(frameHeight * EXPORT_PREVIEW_SCALE)}px` }}>
       <iframe title="实际 PDF 导出预览" srcDoc={html} onLoad={onLoad}
-        style={{ width: `${EXPORT_PREVIEW_FRAME_WIDTH}px`, height: `${frameHeight}px`, transform: `scale(${scale})`, transformOrigin: "0 0" }} />
+        style={{ width: `${EXPORT_PREVIEW_FRAME_WIDTH}px`, height: `${frameHeight}px`, transform: `scale(${EXPORT_PREVIEW_SCALE})`, transformOrigin: "0 0" }} />
     </div>
   </div>
 }
@@ -1615,15 +1601,33 @@ function AISettingsPage({ onBack, onEnabledChanged }) {
       </div>
       <div className="settingsGroup aiServiceGroup"><h2>AI 服务</h2>
         <div className="aiRow">
-          <span className="aiRowMain"><strong>分析错题 AI</strong><small>{activeProfile ? `${activeProfile.name} · ${activeProfile.model}` : "尚未选择服务"}</small></span>
+          <span className="aiRowMain"><strong>分析错题 AI</strong><small>选择用于生成错题总结的服务</small></span>
           <select value={settings.defaultProfileId} aria-label="选择分析错题 AI" onChange={event => save({ ...settings, defaultProfileId: event.target.value })}>{profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select>
         </div>
+        {activeProfile && <>
+          <button type="button" className="aiRow aiRowButton" aria-expanded={expandedKey === "profile"} onClick={() => toggleEditor("profile")}>
+            <span className="aiRowMain"><strong>分析服务配置</strong><small>{activeProfile.type === "deepseek" ? "DeepSeek" : "OpenAI 兼容"} · {activeProfile.model} · {credentialLabel(activeProfile.credentialRef)}</small></span>
+            <b>{expandedKey === "profile" ? "收起" : "编辑"}</b>
+          </button>
+          {expandedKey === "profile" && <div className="aiEditor">
+            <label className="aiEditorField"><span>名称</span><input value={activeProfile.name} aria-label="服务名称" onChange={event => patchProfile(activeProfile.id, { name: event.target.value })} /></label>
+            <label className="aiEditorField"><span>API 地址</span><input value={activeProfile.baseUrl} aria-label="API 地址" onChange={event => patchProfile(activeProfile.id, { baseUrl: event.target.value })} /></label>
+            <label className="aiEditorField"><span>模型</span><input value={activeProfile.model} aria-label="模型" onChange={event => patchProfile(activeProfile.id, { model: event.target.value })} /></label>
+            <div className="aiEditorActions">
+              <button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: activeProfile.credentialRef, persistence: "session" }).then(() => MNBridge.send("aiGetSettings")).then(value => setSettings(normalizeAISettingsView(value)))}>本次密钥</button>
+              <button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: activeProfile.credentialRef, persistence: "local" }).then(() => MNBridge.send("aiGetSettings")).then(value => setSettings(normalizeAISettingsView(value)))}>本地保存</button>
+              <button className="aiDangerButton" onClick={() => clearCredential(activeProfile.credentialRef)}>清除密钥</button>
+              <button onClick={() => testProvider(activeProfile)}>测试</button>
+              <span className="aiCredentialState">{credentialLabel(activeProfile.credentialRef)}</span>
+            </div>
+          </div>}
+        </>}
         <button type="button" className="aiRow aiRowButton" aria-expanded={expandedKey === "ocr"} onClick={() => toggleEditor("ocr")}>
-          <span className="aiRowMain"><strong>题目识别（OCR）</strong><small>{settings.mineru.enabled ? `${settings.ocrEngine === "glm-ocr" ? "GLM-OCR · 智谱" : "MinerU"} · 公式${settings.mineru.enableFormula ? "开" : "关"} · 表格${settings.mineru.enableTable ? "开" : "关"}` : "已关闭 · 题目不会发送"}</small></span>
+          <span className="aiRowMain"><strong>题目识别（OCR）</strong><small>{settings.mineru.enabled ? `${settings.ocrEngine === "glm-ocr" ? "GLM-OCR · 智谱" : "MinerU"} · 公式${settings.mineru.enableFormula ? "开" : "关"} · 表格${settings.mineru.enableTable ? "开" : "关"}` : "已关闭 · 图片题不会发送"}</small></span>
           <b>{expandedKey === "ocr" ? "收起" : "编辑"}</b>
         </button>
         {expandedKey === "ocr" && <div className="aiEditor">
-          <div className="aiRow"><span className="aiRowMain"><strong>启用题目识别</strong><small>整张题目卡片（不含手写）识别成文字后发送；关闭后题目不会发送</small></span><AISwitch checked={settings.mineru.enabled} onChange={value => save({ ...settings, mineru: { ...settings.mineru, enabled: value } })} label="启用题目识别" /></div>
+          <div className="aiRow"><span className="aiRowMain"><strong>启用题目识别</strong><small>整张题目卡片（不含手写）识别成文字后发送；关闭后图片题不会发送，文字题仍直接读取</small></span><AISwitch checked={settings.mineru.enabled} onChange={value => save({ ...settings, mineru: { ...settings.mineru, enabled: value } })} label="启用题目识别" /></div>
           <label className="aiRow"><span className="aiRowMain"><strong>识别引擎</strong></span><select value={settings.ocrEngine} onChange={event => save({ ...settings, ocrEngine: event.target.value })}><option value="mineru">MinerU</option><option value="glm-ocr">GLM-OCR（智谱）</option></select></label>
           {settings.ocrEngine === "mineru" ? <>
             <div className="aiRow"><span className="aiRowMain"><strong>公式识别</strong></span><AISwitch checked={settings.mineru.enableFormula} onChange={value => save({ ...settings, mineru: { ...settings.mineru, enableFormula: value } })} label="公式识别" /></div>
@@ -1636,24 +1640,7 @@ function AISettingsPage({ onBack, onEnabledChanged }) {
             <div className="aiEditorActions"><button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: settings.glmOcr.credentialRef, persistence: "session" }).then(() => MNBridge.send("aiGetSettings")).then(value => setSettings(normalizeAISettingsView(value)))}>本次 API Key</button><button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: settings.glmOcr.credentialRef, persistence: "local" }).then(() => MNBridge.send("aiGetSettings")).then(value => setSettings(normalizeAISettingsView(value)))}>本地保存</button><button className="aiDangerButton" onClick={() => clearCredential(settings.glmOcr.credentialRef)}>清除密钥</button><span className="aiCredentialState">{credentialLabel(settings.glmOcr.credentialRef)}</span></div>
           </>}
         </div>}
-        {profiles.map(profile => { const key = `profile-${profile.id}`; return <article key={profile.id}>
-          <button type="button" className="aiRow aiRowButton" aria-expanded={expandedKey === key} onClick={() => toggleEditor(key)}>
-            <span className="aiRowMain"><strong>{profile.name}{settings.defaultProfileId === profile.id && <em className="aiDefaultBadge">分析用</em>}</strong><small>{profile.type === "deepseek" ? "DeepSeek" : "OpenAI 兼容"} · {profile.model} · {credentialLabel(profile.credentialRef)}</small></span>
-            <b>{expandedKey === key ? "收起" : "编辑"}</b>
-          </button>
-          {expandedKey === key && <div className="aiEditor">
-            <label className="aiEditorField"><span>名称</span><input value={profile.name} aria-label="服务名称" onChange={event => patchProfile(profile.id, { name: event.target.value })} /></label>
-            <label className="aiEditorField"><span>API 地址</span><input value={profile.baseUrl} aria-label="API 地址" onChange={event => patchProfile(profile.id, { baseUrl: event.target.value })} /></label>
-            <label className="aiEditorField"><span>模型</span><input value={profile.model} aria-label="模型" onChange={event => patchProfile(profile.id, { model: event.target.value })} /></label>
-            <div className="aiEditorActions">
-              <button onClick={() => save({ ...settings, defaultProfileId: profile.id })}>{settings.defaultProfileId === profile.id ? "当前分析服务" : "设为分析服务"}</button>
-              <button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: profile.credentialRef, persistence: "session" }).then(() => MNBridge.send("aiGetSettings")).then(value => setSettings(normalizeAISettingsView(value)))}>本次密钥</button>
-              <button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: profile.credentialRef, persistence: "local" }).then(() => MNBridge.send("aiGetSettings")).then(value => setSettings(normalizeAISettingsView(value)))}>本地保存</button>
-              <button className="aiDangerButton" onClick={() => clearCredential(profile.credentialRef)}>清除密钥</button>
-              <button onClick={() => testProvider(profile)}>测试</button>
-            </div>
-          </div>}
-        </article> })}
+
       </div>
       <div className="settingsGroup aiPrivacyGroup"><h2>发送内容</h2>
         {privacyRows.map(([key, label, hint]) => <div key={key} className="aiRow"><span className="aiRowMain"><strong>{label}</strong><small>{hint}</small></span><AISwitch checked={settings.privacy[key]} onChange={value => save({ ...settings, privacy: { ...settings.privacy, [key]: value } })} label={label} /></div>)}

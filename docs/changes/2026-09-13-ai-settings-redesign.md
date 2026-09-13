@@ -59,3 +59,14 @@
 - 交付前对最终输入重跑 check、test（256 通过）、build；产物 `dist/CardLink-v2.4.1-b6.mnaddon`。
 - 已复制到 `E:\iCloudDrive\同步文件夹\CardLink-v2.4.1-b6.mnaddon`；SHA-256（源与复制件一致）：`00d78f559f37bd1eb750ca8fc001822696c1b8ec7cffc8a8c353c6ee1a936b7a`。
 - 未推送 GitHub/Gitee 发布；远端发布需另行授权。
+
+## 跟进（b6 用户反馈）：AI 服务单入口与控件形状修复
+
+用户反馈 b6 配置页控件形状怪异失调、需只显示当前选中 AI 的配置、预览比例定为 60%：
+
+- **分析 AI 配置改单入口**：删除「AI 服务」下同时列出 OpenAI/DeepSeek 的档案列表；「分析错题 AI」下拉选择后，仅「分析服务配置」一行展开当前选中服务的编辑器（名称/API 地址/模型/密钥/测试），与「题目识别（OCR）」行同构。切换下拉即切换编辑对象。
+- **控件形状根因**：`.settingsGroup button` / `.settingsGroup > div` 基础样式（display:grid、min-height、› 箭头 ::after、hover 底色）特异性高于新组件类，把 switch 渲染成整行网格按钮、把行打散成块。重构 `settings.css` AI 区块：全部选择器带 `.aiSettingsPage` 前缀，并新增组内按钮基线重置（`display:flex`、`::after{content:none}`、hover/active 显式背景）。
+- **switch 关闭态轨道不可见修复**：基线重置（0,2,1）压过 `.aiSwitch` 背景（0,2,0），灰色轨道渲染为透明；switch 选择器升至 `.aiSettingsPage .settingsGroup button.aiSwitch`（开启态 0,4,1）。
+- **浏览器自查**：通过本地 ui-preview（构建产物 + mock 桥）实际打开配置页截图验证——switch 开/关形状、行布局、两个编辑器展开、下拉切换 DeepSeek 后单入口跟随，均正常；确认页面无重复渲染（截图中的双顶栏为截图拼接伪影，DOM 仅一个 shell）。
+- 同轮：导出快速预览缩放按用户指示改为固定 60%（见 2026-09-13-export-preview-scale.md）；「启用题目识别」提示文案更正为"关闭后图片题不会发送，文字题仍直接读取"。
+- `pnpm check`、256 项测试、`pnpm build` 通过。真机视觉仍需验收。
