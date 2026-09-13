@@ -23,10 +23,19 @@ test("OCR 截图永远不含手写；开启手写内容时渲染版保留手写�
   assert.doesNotMatch(withHandwriting.ocrHtml, /<canvas|Ym91bmQ=/)
 })
 
-test("OCR 关闭时没有题目文本来源，题目不得发送", () => {
-  const raw = card("<p>题干文字</p>")
-  assert.equal(planQuestionInput(raw, { ...policy, mineru: { ...policy.mineru, enabled: false } }).needsOCR, false)
-  assert.equal(planQuestionInput(raw, policy).needsOCR, true)
+test("有题干文字直接读取，含图片才需要 OCR", () => {
+  const textCard = card("<p>题干文字</p>")
+  const imageCard = card('<img src="data:image/png;base64,aW1hZ2U=" />')
+  const plain = planQuestionInput(textCard, policy)
+  assert.equal(plain.needsOCR, false)
+  assert.equal(plain.hasText, true)
+  assert.match(plain.nativeText, /题干文字/)
+  const withImage = planQuestionInput(imageCard, policy)
+  assert.equal(withImage.needsOCR, true)
+  assert.equal(withImage.hasMedia, true)
+  const ocrOff = planQuestionInput(imageCard, { ...policy, mineru: { ...policy.mineru, enabled: false } })
+  assert.equal(ocrOff.needsOCR, false)
+  assert.equal(ocrOff.hasText, false)
 })
 
 test("旧缓存不能复用；来源、手写开关或 OCR 配置变化使缓存失效", () => {
@@ -121,7 +130,7 @@ async function finished(id: string) {
 async function prepare(handwritingUris: string[] = []) {
   const job = await bridge("aiStartQuestionPreparation", { studySetId: "book" })
   const input = await bridge("aiGetPreparationQuestion", { jobId: job.id, recordId: "one" })
-  await bridge("aiSubmitPreparationImage", { jobId: job.id, recordId: "one", imageDataUri: "data:image/jpeg;base64,aW1hZ2U=", handwritingDataUris: handwritingUris })
+  await bridge("aiSubmitPreparationImage", { jobId: job.id, recordId: "one", imageDataUri: input.nativeOnly ? "" : "data:image/jpeg;base64,aW1hZ2U=", handwritingDataUris: handwritingUris })
   await until(async () => (await bridge("aiGetQuestionPreparationJob", { jobId: job.id })).status === "done")
   return { job, input }
 }
@@ -136,7 +145,7 @@ async function prepareAll() {
       if (current?.stage === "waiting-render") {
         await bridge("aiGetPreparationQuestion", { jobId: job.id, recordId: current.recordId })
       } else if (current?.stage === "rendering") {
-        // 每题使用不同图片，避免命中 OCR 内容缓存导致后续题目不发请求。
+        // 原生文字直读题不提交截图；图片题使用不同图片，避免命中 OCR 内容缓存导致后续题目不发请求。
         const image = `data:image/jpeg;base64,${Buffer.from(`image-${current.index}`).toString("base64")}`
         await bridge("aiSubmitPreparationImage", { jobId: job.id, recordId: current.recordId, imageDataUri: image })
       } else if (state.status === "waiting-advance" && ["success", "failed"].includes(current.stage)) {
@@ -148,12 +157,21 @@ async function prepareAll() {
   throw new Error("准备任务未在测试期限内结束")
 }
 
-test("未开启题目识别时准备与分析都被拒绝，不发送题目", async () => {
-  const settings = await reset(); add()
+test("未开启 OCR 时图片题被拒绝，文字题仍可直接分析", async () => {
+  const settings = await reset()
+  add("one", card('<img src="data:image/png;base64,aW1hZ2U=" />'))
+  add("two", card("<p>题干文字</p>"))
   await bridge("aiSaveSettings", { ...settings, mineru: { ...settings.mineru, enabled: false } })
-  await assert.rejects(bridge("aiStartQuestionPreparation", { studySetId: "book" }), /未开启题目识别/)
-  await assert.rejects(analyze().then(job => finished(job.id)).then(job => { throw new Error(job.error) }), /未开启题目识别/)
-  assert.equal(requests.length, 0)
+  await prepareAll()
+  const job = await finished((await analyze()).id)
+  assert.equal(job.status, "done")
+  assert.equal(requests.filter(item => item.url.includes("layout_parsing")).length, 0)
+  const report = await bridge("aiGetReport", { reportId: job.reportId })
+  assert.equal(report.coverage.unavailable, 1)
+  assert.match(report.content.limitations.join("\n"), /未开启题目识别/)
+  const prompt = requests.filter(item => item.url.includes("llm"))[0].body.messages[1].content
+  assert.match(prompt, /题干文字/)
+  assert.doesNotMatch(prompt, /Q001/)
 })
 
 test("旧 OCR 缓存被拒绝；手写开启时渲染含手写且以独立图片随题发送", async () => {
@@ -252,17 +270,9 @@ test("真实报告引用排除读取失败与容量外题目，覆盖数等于�
   add("one")
   add("two", card(`<p>${"长".repeat(120000)}</p>`))
   add("three", "")
-  // 准备按 one、two、three 顺序逐题 OCR：让第二题返回超长文本以触发整题预算截断。
-  let ocrCount = 0
-  onRequest = request => {
-    if (request.url.includes("layout_parsing")) {
-      ocrCount += 1
-      request.complete({ md_results: ocrCount === 2 ? "长".repeat(120000) : "识别后的题目文字" })
-    } else {
-      request.complete(response(["Q001", "Q002", "Q003", "toString"]))
-    }
-  }
+  // 全部为文字题：原生直读，不发生 OCR 请求；第二题超预算按整题跳过。
   await prepareAll()
+  onRequest = request => request.complete(response(["Q001", "Q002", "Q003", "toString"]))
   const job = await finished((await analyze()).id)
   assert.equal(job.status, "done")
   const prompt = requests.filter(item => item.url.includes("llm"))[0].body.messages[1].content

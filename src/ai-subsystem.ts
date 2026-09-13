@@ -291,6 +291,9 @@ function readQuestionInput(record: any, settings: AISettings, reader = createMis
   }
   const boundHtml = appendBoundMindMapHandwriting("<body></body>", handwriting)
   const plan = planQuestionInput(raw, settings, boundHtml)
+  if (!plan.needsOCR && !plan.hasText) {
+    throw new Error(plan.hasMedia ? "题目含图片但未开启题目识别（OCR）" : "没有可读取的题目文字")
+  }
   return { ...plan, sourceFingerprint: sha256Hex(JSON.stringify([record.sourceNotebookId, record.sourceNoteId,
     questionBody(raw), handwriting])), policyFingerprint: preparationPolicyFingerprint(settings),
     boundHandwritingStatus: includeHandwriting ? handwriting.status : "disabled", boundHandwritingCount: handwriting.assets.length }
@@ -304,6 +307,30 @@ function assertPreparationCurrent(job: any, recordId: string): ReturnType<typeof
     throw new Error("题目、手写或发送范围已变化，请重新准备")
   }
   return current
+}
+/** 原生文字直读快照：题目文本来自卡片文字，不经 OCR；手写内容仍可另存为附件。 */
+function saveNativeQuestion(record: any, input: ReturnType<typeof readQuestionInput>, handwritingImages: { file: string; bytes: number }[] = []): void {
+  writePreparedQuestion({ schemaVersion: 3, recordId: record.recordId, sourceNoteId: String(record.sourceNoteId || ""),
+    sourceNotebookId: String(record.sourceNotebookId || ""), sourceTitle: text(record.sourceTitle, 200), status: "ready",
+    sourceFingerprint: input.sourceFingerprint, policyFingerprint: input.policyFingerprint,
+    contentFingerprint: sha256Hex(input.nativeText), questionText: input.nativeText, ocrText: "",
+    provider: "local", model: "native-text", processedAt: new Date().toISOString(),
+    ...(handwritingImages.length ? { handwritingImages } : {}),
+    includedMindMapHandwriting: handwritingImages.length > 0, boundHandwritingCount: Number(input.boundHandwritingCount) || 0 })
+}
+/** 手写内容图片统一落盘；单张无效或超限只跳过，不阻断准备。 */
+function saveHandwritingImages(recordId: string, handwritingDataUris: string[]): { file: string; bytes: number }[] {
+  const handwritingImages: { file: string; bytes: number }[] = []
+  for (const [index, dataUri] of handwritingDataUris.entries()) {
+    if (handwritingImages.length >= MAX_HANDWRITING_IMAGES || !/^data:image\/jpeg;base64,/i.test(dataUri) || dataUri.length > MAX_HANDWRITING_BASE64_CHARS) continue
+    try {
+      ensureDirectory(preparedQuestionImageRoot())
+      const handwritingPath = preparedQuestionImagePath(`${recordId}-h${index}`)
+      const handwritingData = dataFromBase64Source(dataUri)
+      if (handwritingData.writeToFileAtomically(handwritingPath, true)) handwritingImages.push({ file: `${sha256Hex(`${recordId}-h${index}`)}.jpg`, bytes: handwritingData.length })
+    } catch {}
+  }
+  return handwritingImages
 }
 function preparedQuestionSummaries(): any[] {
   ensureDirectory(preparedQuestionRoot())
@@ -559,9 +586,16 @@ function finishPreparationItem(job: any, stage: "success" | "failed", detail: st
 async function processPreparationImage(job: any, recordId: string, imageDataUri: string, handwritingDataUris: string[] = []): Promise<void> {
   try {
     const input = assertPreparationCurrent(job, recordId)
-    if (!input.needsOCR) throw new Error("未开启题目识别（OCR），题目无法发送")
     const record = loadMistakeState().records[recordId]
     if (!record) throw new Error("错题记录不存在")
+    // 原生文字直读分支：不发送任何图片给 OCR；开启手写时仍保存手写附件。
+    if (!input.needsOCR) {
+      const handwritingImages = saveHandwritingImages(recordId, handwritingDataUris)
+      saveNativeQuestion(record, input, handwritingImages)
+      finishPreparationItem(job, "success", handwritingImages.length ? "已直接读取题目文字，另存手写内容" : "已直接读取题目文字，未上传图片", input.nativeText)
+      return
+    }
+    if (!/^data:image\/(?:jpeg|png);base64,/i.test(imageDataUri)) throw new Error("题目卡片图片格式无效")
     job.status = "running"
     job.current.stage = "uploading"
     job.current.progress = 1
@@ -579,16 +613,8 @@ async function processPreparationImage(job: any, recordId: string, imageDataUri:
     const imagePath = preparedQuestionImagePath(recordId)
     const imageData = dataFromBase64Source(imageDataUri)
     if (!imageData.writeToFileAtomically(imagePath, true)) throw new Error("OCR 已完成，但原题卡片图片保存失败")
-    // 手写内容以独立图片另存，仅供分析模型直传；单张无效或超限只跳过，不阻断准备。
-    const handwritingImages: { file: string; bytes: number }[] = []
-    for (const [index, dataUri] of handwritingDataUris.entries()) {
-      if (handwritingImages.length >= MAX_HANDWRITING_IMAGES || !/^data:image\/jpeg;base64,/i.test(dataUri) || dataUri.length > MAX_HANDWRITING_BASE64_CHARS) continue
-      try {
-        const handwritingPath = preparedQuestionImagePath(`${recordId}-h${index}`)
-        const handwritingData = dataFromBase64Source(dataUri)
-        if (handwritingData.writeToFileAtomically(handwritingPath, true)) handwritingImages.push({ file: `${sha256Hex(`${recordId}-h${index}`)}.jpg`, bytes: handwritingData.length })
-      } catch {}
-    }
+    // 手写内容以独立图片另存，仅供分析模型直传。
+    const handwritingImages = saveHandwritingImages(recordId, handwritingDataUris)
     writePreparedQuestion({
       schemaVersion: 3,
       recordId,
@@ -630,8 +656,6 @@ function pruneFinishedJobs(keep = 10): void {
 async function runAnalysis(job: any, subject: AISubject, profile: AIProfile) { try {
   ensureJobActive(job)
   const settings = loadAISettings()
-  // 题目文本只来自整卡 OCR：未开启识别时没有题目来源，直接拒绝而不是静默发送空内容。
-  if (!settings.mineru.enabled) throw new Error("未开启题目识别（OCR），题目不发送；请先在 AI 服务中开启")
   const all = Object.values(loadMistakeState().records)
     .filter(record => subject.studySetIds.includes(record.sourceNotebookId))
     .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))
@@ -652,11 +676,14 @@ async function runAnalysis(job: any, subject: AISubject, profile: AIProfile) { t
     try {
       const input = readQuestionInput(record, settings, contentReader)
       const prepared = readPreparedQuestion(record.recordId)
-      if (!preparedInputMatches(prepared, input)) {
+      // 有题干文字的题目直接读取原生文字；含图片的题目必须使用来源与策略均匹配的整卡 OCR。
+      const matches = preparedInputMatches(prepared, input)
+      if (input.needsOCR && !matches) {
         throw new Error(prepared ? "题目、手写或发送范围已变化，旧 OCR 需重新准备" : "题目尚未准备")
       }
+      const question = input.needsOCR ? prepared!.questionText : input.nativeText
       // 手写内容以独立图片随对应题目发送；仅在开启手写内容且准备时已另存时附带。
-      const handwritingFiles = settings.privacy.handwriting ? (prepared!.handwritingImages || []) : []
+      const handwritingFiles = settings.privacy.handwriting && matches ? (prepared!.handwritingImages || []) : []
       const attached: ModelImageAttachment[] = []
       for (const [fileIndex, entry] of handwritingFiles.entries()) {
         if (attachments.length >= MAX_ANALYSIS_IMAGES) break
@@ -766,7 +793,6 @@ export async function aiBridge(command: string, payload: any): Promise<any> {
   if (command === "aiRunDueSchedules") { void runDueAIAnalyses(); return { accepted: true } }
   if (command === "aiStartQuestionPreparation") {
     const settings = loadAISettings()
-    if (!settings.mineru.enabled) throw new Error("未开启题目识别（OCR），请先在 AI 服务中开启")
     const studySetId = text(payload?.studySetId, 100)
     const studySet = (MN.db.allNotebooks() || []).find((item: any) => String(item?.topicId || "") === studySetId)
     if (!studySet) throw new Error("学习集不存在")
@@ -813,8 +839,14 @@ export async function aiBridge(command: string, payload: any): Promise<any> {
       job.input = input
       job.current.boundHandwritingStatus = input.boundHandwritingStatus
       job.current.boundHandwritingCount = input.boundHandwritingCount
-      if (!input.needsOCR) throw new Error("未开启题目识别（OCR），题目无法发送")
       job.current.stage = "rendering"
+      if (!input.needsOCR) {
+        // 原生文字直读：仍走渲染流程，开启手写时网页端要单独捕获手写内容。
+        job.current.detail = "正在读取题目原生文字"
+        return { recordId: job.current.recordId, title: job.current.title, questionHtml: input.html, nativeOnly: true,
+          includeHandwriting: loadAISettings().privacy.handwriting === true,
+          boundHandwritingStatus: input.boundHandwritingStatus, boundHandwritingCount: input.boundHandwritingCount }
+      }
       job.current.detail = "正在渲染去除手写后的整张题目卡片"
       return { recordId: job.current.recordId, title: job.current.title, questionHtml: input.html,
         includeHandwriting: loadAISettings().privacy.handwriting === true,
@@ -834,10 +866,10 @@ export async function aiBridge(command: string, payload: any): Promise<any> {
     if (job.current.recordId !== recordId) throw new Error("当前题目已变化，请重新渲染")
     if (job.current.stage !== "rendering") return { accepted: false, duplicate: true }
     const input = assertPreparationCurrent(job, recordId)
-    if (!input.needsOCR) throw new Error("未开启题目识别（OCR），题目无法发送")
-    if (!/^data:image\/(?:jpeg|png);base64,/i.test(imageDataUri)) throw new Error("题目卡片图片格式无效")
+    // 原生文字直读题不提交截图；OCR 题必须是有效图片。
+    if (input.needsOCR && !/^data:image\/(?:jpeg|png);base64,/i.test(imageDataUri)) throw new Error("题目卡片图片格式无效")
     job.current.stage = "queued"
-    job.current.detail = "题目卡片已提交，等待 OCR"
+    job.current.detail = input.needsOCR ? "题目卡片已提交，等待 OCR" : "已读取题目原生文字"
     const uris = Array.isArray(payload?.handwritingDataUris) ? payload.handwritingDataUris.map((item: any) => String(item || "")).filter(Boolean) : []
     void processPreparationImage(job, recordId, imageDataUri, uris)
     return { accepted: true }
@@ -877,7 +909,7 @@ export async function aiBridge(command: string, payload: any): Promise<any> {
     for (const record of records) {
       try {
         const input = readQuestionInput(record, settings, reader)
-        if (input.needsOCR && preparedInputMatches(readPreparedQuestion(record.recordId), input)) preparedCount++
+        if ((!input.needsOCR || preparedInputMatches(readPreparedQuestion(record.recordId), input)) && (input.needsOCR || input.hasText)) preparedCount++
       } catch {}
     }
     return { subjectId: subject.id, recordCount: all.length, analyzableCount: records.length, preparedCount,

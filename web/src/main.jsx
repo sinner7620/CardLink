@@ -1333,6 +1333,7 @@ function QuestionPreparationWorkspace({ studySets, ocrEngine, includeHandwriting
   const [job, setJob] = useState(null)
   const [questionHtml, setQuestionHtml] = useState("")
   const [handwritingRender, setHandwritingRender] = useState(false)
+  const [nativeOnly, setNativeOnly] = useState(false)
   const [previewImage, setPreviewImage] = useState("")
   const [busy, setBusy] = useState(false)
   const requestedRef = useRef("")
@@ -1373,7 +1374,7 @@ function QuestionPreparationWorkspace({ studySets, ocrEngine, includeHandwriting
     setQuestionHtml("")
     setPreviewImage("")
     MNBridge.send("aiGetPreparationQuestion", { jobId: job.id, recordId: current.recordId })
-      .then(result => { setQuestionHtml(result.questionHtml || ""); setHandwritingRender(result.includeHandwriting === true) })
+      .then(result => { setQuestionHtml(result.questionHtml || ""); setHandwritingRender(result.includeHandwriting === true); setNativeOnly(result.nativeOnly === true) })
       .catch(reason => onStatus(reason?.message || String(reason)))
   }, [job?.id, job?.current?.recordId, job?.current?.stage])
 
@@ -1456,7 +1457,8 @@ function QuestionPreparationWorkspace({ studySets, ocrEngine, includeHandwriting
       const canvas = await html2canvas(doc.body, { backgroundColor: "#ffffff", logging: false, useCORS: true, scale, width, height, windowWidth: width, windowHeight: height })
       const imageDataUri = canvas.toDataURL("image/jpeg", .9)
       setPreviewImage(imageDataUri)
-      await MNBridge.send("aiSubmitPreparationImage", { jobId: job.id, recordId: current.recordId, imageDataUri, handwritingDataUris })
+      // 原生文字直读题不上传截图；图片题才提交整卡（截图内已隐藏手写）。
+      await MNBridge.send("aiSubmitPreparationImage", { jobId: job.id, recordId: current.recordId, imageDataUri: nativeOnly ? "" : imageDataUri, handwritingDataUris })
     } catch (reason) {
       const message = reason?.message || String(reason)
       onStatus(message)
@@ -1471,7 +1473,7 @@ function QuestionPreparationWorkspace({ studySets, ocrEngine, includeHandwriting
   return <div className="aiPreparationWorkspace">
     <div className="aiPreparationControls">
       <label><span>选择含错题的学习集</span><select value={studySetId} disabled={running} onChange={event => setStudySetId(event.target.value)}>{studySets.map(set => <option key={set.id} value={set.id}>{set.title}（{set.mistakeCount} 题）</option>)}</select></label>
-      <p>逐题渲染去除手写后的整张题目卡片，交给 {ocrEngine === "glm-ocr" ? "GLM-OCR" : "MinerU"} 识别成文字；未开启题目识别时无法准备题目。{includeHandwriting ? "已开启手写内容：手写部分会另存为独立图片，随对应题目发送给分析模型，不进入 OCR。" : "未开启手写内容：手写不会以任何形式发送。"}分析前会核对题目、手写和发送范围，旧 OCR 可能需要重新准备。</p>
+      <p>有题干文字的题目直接读取原生文字；含图片的题目才渲染去除手写后的整张卡片，交给 {ocrEngine === "glm-ocr" ? "GLM-OCR" : "MinerU"} 识别成文字。{includeHandwriting ? "已开启手写内容：手写部分另存为独立图片随对应题目发送给分析模型，不进入 OCR。" : "未开启手写内容：手写不会以任何形式发送。"}分析前会核对题目、手写和发送范围，旧 OCR 可能需要重新准备。</p>
       <div className="aiEditorActions"><button type="button" disabled={!studySetId || busy || running} onClick={start}>{busy ? "正在启动…" : "开始准备错题"}</button>{running && <button type="button" className="aiDangerButton" onClick={cancel}>取消</button>}</div>
       {!studySets.length && <small className="aiPreparationEmpty">当前没有包含错题的学习集，无需 OCR。</small>}
       {job && <dl className="aiPreparationCounts"><div><dt>题目总数</dt><dd>{job.total || 0}</dd></div><div><dt>成功</dt><dd>{job.success || 0}</dd></div><div><dt>失败</dt><dd>{job.failed || 0}</dd></div></dl>}
@@ -1528,6 +1530,37 @@ function OCRResultBrowser({ items, onStatus }) {
     </div>
     {detail?.processedAt && <footer>识别时间：{new Date(detail.processedAt).toLocaleString()}</footer>}
   </section>
+}
+
+/** 导出快速预览：A4 HTML（186mm ≈ 703px）按预览面板宽度等比缩放，替代固定 760px 的 1:1 显示。 */
+const EXPORT_PREVIEW_FRAME_WIDTH = 760
+function ExportHtmlPreview({ html }) {
+  const viewportRef = useRef(null)
+  const [scale, setScale] = useState(1)
+  const [frameHeight, setFrameHeight] = useState(1080)
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current
+    if (!viewport) return undefined
+    const update = () => {
+      const inner = viewport.clientWidth - 36
+      if (inner > 0) setScale(Math.min(1, inner / EXPORT_PREVIEW_FRAME_WIDTH))
+    }
+    update()
+    if (typeof ResizeObserver !== "function") return undefined
+    const observer = new ResizeObserver(update)
+    observer.observe(viewport)
+    return () => observer.disconnect()
+  }, [])
+  function onLoad(event) {
+    const doc = event.currentTarget.contentDocument
+    if (doc?.body) setFrameHeight(Math.max(1080, doc.documentElement.scrollHeight || 0, doc.body.scrollHeight || 0))
+  }
+  return <div className="actualPreviewViewport" ref={viewportRef}>
+    <div className="actualPreviewScaled" style={{ height: `${Math.round(frameHeight * scale)}px` }}>
+      <iframe title="实际 PDF 导出预览" srcDoc={html} onLoad={onLoad}
+        style={{ width: `${EXPORT_PREVIEW_FRAME_WIDTH}px`, height: `${frameHeight}px`, transform: `scale(${scale})`, transformOrigin: "0 0" }} />
+    </div>
+  </div>
 }
 
 function AISwitch({ checked, onChange, label }) {
@@ -2686,7 +2719,7 @@ function MistakeExport({ allRecords, action, onBack, initialRecordIds = [] }) {
         {result && <p className="exportResult" role="status">{result}</p>}
       </div>
 
-      <aside className={`exportPreview ${actualPreview ? "hasPreview" : ""}`}><header><span><strong>导出预览</strong><small>{format === "pdf" ? `A4 · ${pageLabel} · ${include.answer ? answerLabel : "不含答案"}` : "Markdown 文档"}</small></span><b>{actualPreview?.pages ? `${actualPreview.pages} 页` : `${selected.length} 道`}</b></header>{actualPreview?.previewPages?.length ? <div className="actualPreviewViewport actualPreviewPages">{actualPreview.previewPages.map((page, index) => <figure key={`${page}:${index}`}><img src={page} alt={`PDF 第 ${index + 1} 页`} /><figcaption>第 {index + 1} 页</figcaption></figure>)}</div> : actualPreview?.html ? <div className="actualPreviewViewport"><iframe title="实际 PDF 导出预览" srcDoc={actualPreview.html} /></div> : actualPreview?.pdfUrl ? <div className="actualPreviewViewport"><iframe title="实际 PDF 导出预览" src={actualPreview.pdfUrl} /></div> : actualPreview?.markdown ? <div className="actualMarkdownPreview markdownPreview" dangerouslySetInnerHTML={{ __html: renderMarkdownPreview(actualPreview.markdown) }} /> : <div className="actualPreviewEmpty"><span className="exportPreviewGlyph"><Icon name="eye" /></span><strong>预览最终文件</strong><span>快速预览只生成前 3 道题，适合调整布局；完整文件会在导出时生成。</span><button type="button" disabled={!canSubmit || previewLoading || taskActive || exportLoading} onClick={() => runPreview(false)}>{previewLoading ? "正在生成预览…" : "生成快速预览"}</button></div>}</aside>
+      <aside className={`exportPreview ${actualPreview ? "hasPreview" : ""}`}><header><span><strong>导出预览</strong><small>{format === "pdf" ? `A4 · ${pageLabel} · ${include.answer ? answerLabel : "不含答案"}` : "Markdown 文档"}</small></span><b>{actualPreview?.pages ? `${actualPreview.pages} 页` : `${selected.length} 道`}</b></header>{actualPreview?.previewPages?.length ? <div className="actualPreviewViewport actualPreviewPages">{actualPreview.previewPages.map((page, index) => <figure key={`${page}:${index}`}><img src={page} alt={`PDF 第 ${index + 1} 页`} /><figcaption>第 {index + 1} 页</figcaption></figure>)}</div> : actualPreview?.html ? <ExportHtmlPreview html={actualPreview.html} /> : actualPreview?.pdfUrl ? <div className="actualPreviewViewport"><iframe title="实际 PDF 导出预览" src={actualPreview.pdfUrl} /></div> : actualPreview?.markdown ? <div className="actualMarkdownPreview markdownPreview" dangerouslySetInnerHTML={{ __html: renderMarkdownPreview(actualPreview.markdown) }} /> : <div className="actualPreviewEmpty"><span className="exportPreviewGlyph"><Icon name="eye" /></span><strong>预览最终文件</strong><span>快速预览只生成前 3 道题，适合调整布局；完整文件会在导出时生成。</span><button type="button" disabled={!canSubmit || previewLoading || taskActive || exportLoading} onClick={() => runPreview(false)}>{previewLoading ? "正在生成预览…" : "生成快速预览"}</button></div>}</aside>
     </div>
   </section>
 }

@@ -31,8 +31,10 @@ export function filterQuestionMedia(html: string, handwriting: boolean): string 
   return result
 }
 
+/** 纯文本提取（题目/参考答案）：图片与手写都不算文字，纯图片题提取结果为空。 */
 export function questionNativeText(html: string): string {
-  return cardHtmlToMarkdown(filterQuestionMedia(html, false)).trim()
+  const textOnly = html.replace(/<img\b[^>]*>/gi, "")
+  return cardHtmlToMarkdown(filterQuestionMedia(textOnly, false)).trim()
 }
 
 export function questionBody(html: string): string {
@@ -41,10 +43,10 @@ export function questionBody(html: string): string {
 }
 
 /**
- * 题目输入规划：ocrHtml 是去除手写的整卡（对应最终发给 OCR 的画面）；
- * 开启手写内容时 renderHtml 保留卡片手写并追加脑图绑定手写，供网页端
- * 先单独捕获手写元素、再隐藏它们截出无手写整卡。OCR 未启用时没有题目
- * 文本来源，调用方必须拒绝发送题目。
+ * 题目输入规划：有可直接读取的题干文字时走原生文字（needsOCR=false），
+ * 含图片的题目才需要整卡 OCR（needsOCR=true）。ocrHtml 是去除手写的整卡
+ * （对应最终发给 OCR 的画面）；开启手写内容时 renderHtml 保留卡片手写并
+ * 追加脑图绑定手写，供网页端先单独捕获手写元素、再隐藏它们截出无手写整卡。
  */
 export function planQuestionInput(questionHtml: string, settings: PreparationPolicy, boundHtml = "") {
   const { privacy, mineru } = settings
@@ -52,8 +54,13 @@ export function planQuestionInput(questionHtml: string, settings: PreparationPol
   const renderHtml = privacy.handwriting
     ? filterQuestionMedia(questionHtml, true).replace(/<\/article>/i, `${questionBody(boundHtml)}</article>`)
     : ocrHtml
-  const needsOCR = mineru.enabled
-  return { ocrHtml, html: renderHtml, needsOCR }
+  // 卡片标题、分区标题和缺失媒体提示不能把纯图片题误判成有题干文字。
+  const content = questionBody(ocrHtml).replace(/<h[1-6]\b[^>]*>[\s\S]*?<\/h[1-6]>/gi, "")
+    .replace(/<div\b[^>]*class=["'][^"']*(?:eyebrow|missing-image)[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, "")
+  const hasText = !!questionNativeText(content).trim()
+  const hasMedia = /<img\b/i.test(questionBody(ocrHtml))
+  const needsOCR = mineru.enabled && hasMedia
+  return { ocrHtml, html: renderHtml, hasText, hasMedia, needsOCR, nativeText: questionNativeText(ocrHtml) }
 }
 
 export interface PreparedInputIdentity { sourceFingerprint: string; policyFingerprint: string }

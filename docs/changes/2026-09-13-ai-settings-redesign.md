@@ -41,5 +41,14 @@
 ## 未验证限制
 
 - 配置页与准备/分析流程在浏览器和 MarginNote 真机上的视觉与交互未实测（本变更无浏览器截图验收）。
-- 真机绑定手写元素捕获质量、多模态请求被服务接受程度仍未验证；DeepSeek 官方接口不支持图片输入，开启手写内容向其发送会得到服务端错误。
+- 真机绑定手写元素捕获质量、多模态请求被服务接受程度仍未验证；DeepSeek 官方接口不支持图片输入，开启开关向其发送会得到服务端错误。
 - 本轮为普通开发提交，未升版、未交付安装包；交付需按流程另起 b6。
+
+## 跟进（同日，用户反馈后调整）：混合题目输入模型
+
+全量 OCR 模型会为纯文字题付出不必要的 OCR 成本，按用户要求改为混合模型：
+
+- `planQuestionInput` 恢复 `hasText / hasMedia / nativeText` 判定：有题干文字（剔除标题、eyebrow、缺失媒体提示后仍有文字）直接读取原生文字，`needsOCR = mineru.enabled && hasMedia`。纯图片题在文字提取中视作无文字——`questionNativeText` 重新剔除 `<img>`（修复过程中发现图片 markdown 占位会被误判成题干文字）。
+- `aiGetPreparationQuestion` 对文字题返回 `nativeOnly`，仍走渲染流程以便开启手写时捕获手写内容；`aiSubmitPreparationImage` 允许文字题提交空截图，`processPreparationImage` 保存 provider 为 `local` 的原生文字快照（含手写附件）。手写图片落盘抽为 `saveHandwritingImages` 共用。
+- `runAnalysis`：文字题用 `nativeText`（无快照也可分析，但不附带手写）；图片题仍必须持有匹配快照。`aiStartQuestionPreparation` 移除 OCR 全局前置拦截；图片题在 OCR 关闭时按题失败"题目含图片但未开启题目识别（OCR）"。
+- 测试：重写"有题干文字直接读取，含图片才需要 OCR""未开启 OCR 时图片题被拒绝，文字题仍可直接分析"，预算/取消等真实链路测试改走原生直读路径。`pnpm check`、256 项测试、`pnpm build` 通过。
