@@ -32,7 +32,14 @@
 
 - `pnpm check` 通过（tsc --noEmit）。
 - `pnpm test` 257 项全部通过。首跑暴露回归：无附件时请求体被组装成内容数组，破坏纯文本请求兼容；已修正为仅在存在手写附件时使用多模态内容数组，纯文本请求与 b4 完全一致。
-- `pnpm build` 通过，产出 `dist/CardLink-v2.4.1-b4.mnaddon`（本地构建验证，非交付包；未升版、未复制到同步文件夹）。
+- `pnpm build` 通过。
+
+## 交付（2.4.1-b5）
+
+- 版本升至 `2.4.1-b5`（package.json），发布说明 `RELEASE_NOTES_v2.4.1-b5.md`；正式渠道身份 `marginnote.extension.mn4-answer-matcher` / `CardLink`，已解包核对 mnaddon.json。
+- 交付前对最终输入重跑 check、test（257 通过）、build；产物 `dist/CardLink-v2.4.1-b5.mnaddon`。
+- 已复制到 `E:\iCloudDrive\同步文件夹\CardLink-v2.4.1-b5.mnaddon`；SHA-256（源与复制件一致）：`0c34744f4edf8e91b7aaf0ba6f9ae73a6692a70ffdcf3e9605a410d6ac598770`。
+- 未推送 GitHub/Gitee 发布；远端发布需另行授权。
 
 ## 未验证限制
 
