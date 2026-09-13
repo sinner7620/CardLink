@@ -52,3 +52,10 @@
 - `aiGetPreparationQuestion` 对文字题返回 `nativeOnly`，仍走渲染流程以便开启手写时捕获手写内容；`aiSubmitPreparationImage` 允许文字题提交空截图，`processPreparationImage` 保存 provider 为 `local` 的原生文字快照（含手写附件）。手写图片落盘抽为 `saveHandwritingImages` 共用。
 - `runAnalysis`：文字题用 `nativeText`（无快照也可分析，但不附带手写）；图片题仍必须持有匹配快照。`aiStartQuestionPreparation` 移除 OCR 全局前置拦截；图片题在 OCR 关闭时按题失败"题目含图片但未开启题目识别（OCR）"。
 - 测试：重写"有题干文字直接读取，含图片才需要 OCR""未开启 OCR 时图片题被拒绝，文字题仍可直接分析"，预算/取消等真实链路测试改走原生直读路径。`pnpm check`、256 项测试、`pnpm build` 通过。
+
+## 交付（2.4.1-b6，含同日导出预览缩放修复）
+
+- 版本升至 `2.4.1-b6`（package.json），发布说明 `RELEASE_NOTES_v2.4.1-b6.md`；正式渠道身份 `marginnote.extension.mn4-answer-matcher` / `CardLink`，已解包核对 mnaddon.json。
+- 交付前对最终输入重跑 check、test（256 通过）、build；产物 `dist/CardLink-v2.4.1-b6.mnaddon`。
+- 已复制到 `E:\iCloudDrive\同步文件夹\CardLink-v2.4.1-b6.mnaddon`；SHA-256（源与复制件一致）：`00d78f559f37bd1eb750ca8fc001822696c1b8ec7cffc8a8c353c6ee1a936b7a`。
+- 未推送 GitHub/Gitee 发布；远端发布需另行授权。
