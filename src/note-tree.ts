@@ -71,6 +71,15 @@ export function notebookNotes(notebook: unknown): MbBookNote[] {
   return shape === "flat" ? (notes as MbBookNote[]) : flattenFromRoots(notes)
 }
 
+/**
+ * 形态探测结果只在首次碰到该学习集时得出：若探测发生在学习集尚未同步完整的
+ * 瞬间，错误的 flat/root-only 归一会被长期缓存。索引重建是唯一能整体纠正的
+ * 时机，重建入口必须先清空该缓存再重新探测。
+ */
+export function clearNotebookShapeCache(): void {
+  notebookShapeCache.clear()
+}
+
 function detectNotesShape(notes: unknown[]): NotesShape {
   const idSet = new Set<string>()
   for (const note of notes) {

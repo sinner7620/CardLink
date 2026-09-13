@@ -143,6 +143,37 @@ test("错题标记排除同学习集另一脑图残留选中的答案卡片", ()
   assert.match(plugin, /answerOnlyScopes\.has\(notebookId\)/)
 })
 
+test("索引失效只引导手动重建：查找路径不自动重建，refreshIndex 仅在手动确认之后", () => {
+  const plugin = readFileSync("src/plugin.ts", "utf8")
+  const matcher = readFileSync("src/matcher.ts", "utf8")
+  // 自动重建（检测到失效信号即全量扫描）已被明确否决：任何隐式重建入口都不得存在
+  assert.doesNotMatch(plugin, /rebuildIndexAndRematch|自动重建答案索引/)
+  assert.doesNotMatch(matcher, /autoRebuildAllowed|AUTO_REBUILD_MIN_INTERVAL_MS/)
+  const find = plugin.slice(
+    plugin.indexOf("export async function findCurrentAnswer"),
+    plugin.indexOf("async function runSafely")
+  )
+  // 空匹配仍弹窗引导；refreshIndex 只能出现在“刷新索引后重试”确认之后
+  const popupIndex = find.indexOf("刷新索引后重试")
+  const refreshCall = find.indexOf("await refreshIndex(answerTarget)")
+  assert.ok(popupIndex >= 0, "手动刷新引导弹窗必须保留")
+  assert.ok(refreshCall > popupIndex, "refreshIndex 仅可由用户确认后触发")
+})
+
+test("重建索引重置脑图形态探测缓存；工作台剔除已删除答案卡", () => {
+  const matcher = readFileSync("src/matcher.ts", "utf8")
+  const noteTree = readFileSync("src/note-tree.ts", "utf8")
+  const plugin = readFileSync("src/plugin.ts", "utf8")
+  assert.match(noteTree, /export function clearNotebookShapeCache\(\)/)
+  // refreshIndex 是形态探测缓存唯一能整体纠正的重建时机
+  assert.match(matcher, /clearNotebookShapeCache\(\)/)
+  const workbench = plugin.slice(
+    plugin.indexOf("export function answerWorkbenchData"),
+    plugin.indexOf("export async function onMistakeLinkToolbarClick")
+  )
+  assert.match(workbench, /\.filter\(answerNoteExists\)/)
+})
+
 test("面板可见性变化的三条路径都必须调用 refreshAddonCommands（图标选中态同步）", () => {
   const commands = readFileSync("rails-native/WebBridgeCommands.js", "utf8")
   const addon = readFileSync("rails-native/WebAddon.js", "utf8")

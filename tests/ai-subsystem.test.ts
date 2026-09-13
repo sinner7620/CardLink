@@ -240,6 +240,13 @@ test("批量提取失败原因聚合可见，不再静默吞错", () => {
   assert.match(source, /内容不可用 \$\{unavailable\} 道（\$\{reasonSummary\}）/)
 })
 
+test("分析题干统一经 analysisQuestionText 取值，纯文字题不依赖 OCR 准备", () => {
+  // 此前直接取 prepared.questionText，未准备的纯文字题抛 TypeError 被计入“内容不可用”整题丢弃
+  assert.match(source, /const question = analysisQuestionText\(input, prepared\)/)
+  assert.match(source, /题目：\$\{question\}/)
+  assert.doesNotMatch(source, /题目：\$\{prepared!\.questionText\}/)
+})
+
 test("题目准备把整张卡片送 OCR，并将文本独立落盘", () => {
   assert.match(web, /import html2canvas from "html2canvas"/)
   assert.match(web, /html2canvas\(doc\.body/)

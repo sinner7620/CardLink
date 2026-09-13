@@ -46,7 +46,9 @@ export function loadStoredIndex(notebookId: string): StoredAnswerIndexItem[] | u
     try {
       if (isfileExists(path)) {
         const parsed = readJSON(path)
-        if (Array.isArray(parsed) && parsed.length) return parsed as StoredAnswerIndexItem[]
+        // 空数组也是有效快照：表示“已建立但该范围 0 张卡”，
+        // 拒绝它会让空答案范围的每次查找都误报“索引尚未建立”。
+        if (Array.isArray(parsed)) return parsed as StoredAnswerIndexItem[]
       }
     } catch {
       // 文件不可读则回退旧存储

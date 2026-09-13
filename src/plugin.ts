@@ -947,6 +947,15 @@ function resolveAnswerLookupContext(): ({ error: string; context?: undefined } |
   }
 }
 
+function answerNoteExists(answer: IndexedAnswer): boolean {
+  // 桥接查询异常时按存在处理：瞬时错误不应误判为卡片失效。
+  try {
+    return Boolean(MN.db.getNoteById(answer.noteId))
+  } catch {
+    return true
+  }
+}
+
 export async function findCurrentAnswer(allowIndexRetry = true): Promise<void> {
   const resolved = resolveAnswerLookupContext()
   if (resolved.error !== undefined) return showHUD(resolved.error)
@@ -1138,7 +1147,10 @@ export function answerWorkbenchData(): AnswerWorkbenchData {
       candidates: []
     }
   }
+  // 工作台是同步桥接命令，不做整库重建；仅剔除已删除的答案卡，
+  // 避免一张失效卡片让整个 candidates 组装（含卡片 HTML 渲染）中断。
   const matches = findAnswersForQuestion(answerTarget, lookupQuestion, titles, path)
+    .filter(answerNoteExists)
   return {
     questionTitle,
     sourceNotebookTitle: notebookTitle(sourceNotebookId),

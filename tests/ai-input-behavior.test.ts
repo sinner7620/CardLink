@@ -174,6 +174,20 @@ test("未开启 OCR 时图片题被拒绝，文字题仍可直接分析", async 
   assert.doesNotMatch(prompt, /Q001/)
 })
 
+test("纯文字题未做 OCR 准备也能直接分析，不再被静默计入内容不可用", async () => {
+  await reset()
+  // 关键差异：不调用 prepareAll()——prepared 快照不存在，题目必须走原生文字路径
+  add("one", card("<p>题干文字</p>"))
+  const job = await finished((await analyze()).id)
+  assert.equal(job.status, "done")
+  const prompt = requests.filter(item => item.url.includes("llm"))[0].body.messages[1].content
+  assert.match(prompt, /Q001/)
+  assert.match(prompt, /题干文字/)
+  const report = await bridge("aiGetReport", { reportId: job.reportId })
+  assert.equal(report.coverage.unavailable, 0)
+  assert.equal(report.coverage.analyzed, 1)
+})
+
 test("旧 OCR 缓存被拒绝；手写开启时渲染含手写且以独立图片随题发送", async () => {
   const settings = await reset(); add("one", card(`<p>题干</p>${picture}`)); sketch = { drawing: "hash" }
   await bridge("aiSaveSettings", { ...settings, privacy: { ...settings.privacy, handwriting: true } })

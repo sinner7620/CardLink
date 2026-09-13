@@ -115,3 +115,14 @@ test("快照文件损坏时回退旧存储且不崩溃", async () => {
   const loaded = store.loadStoredIndex(NOTEBOOK)
   assert.equal(loaded?.length, 1, "损坏文件应回退旧 NSUserDefaults 快照")
 })
+
+test("空索引快照读写保留“已建立但 0 张卡”语义", async () => {
+  await loadStore()
+  cachePathValue = "/cache"
+  files.clear(); writes.length = 0
+  delete kv[LEGACY_KEY]
+  store.saveStoredIndex(NOTEBOOK, [])
+  assert.equal(JSON.parse(files.get(FILE)!).length, 0)
+  // 空数组必须被读回（而不是视为无快照），否则空答案范围每次查找都误报“索引尚未建立”
+  assert.deepEqual(store.loadStoredIndex(NOTEBOOK), [])
+})

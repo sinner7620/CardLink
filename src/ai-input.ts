@@ -69,6 +69,16 @@ export function preparedInputMatches(snapshot: any, identity: PreparedInputIdent
     && snapshot.sourceFingerprint === identity.sourceFingerprint && snapshot.policyFingerprint === identity.policyFingerprint
 }
 
+/**
+ * 分析题干统一取值：有题干文字的题目直接读原生文字，含图片的题目使用整卡 OCR 结果。
+ * runAnalysis 与 aiPreviewAnalysis 必须共用此口径——此前 runAnalysis 直接取
+ * prepared.questionText，未做过 OCR 准备的纯文字题会因 prepared 缺失抛错，
+ * 被静默计入“内容不可用”而整题丢弃。
+ */
+export function analysisQuestionText(input: { needsOCR: boolean; nativeText: string }, prepared?: { questionText?: string }): string {
+  return input.needsOCR ? String(prepared?.questionText ?? "") : input.nativeText
+}
+
 export interface AnalysisItem { reference: string; recordId: string; text: string }
 /** 按完整题目装包，引用表只包含实际进入请求的题目。 */
 export function packAnalysisItems(items: AnalysisItem[], budget = 120000) {

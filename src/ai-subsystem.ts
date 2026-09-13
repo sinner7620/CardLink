@@ -8,7 +8,7 @@ import { isMindMapNotebook } from "./note-tree"
 import { REPORT_FORMAT_INSTRUCTION, REPORT_SCHEMA, extractAIOutputText, parseAIReport } from "./ai-report"
 import { mineruDoneResults, mineruFailureMessage, mineruMissingDoneArchive, mineruResultItems, mineruServiceError, mineruStateSummary } from "./mineru-response"
 import { cardLinkDocumentPath, cardLinkTempPath } from "./storage-paths"
-import { packAnalysisItems, planQuestionInput, preparationPolicyFingerprint, preparedInputMatches, questionBody, questionNativeText, analysisUserContent, type AnalysisItem, type ModelImageAttachment } from "./ai-input"
+import { packAnalysisItems, planQuestionInput, preparationPolicyFingerprint, preparedInputMatches, questionBody, questionNativeText, analysisQuestionText, analysisUserContent, type AnalysisItem, type ModelImageAttachment } from "./ai-input"
 
 const SETTINGS_KEY = "mn4-answer-matcher.ai.settings.v1"
 const CREDENTIALS_KEY = "mn4-answer-matcher.ai.credentials.v1"
@@ -681,7 +681,7 @@ async function runAnalysis(job: any, subject: AISubject, profile: AIProfile) { t
       if (input.needsOCR && !matches) {
         throw new Error(prepared ? "题目、手写或发送范围已变化，旧 OCR 需重新准备" : "题目尚未准备")
       }
-      const question = input.needsOCR ? prepared!.questionText : input.nativeText
+      const question = analysisQuestionText(input, prepared)
       // 手写内容以独立图片随对应题目发送；仅在开启手写内容且准备时已另存时附带。
       const handwritingFiles = settings.privacy.handwriting && matches ? (prepared!.handwritingImages || []) : []
       const attached: ModelImageAttachment[] = []
@@ -708,7 +708,7 @@ async function runAnalysis(job: any, subject: AISubject, profile: AIProfile) { t
         } catch { missingAnswerIds.add(record.recordId) }
       }
       items.push({ reference: ref, recordId: record.recordId,
-        text: `${ref}\n题目：${prepared!.questionText}${handwritingLine}\n${answer ? `答案：${answer}\n` : ""}${settings.privacy.includeSourcePath ? `路径：${record.sourceNotebookTitle} > ${record.sourcePathTitles.join(" > ")}\n` : ""}状态：${["不会", "不熟", "掌握"][record.level]}；复习${record.reviewCount}次${settings.privacy.includeCustomCategories ? `；标签：${(record.manualCategories || []).join("、")}` : ""}${settings.privacy.includeReviewHistory ? `；历史：${record.history.map(item => item.level).join("→")}` : ""}` })
+        text: `${ref}\n题目：${question}${handwritingLine}\n${answer ? `答案：${answer}\n` : ""}${settings.privacy.includeSourcePath ? `路径：${record.sourceNotebookTitle} > ${record.sourcePathTitles.join(" > ")}\n` : ""}状态：${["不会", "不熟", "掌握"][record.level]}；复习${record.reviewCount}次${settings.privacy.includeCustomCategories ? `；标签：${(record.manualCategories || []).join("、")}` : ""}${settings.privacy.includeReviewHistory ? `；历史：${record.history.map(item => item.level).join("→")}` : ""}` })
       inputs.set(record.recordId, input)
     } catch (error) {
       unavailable++

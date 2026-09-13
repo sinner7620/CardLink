@@ -14,7 +14,7 @@ import { renderCardHtml } from "./card-html"
 import { loadStoredIndex, saveStoredIndex, storedIndexUpdatedAt, StoredAnswerIndexItem } from "./index-store"
 import { isInMindMap, nodeIdentifier } from "./mindmap-scope"
 import { collectChildMindMapNoteIds } from "./mindmap-candidate"
-import { notebookNotes } from "./note-tree"
+import { clearNotebookShapeCache, notebookNotes } from "./note-tree"
 import { IndexScope as MindMapScope, scopeKey } from "./scope-key"
 import type { RegexMatchingRules } from "./binding"
 import { createRegexKeyExtractor } from "./regex-matching"
@@ -76,6 +76,9 @@ export async function refreshIndex(scope: string | MindMapScope): Promise<Refres
   const normalized = typeof scope === "string" ? { notebookId: scope } : scope
   const { notebookId, rootNodeId } = normalized
   const key = scopeKey(normalized)
+  // 形态探测缓存可能在学习集未同步完整时写入错误结果且永不自纠（note-tree.ts），
+  // 重建索引是整体纠正的唯一时机，必须先失效再重新探测。
+  clearNotebookShapeCache()
   const notebook = MN.db.getNotebookById(notebookId)
   if (!notebook) throw new Error("找不到已绑定的答案脑图，可能已被删除")
 
@@ -136,7 +139,8 @@ function toStoredAnswer(answer: IndexedAnswer): StoredAnswerIndexItem {
 
 function restoreIndex(key: string): boolean {
   const stored = loadStoredIndex(key)
-  if (!stored?.length) return false
+  // 空数组同样是“已建立”的索引：表示该范围 0 张卡，而非尚未建立。
+  if (!stored) return false
   rememberAnswers(key, stored as IndexedAnswer[])
   const updatedAt = storedIndexUpdatedAt(key)
   if (updatedAt) indexUpdatedTimes.set(key, updatedAt)
