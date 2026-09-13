@@ -21,3 +21,10 @@
 ## 限制
 
 - 真机顶栏（MarginNote WebKit 窗口）视觉效果待验收；本轮为普通开发提交，安装包另起 b10。
+
+## 交付（2.4.1-b10）
+
+- 版本升至 `2.4.1-b10`（package.json），发布说明 `RELEASE_NOTES_v2.4.1-b10.md`；正式渠道身份 `marginnote.extension.mn4-answer-matcher` / `CardLink`，已解包核对 mnaddon.json。
+- 交付前对最终输入重跑 check、test（257 通过）、build；产物 `dist/CardLink-v2.4.1-b10.mnaddon`。
+- 已复制到 `E:\iCloudDrive\同步文件夹\CardLink-v2.4.1-b10.mnaddon`；SHA-256（源与复制件一致）：`8e8b9931f782fb5e79bd3a45008cf6e1857c63f91624efa663919557138f318a`。
+- 未推送 GitHub/Gitee 发布；远端发布需另行授权。
