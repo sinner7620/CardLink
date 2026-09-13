@@ -292,7 +292,7 @@ test("整条顶栏除按钮组外可拖动、Tab 居中且顶栏为白色", () =
   assert.match(source, /const closeButton = <button className="iconButton"/)
   assert.doesNotMatch(source, /windowControlCapsule/)
   assert.doesNotMatch(css, /windowControlCapsule|windowControlJelly/)
-  assert.match(css, /\.topBar \.iconButton \{[^}]*width: 44px;[^}]*height: 36px;/)
+  assert.match(css, /\.topBar \.iconButton \{[^}]*width: 42px;[^}]*height: 36px;/)
   assert.match(css, /prefers-reduced-motion: reduce/)
   assert.match(css, /\.topBar \{[\s\S]*background: #fff/)
   assert.match(css, /-webkit-backdrop-filter: none/)
