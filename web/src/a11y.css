@@ -48,3 +48,11 @@ label {
   position: absolute;
   inset: -6px;
 }
+
+/* 顶栏胶囊自己承担整体按压反馈；内部按钮不再单独变淡，伪元素也不得跨出胶囊。 */
+.windowControlCapsule .iconButton:active {
+  opacity: 1;
+}
+.windowControlCapsule .iconButton::after {
+  inset: 0;
+}

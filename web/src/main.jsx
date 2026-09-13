@@ -779,9 +779,9 @@ function App() {
   return <div className={`shell panelClose-${panelCloseSide} tab-${tab}`}>
     <main>
       <header className="topBar">
-        <div className="topTools topTools-left">{panelCloseSide === "left" && <>{closeButton}{refreshButton}</>}</div>
+        <div className="topTools topTools-left">{panelCloseSide === "left" && <div className="windowControlCapsule">{closeButton}{refreshButton}</div>}</div>
         <nav className="topNav">{entries.map(([key, name, count]) => <button key={key} className={tab === key ? "active" : ""} onClick={() => { setReviewFocusId(""); if (key !== "settings") setSettingsPane("root"); setTab(key) }}><strong>{name}</strong>{count > 0 && <b>{count}</b>}</button>)}</nav>
-        <div className="topTools topTools-right">{panelCloseSide === "right" && <>{refreshButton}{closeButton}</>}</div>
+        <div className="topTools topTools-right">{panelCloseSide === "right" && <div className="windowControlCapsule">{refreshButton}{closeButton}</div>}</div>
       </header>
       {locateHint && <div className="locateHintBanner" role="alert">{locateHint}</div>}
       {pendingNotice && <div className="pendingNotice" role="status"><i /><span>{pendingNotice}</span></div>}

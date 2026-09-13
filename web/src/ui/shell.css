@@ -467,19 +467,39 @@ body,
 .topTools-right {
   justify-self: end;
 }
-/* 窗口控制按钮直接位于顶栏：无胶囊容器、无底色、彼此收紧；
-   触控热区由 a11y.css 的 ::after 外扩 6px 保持；
-   悬停底色与按压缩放由下方 .topBar .iconButton 规则承担。 */
-.topBar .topTools {
-  gap: 0;
+.windowControlCapsule {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 44px;
+  width: 88px;
+  height: 36px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(252, 252, 253, .96);
+  box-shadow: 0 4px 18px rgba(15, 23, 42, .18), inset 0 1px 0 rgba(255, 255, 255, .92);
+  transform-origin: center;
 }
-.topBar .iconButton {
+.windowControlCapsule .iconButton {
   box-sizing: border-box;
-  width: 32px;
+  width: 44px;
   height: 36px;
   border: 0;
+  border-radius: 0;
   background: transparent;
   box-shadow: none;
+}
+.windowControlCapsule:active {
+  animation: windowControlJelly .42s cubic-bezier(.22, .9, .28, 1.18) both;
+}
+@keyframes windowControlJelly {
+  0% { transform: scale(1); }
+  24% { transform: scale(.94, 1.08); }
+  55% { transform: scale(1.04, .96); }
+  78% { transform: scale(.985, 1.02); }
+  100% { transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .windowControlCapsule:active { animation: none; }
 }
 @media (max-width: 800px) {
 .topBar {
