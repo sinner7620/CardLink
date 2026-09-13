@@ -2524,6 +2524,10 @@ function MistakeExport({ allRecords, action, onBack, initialRecordIds = [] }) {
 
   function estimatePages() {
     if (!selected.length) return 0
+    if (pageLayout === "compact") {
+      const pages = Math.ceil(selected.length / (include.answer && answerLayout === "after-each" ? 5 : 10))
+      return include.answer && answerLayout === "end" ? pages + Math.ceil(selected.length / 20) : pages
+    }
     const perPage = pageLayout === "one-per-page" ? 1 : pageLayout === "two-per-page" ? 2 : pageLayout === "three-per-page" ? 3 : 2
     let pages = Math.ceil(selected.length / perPage)
     if (include.answer) pages += Math.ceil(selected.length / 3)
@@ -2666,7 +2670,7 @@ function MistakeExport({ allRecords, action, onBack, initialRecordIds = [] }) {
     ["review", "复习信息", "等级、时间与复习次数"]
   ]
   const canSubmit = selected.length > 0 && Object.values(include).some(Boolean)
-  const pageLabel = { auto: "自动分页", "one-per-page": "一页一题", "two-per-page": "一页两题", "three-per-page": "一页三题" }[pageLayout]
+  const pageLabel = { auto: "自动分页", "one-per-page": "一页一题", "two-per-page": "一页两题", "three-per-page": "一页三题", compact: "紧凑 · 约10题/页" }[pageLayout]
   const answerLabel = answerLayout === "end" ? "答案文末集中" : "答案紧随题目"
   const exportInProgress = exportLoading || taskActive
   const exportProgress = Math.max(4, Math.min(100, Number(pdfTask?.progress) || (pdfTask?.status === "saving" ? 96 : exportLoading ? 6 : 32)))
@@ -2698,7 +2702,7 @@ function MistakeExport({ allRecords, action, onBack, initialRecordIds = [] }) {
 
         <ExportSection step="3" title="设置文件" description="选择格式；PDF 可继续设置题目密度与答案位置。">
           <div className="formatChoices exportFormatChoices"><button type="button" className={format === "pdf" ? "selected" : ""} aria-pressed={format === "pdf"} onClick={() => setFormat("pdf")}><b>PDF</b><span><strong>打印与练习</strong><small>保留图片、手写和书写区</small></span></button><button type="button" className={format === "md" ? "selected" : ""} aria-pressed={format === "md"} onClick={() => setFormat("md")}><b>MD</b><span><strong>编辑与归档</strong><small>Markdown 正文和 assets 图片</small></span></button></div>
-          {format === "pdf" && <div className="exportPdfSettings"><span className="exportControlLabel">每页题目密度</span><ExportSegmented label="每页题目密度" value={pageLayout} onChange={setPageLayout} options={[{ value: "auto", label: "自动", detail: "按内容分页" }, { value: "one-per-page", label: "1 题", detail: "留白最多" }, { value: "two-per-page", label: "2 题", detail: "均衡" }, { value: "three-per-page", label: "3 题", detail: "最紧凑" }]} />{include.answer && <><span className="exportControlLabel">答案位置</span><ExportSegmented label="答案位置" value={answerLayout} onChange={setAnswerLayout} options={[{ value: "after-each", label: "紧随题目", detail: "核对更直接" }, { value: "end", label: "文末集中", detail: "适合整套练习" }]} /></>}</div>}
+          {format === "pdf" && <div className="exportPdfSettings"><span className="exportControlLabel">每页题目密度</span><ExportSegmented label="每页题目密度" value={pageLayout} onChange={setPageLayout} options={[{ value: "auto", label: "自动", detail: "按内容分页" }, { value: "one-per-page", label: "1 题", detail: "留白最多" }, { value: "two-per-page", label: "2 题", detail: "均衡" }, { value: "three-per-page", label: "3 题", detail: "宽松" }, { value: "compact", label: "紧凑", detail: "约 10 题/页" }]} />{include.answer && <><span className="exportControlLabel">答案位置</span><ExportSegmented label="答案位置" value={answerLayout} onChange={setAnswerLayout} options={[{ value: "after-each", label: "紧随题目", detail: "核对更直接" }, { value: "end", label: "文末集中", detail: "适合整套练习" }]} /></>}</div>}
           <label className="exportFilenameField"><span>文件名</span><div className="filenameInput"><input value={filename} onChange={event => setFilename(event.target.value)} /><b>{format === "md" ? ".zip" : ".pdf"}</b></div></label>
         </ExportSection>
 
