@@ -122,22 +122,23 @@ test("PDF 支持自动、一页一题、一页两题和一页三题布局", asyn
   assert.match(twoPerPageWithAnswers, /answer-content figure\.drawing\{width:auto!important;max-width:46%!important/)
 })
 
-test("PDF 紧凑密度按 60% 宽度呈现卡片，答案位置沿用所选布局", async () => {
+test("PDF 自动密度按 60% 宽度呈现卡片，答案位置沿用所选布局", async () => {
   const { buildMistakePdfHtml } = await exportModule
   const details = Array.from({ length: 12 }, (_, index) => ({
     ...detail,
     record: { ...detail.record, recordId: `book:q-${index}`, sourceNoteId: `q-${index}`, sourceTitle: `题目${index + 1}` }
   }))
-  const html = buildMistakePdfHtml(details, { ...options, format: "pdf", pageLayout: "compact", answerLayout: "end" })
-  assert.match(html, /<body class="layout-compact">/)
+  const html = buildMistakePdfHtml(details, { ...options, format: "pdf", pageLayout: "auto", answerLayout: "end" })
+  assert.match(html, /<body class="layout-auto">/)
   assert.match(html, /class="pdf-flow pdf-question-flow"/)
   assert.match(html, /class="pdf-flow pdf-answer-flow"/)
   assert.doesNotMatch(html, /<section class="pdf-page/)
   assert.equal((html.match(/class="mistake question-unit"/g) || []).length, 12)
-  assert.match(html, /layout-compact \.card-content,\.layout-compact \.answer-content\{width:60%;min-width:0\}/)
-  assert.match(html, /layout-compact \.card-content \.text-block[^}]*font-size:11px/)
-  assert.match(html, /layout-compact \.card-content p,\.layout-compact \.answer-content p\{margin:2px 0\}/)
-  const after = buildMistakePdfHtml(details, { ...options, format: "pdf", pageLayout: "compact", answerLayout: "after-each" })
+  assert.match(html, /layout-auto \.card-content,\.layout-auto \.answer-content\{width:60%;min-width:0\}/)
+  assert.match(html, /layout-auto \.card-content \.text-block[^}]*font-size:11px/)
+  assert.match(html, /layout-auto \.card-content p,\.layout-auto \.answer-content p\{margin:2px 0\}/)
+  assert.match(html, /layout-auto \.writing-space\{display:none\}/)
+  const after = buildMistakePdfHtml(details, { ...options, format: "pdf", pageLayout: "auto", answerLayout: "after-each" })
   assert.match(after, /class="pdf-flow pdf-compact-flow"/)
   assert.equal((after.match(/class="mistake answer-unit"/g) || []).length, 12)
 })
