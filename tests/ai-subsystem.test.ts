@@ -145,7 +145,7 @@ test("AI 调度等待错题分页完成、受总开关门控并在分析中逐�
 })
 
 test("总开关关闭时 AI 运行时命令被原生统一门控，配置命令保持可用", () => {
-  const gate = source.match(/if \(!loadAISettings\(\)\.enabled\) throw new Error\("AI 错题分析未开启[\s\S]*?if \(command === "aiDeleteReport"\)/)
+  const gate = source.match(/if \(!loadAISettings\(\)\.enabled\) throw new CardLinkError\("aiDisabled"\)[\s\S]*?if \(command === "aiDeleteReport"\)/)
   assert.ok(gate, "运行时命令必须位于启用门闸之后")
   const gated = gate[0]
   for (const command of ["aiRunDueSchedules", "aiStartAnalysis", "aiGetJob", "aiPreviewAnalysis", "aiListReports", "aiGetReport", "aiGetCacheStats", "aiOpenEvidence"]) {
@@ -193,8 +193,8 @@ test("Foundation 与网络回调 NSNull 均在边界归一化，成功响应不�
   assert.match(source, /export function normalizeNativeJSON/)
   assert.match(source, /if \(isNativeNull\(value\)\) return null/)
   assert.match(source, /json = normalizeNativeJSON\(NSJSONSerialization\.JSONObjectWithDataOptions/)
-  assert.match(source, /if \(!isNativeNull\(error\)\) return reject\(new Error\(nativeErrorMessage\(error\)\)\)/)
-  assert.match(source, /if \(isNativeNull\(response\)\) return reject\(new Error\("网络请求未返回 HTTP 响应"\)\)/)
+  assert.match(source, /if \(!isNativeNull\(error\)\) return reject\(networkError\(nativeErrorMessage\(error\)\)\)/)
+  assert.match(source, /if \(isNativeNull\(response\)\) return reject\(new CardLinkError\("network"/)
   assert.match(source, /const responseData = isNativeNull\(data\) \? undefined : data/)
   assert.doesNotMatch(source, /if \(error\) return reject/)
   assert.doesNotMatch(source, /json\?\.error\?\.message \|\| json\?\.msg/)

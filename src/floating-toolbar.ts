@@ -29,8 +29,12 @@ export function createAnswerToolbar(): UIView {
   const toolbar = new UIView({ x: 0, y: 0, width: BUTTON_WIDTH, height: TOOLBAR_HEIGHT })
   toolbar.backgroundColor = UIColor.clearColor()
 
-  const answerButton = toolbarButton("查找答案", UI_COLORS.accent, "onAnswerToolbarClick:")
+  const answerButton = toolbarButton("查找答案", UI_COLORS.accent, "onAnswerToolbarSingleTap:")
   answerButton.frame = { x: 0, y: 0, width: BUTTON_WIDTH, height: BUTTON_HEIGHT }
+  const answerLongPress = new UILongPressGestureRecognizer(self, "onAnswerToolbarLongPress:")
+  answerLongPress.minimumPressDuration = 0.55
+  answerLongPress.cancelsTouchesInView = false
+  answerButton.addGestureRecognizer(answerLongPress)
   toolbar.addSubview(answerButton)
 
   const mistakeButton = toolbarButton("标记错题", UI_COLORS.action, "onMistakeToolbarClick:")
@@ -38,6 +42,7 @@ export function createAnswerToolbar(): UIView {
   toolbar.addSubview(mistakeButton)
 
   self.answerToolbarButton = answerButton
+  self.answerToolbarLongPressGesture = answerLongPress
   self.mistakeToolbarButton = mistakeButton
   const dropdown = new UIView({ x: 0, y: 0, width: BUTTON_WIDTH, height: DROPDOWN_HEIGHT })
   dropdown.backgroundColor = UIColor.colorWithHexString(UI_COLORS.surface)
@@ -151,6 +156,7 @@ export function destroyAnswerToolbar(): void {
   if (toolbar?.superview) toolbar.removeFromSuperview()
   self.answerToolbar = undefined
   self.answerToolbarButton = undefined
+  self.answerToolbarLongPressGesture = undefined
   self.mistakeToolbarButton = undefined
   const dropdown = self.mistakeLevelDropdown
   if (dropdown?.superview) dropdown.removeFromSuperview()

@@ -9,6 +9,8 @@ import { REPORT_FORMAT_INSTRUCTION, REPORT_SCHEMA, extractAIOutputText, parseAIR
 import { mineruDoneResults, mineruFailureMessage, mineruMissingDoneArchive, mineruResultItems, mineruServiceError, mineruStateSummary } from "./mineru-response"
 import { cardLinkDocumentPath, cardLinkTempPath } from "./storage-paths"
 import { packAnalysisItems, planQuestionInput, preparationPolicyFingerprint, preparedInputMatches, questionBody, questionNativeText, analysisQuestionText, analysisUserContent, type AnalysisItem, type ModelImageAttachment } from "./ai-input"
+import { CardLinkError } from "./errors"
+import { describeError } from "./error-messages"
 
 const SETTINGS_KEY = "mn4-answer-matcher.ai.settings.v1"
 const CREDENTIALS_KEY = "mn4-answer-matcher.ai.credentials.v1"
@@ -93,7 +95,7 @@ function cancelJob(job: any, detail = "任务已取消"): void {
 function ensureJobActive(job: any): void {
   if (!job) return
   if (!loadAISettings().enabled) cancelJob(job, "AI 已关闭")
-  if (job.cancelled) throw new Error(job.detail || "任务已取消")
+  if (job.cancelled) throw new CardLinkError("aiTaskCancelled", { detail: job.detail || "任务已取消" })
 }
 /** AI 运行时总闸：仪表盘据此向 Web 通报是否装载 AI 模块，AI 代码在开启前零执行。 */
 export function aiRuntimeEnabled(): boolean { return loadAISettings().enabled }
@@ -173,6 +175,10 @@ function responseError(json: any, status: number): string {
   return `HTTP ${status || "无响应"}`
 }
 
+function networkError(detail: string): CardLinkError {
+  return new CardLinkError(/超时|timed?\s*out|-1001/i.test(detail) ? "timeout" : "network", { detail })
+}
+
 function http(method: string, url: string, options: { headers?: Record<string, string>; json?: any; data?: any; timeoutMs?: number; job?: any } = {}): Promise<{ status: number; json?: any; data?: any }> {
   return new Promise((resolve, reject) => { try {
     ensureJobActive(options.job)
@@ -181,14 +187,14 @@ function http(method: string, url: string, options: { headers?: Record<string, s
     if (options.json !== undefined) { request.setValueForHTTPHeaderField("application/json", "Content-Type"); request.setHTTPBody(NSData.dataWithStringEncoding(JSON.stringify(options.json), 4)) } else if (options.data) request.setHTTPBody(options.data)
     NSURLConnection.sendAsynchronousRequestQueueCompletionHandler(request, NSOperationQueue.mainQueue(), (response: any, data: any, error: any) => {
       try { ensureJobActive(options.job) } catch (reason) { reject(reason); return }
-      if (!isNativeNull(error)) return reject(new Error(nativeErrorMessage(error)))
-      if (isNativeNull(response)) return reject(new Error("网络请求未返回 HTTP 响应"))
+      if (!isNativeNull(error)) return reject(networkError(nativeErrorMessage(error)))
+      if (isNativeNull(response)) return reject(new CardLinkError("network", { detail: "未返回 HTTP 响应" }))
       const raw = typeof response.statusCode === "function" ? response.statusCode() : response.statusCode
       const numericStatus = isNativeNull(raw) ? 0 : Number(raw), status = Number.isFinite(numericStatus) ? numericStatus : 0
       const responseData = isNativeNull(data) ? undefined : data
       let json: any
       try { if (responseData) json = normalizeNativeJSON(NSJSONSerialization.JSONObjectWithDataOptions(responseData, NSJSONReadingOptions.FragmentsAllowed)) } catch {}
-      if (status < 200 || status >= 300) return reject(new Error(responseError(json, status)))
+      if (status < 200 || status >= 300) return reject(new CardLinkError("network", { detail: responseError(json, status) }))
       resolve({ status, json, data: responseData })
     })
   } catch (error) { reject(error) } })
@@ -287,12 +293,12 @@ function readQuestionInput(record: any, settings: AISettings, reader = createMis
     ? readBoundMindMapHandwriting(String(record.sourceNotebookId), String(record.sourceNoteId))
     : { status: "none" as const, assets: [] }
   if (includeHandwriting && ["unsupported", "unreadable"].includes(handwriting.status)) {
-    throw new Error("手写内容无法读取，请检查原卡片或关闭手写内容发送")
+    throw new CardLinkError("handwritingUnavailable")
   }
   const boundHtml = appendBoundMindMapHandwriting("<body></body>", handwriting)
   const plan = planQuestionInput(raw, settings, boundHtml)
   if (!plan.needsOCR && !plan.hasText) {
-    throw new Error(plan.hasMedia ? "题目含图片但未开启题目识别（OCR）" : "没有可读取的题目文字")
+    throw new CardLinkError(plan.hasMedia ? "ocrRequired" : "questionTextMissing")
   }
   return { ...plan, sourceFingerprint: sha256Hex(JSON.stringify([record.sourceNotebookId, record.sourceNoteId,
     questionBody(raw), handwriting])), policyFingerprint: preparationPolicyFingerprint(settings),
@@ -371,7 +377,7 @@ function setOCRProgress(job: any, progress: number, detail: string): void {
   job.detail = detail
 }
 async function mineruOCR(dataUris: string[], job: any, progressStart = 10, progressEnd = 40, onProgress?: (progress: number, detail: string) => void): Promise<string> {
-  const settings = loadAISettings(), token = secret(settings.mineru.credentialRef); if (!token) throw new Error("MinerU 尚未设置 Token")
+  const settings = loadAISettings(), token = secret(settings.mineru.credentialRef); if (!token) throw new CardLinkError("aiCredentialMissing", { provider: "MinerU", credential: "Token" })
   ensureDirectory(cacheRoot()); const chunks: string[][] = []; for (let i = 0; i < dataUris.length; i += 50) chunks.push(dataUris.slice(i, i + 50)); const markdown: string[] = []
   const update = (ratio: number, detail: string) => {
     const progress = progressStart + (progressEnd - progressStart) * Math.max(0, Math.min(1, ratio))
@@ -429,7 +435,7 @@ async function mineruOCR(dataUris: string[], job: any, progressStart = 10, progr
 async function glmOCR(dataUris: string[], job: any, progressStart = 10, progressEnd = 40, onProgress?: (progress: number, detail: string) => void): Promise<string> {
   const settings = loadAISettings()
   const token = secret(settings.glmOcr.credentialRef)
-  if (!token) throw new Error("GLM-OCR 尚未设置 API Key")
+  if (!token) throw new CardLinkError("aiCredentialMissing", { provider: "GLM-OCR", credential: "API Key" })
   ensureDirectory(cacheRoot())
   const markdown: string[] = []
   const update = (ratio: number, detail: string) => {
@@ -475,7 +481,7 @@ async function selectedOCR(dataUris: string[], job: any, engine: OCREngine, prog
     : mineruOCR(dataUris, job, progressStart, progressEnd, onProgress)
 }
 async function callLLM(profile: AIProfile, prompt: string, job?: any, attachments: ModelImageAttachment[] = []) {
-  const key = secret(profile.credentialRef); if (!key) throw new Error(`${profile.name} 尚未设置 API Key`)
+  const key = secret(profile.credentialRef); if (!key) throw new CardLinkError("aiCredentialMissing", { provider: profile.name, credential: "API Key" })
   const system = `你是严谨的错题分析助手。只依据证据，以简洁中文生成错题报告。${REPORT_FORMAT_INSTRUCTION}`
   const chatCompletions = profile.type === "deepseek"
   // 无附件时保持纯字符串用户消息，与纯文本请求的既有行为完全一致。
@@ -587,7 +593,7 @@ async function processPreparationImage(job: any, recordId: string, imageDataUri:
   try {
     const input = assertPreparationCurrent(job, recordId)
     const record = loadMistakeState().records[recordId]
-    if (!record) throw new Error("错题记录不存在")
+    if (!record) throw new CardLinkError("mistakeRecordMissing")
     // 原生文字直读分支：不发送任何图片给 OCR；开启手写时仍保存手写附件。
     if (!input.needsOCR) {
       const handwritingImages = saveHandwritingImages(recordId, handwritingDataUris)
@@ -639,7 +645,7 @@ async function processPreparationImage(job: any, recordId: string, imageDataUri:
     finishPreparationItem(job, "success", handwritingImages.length ? `识别并保存完成，已另存 ${handwritingImages.length} 张手写图片` : "识别并保存完成", ocrText)
   } catch (reason) {
     if (job.cancelled) { job.status = "cancelled"; return }
-    const message = text((reason as any)?.message || reason, 300) || "OCR 失败"
+    const message = text(describeError(reason, "OCR 失败"), 300)
     finishPreparationItem(job, "failed", message, "", message)
   }
 }
@@ -712,7 +718,7 @@ async function runAnalysis(job: any, subject: AISubject, profile: AIProfile) { t
       inputs.set(record.recordId, input)
     } catch (error) {
       unavailable++
-      const reason = text((error as any)?.message || error, 80)
+      const reason = text(describeError(error), 80)
       failureReasons.set(reason, (failureReasons.get(reason) || 0) + 1)
     }
     job.progress = Math.max(Number(job.progress) || 0, 10 + Math.round((index + 1) / records.length * 30))
@@ -760,7 +766,7 @@ async function runAnalysis(job: any, subject: AISubject, profile: AIProfile) { t
   job.status = "done"; job.progress = 100; job.detail = "报告已生成"; job.reportId = saved.id
 } catch (error) {
   if (job.cancelled) { job.status = "cancelled"; return }
-  job.status = "failed"; job.error = text((error as any)?.message || error, 300)
+  job.status = "failed"; job.error = text(describeError(error), 300)
 } }
 
 export function isAICommand(command: string) { return command.startsWith("ai") }
@@ -786,16 +792,16 @@ export async function aiBridge(command: string, payload: any): Promise<any> {
   }
   if (command === "aiSetCredential") { const ref = text(payload?.credentialRef, 100); if (!ref) throw new Error("凭据引用无效"); const result = await popup({ title: "设置 API 凭据", message: payload?.persistence === "local" ? "将保存在插件本地存储，不具备系统 Keychain 加密" : "仅本次运行保存，不会返回网页界面", type: UIAlertViewStyle.SecureTextInput, buttons: ["保存"], canCancel: true }); const value = String(result.inputContent || "").trim(); if (result.buttonIndex < 0 || !value) return secretStatus(ref); if (payload?.persistence === "local") { const stored = persistentCredentials(); stored[ref] = value; setLocalDataByKey(stored, CREDENTIALS_KEY); delete sessionCredentials[ref] } else sessionCredentials[ref] = value; return secretStatus(ref) }
   if (command === "aiClearCredential") { const ref = text(payload?.credentialRef, 100), stored = persistentCredentials(); delete stored[ref]; delete sessionCredentials[ref]; setLocalDataByKey(stored, CREDENTIALS_KEY); return secretStatus(ref) }
-  if (command === "aiTestProvider") { const profile = loadAISettings().profiles.find(item => item.id === payload?.profileId); if (!profile) throw new Error("AI 服务不存在"); const result = await callLLM(profile, "生成测试报告：summary 为连接成功，其余数组为空。"); parseAIReport(result.text); return { connected: true, provider: profile.type, model: profile.model, endpoint: result.endpoint } }
-  if (command === "aiTestMinerU") { const settings = loadAISettings(), token = secret(settings.mineru.credentialRef); if (!token) throw new Error("MinerU 尚未设置 Token"); await http("GET", `${settings.mineru.baseUrl}/api/v4/extract-results/batch/connection-test`, { headers: { Authorization: `Bearer ${token}` }, timeoutMs: 15000 }).catch(error => { if (!/不存在|not found|HTTP 404/i.test(String((error as any)?.message || error))) throw error }); return { connected: true } }
+  if (command === "aiTestProvider") { const profile = loadAISettings().profiles.find(item => item.id === payload?.profileId); if (!profile) throw new CardLinkError("aiProviderMissing", { provider: String(payload?.profileId || "") }); const result = await callLLM(profile, "生成测试报告：summary 为连接成功，其余数组为空。"); parseAIReport(result.text); return { connected: true, provider: profile.type, model: profile.model, endpoint: result.endpoint } }
+  if (command === "aiTestMinerU") { const settings = loadAISettings(), token = secret(settings.mineru.credentialRef); if (!token) throw new CardLinkError("aiCredentialMissing", { provider: "MinerU", credential: "Token" }); await http("GET", `${settings.mineru.baseUrl}/api/v4/extract-results/batch/connection-test`, { headers: { Authorization: `Bearer ${token}` }, timeoutMs: 15000 }).catch(error => { if (!/不存在|not found|HTTP 404/i.test(String((error as any)?.params?.detail || (error as any)?.message || error))) throw error }); return { connected: true } }
   // 运行时命令的统一闸门：总开关未打开时，AI 分析、任务与报告子系统一律不运行。
-  if (!loadAISettings().enabled) throw new Error("AI 错题分析未开启，请先在设置中开启")
+  if (!loadAISettings().enabled) throw new CardLinkError("aiDisabled")
   if (command === "aiRunDueSchedules") { void runDueAIAnalyses(); return { accepted: true } }
   if (command === "aiStartQuestionPreparation") {
     const settings = loadAISettings()
     const studySetId = text(payload?.studySetId, 100)
     const studySet = (MN.db.allNotebooks() || []).find((item: any) => String(item?.topicId || "") === studySetId)
-    if (!studySet) throw new Error("学习集不存在")
+    if (!studySet) throw new CardLinkError("studySetMissing")
     const active = Object.values(preparationJobs).find((item: any) => !["done", "cancelled"].includes(item.status))
     if (active) throw new Error("已有题目准备任务正在进行，请等待完成或先取消")
     const finished = Object.keys(preparationJobs).filter(id => ["done", "cancelled"].includes(preparationJobs[id].status))
@@ -828,13 +834,13 @@ export async function aiBridge(command: string, payload: any): Promise<any> {
   if (command === "aiGetQuestionPreparationJob") return publicPreparationJob(preparationJobs[String(payload?.jobId)])
   if (command === "aiGetPreparationQuestion") {
     const job = preparationJobs[String(payload?.jobId)]
-    if (!job || !job.current) throw new Error("题目准备任务不存在")
+    if (!job || !job.current) throw new CardLinkError("preparationJobMissing")
     if (job.cancelled || job.status === "cancelled") throw new Error("题目准备任务已取消")
     if (job.current.recordId !== String(payload?.recordId || job.current.recordId)) throw new Error("当前题目已变化，请刷新任务状态")
     try {
       ensureJobActive(job)
       const record = loadMistakeState().records[job.current.recordId]
-      if (!record) throw new Error("错题记录不存在")
+      if (!record) throw new CardLinkError("mistakeRecordMissing")
       const input = readQuestionInput(record, loadAISettings(), job.reader)
       job.input = input
       job.current.boundHandwritingStatus = input.boundHandwritingStatus
@@ -852,16 +858,16 @@ export async function aiBridge(command: string, payload: any): Promise<any> {
         includeHandwriting: loadAISettings().privacy.handwriting === true,
         boundHandwritingStatus: input.boundHandwritingStatus, boundHandwritingCount: input.boundHandwritingCount }
     } catch (reason) {
-      const message = text((reason as any)?.message || reason, 300) || "读取题目失败"
+      const message = text(describeError(reason, "读取题目失败"), 300)
       finishPreparationItem(job, "failed", message, "", message)
-      throw new Error(message)
+      throw reason
     }
   }
   if (command === "aiSubmitPreparationImage") {
     const job = preparationJobs[String(payload?.jobId)]
     const recordId = String(payload?.recordId || "")
     const imageDataUri = String(payload?.imageDataUri || "")
-    if (!job || !job.current) throw new Error("题目准备任务不存在")
+    if (!job || !job.current) throw new CardLinkError("preparationJobMissing")
     if (job.cancelled || job.status === "cancelled") throw new Error("题目准备任务已取消")
     if (job.current.recordId !== recordId) throw new Error("当前题目已变化，请重新渲染")
     if (job.current.stage !== "rendering") return { accepted: false, duplicate: true }
@@ -876,7 +882,7 @@ export async function aiBridge(command: string, payload: any): Promise<any> {
   }
   if (command === "aiFailPreparationQuestion") {
     const job = preparationJobs[String(payload?.jobId)]
-    if (!job || !job.current) throw new Error("题目准备任务不存在")
+    if (!job || !job.current) throw new CardLinkError("preparationJobMissing")
     if (job.current.recordId !== String(payload?.recordId || "")) throw new Error("当前题目已变化")
     const message = text(payload?.error, 300) || "题目卡片渲染失败"
     finishPreparationItem(job, "failed", message, "", message)
@@ -884,7 +890,7 @@ export async function aiBridge(command: string, payload: any): Promise<any> {
   }
   if (command === "aiAdvanceQuestionPreparation") {
     const job = preparationJobs[String(payload?.jobId)]
-    if (!job) throw new Error("题目准备任务不存在")
+    if (!job) throw new CardLinkError("preparationJobMissing")
     if (job.status === "done" || job.status === "cancelled") return publicPreparationJob(job)
     if (!job.current || !PREPARATION_TERMINAL_STAGES.includes(job.current.stage)) throw new Error("当前题目尚未完成")
     job.position += 1
@@ -896,12 +902,12 @@ export async function aiBridge(command: string, payload: any): Promise<any> {
     if (job && !TERMINAL_JOB_STATUSES.includes(job.status)) cancelJob(job)
     return { cancelled: !!job }
   }
-  if (command === "aiStartAnalysis") { const settings = loadAISettings(); const subject = settings.subjects.find(item => item.id === payload?.subjectId), profile = settings.profiles.find(item => item.id === settings.defaultProfileId); if (!subject) throw new Error("科目不存在"); if (!profile) throw new Error("默认 AI 服务未配置"); if (hasActiveJob(subject.id)) throw new Error("该科目已有分析任务正在进行，请等待完成或先取消"); const job = { id: `job-${Date.now().toString(36)}`, subjectId: subject.id, status: "created", progress: 0, createdAt: new Date().toISOString(), cancelled: false }; jobs[job.id] = job; void runAnalysis(job, subject, profile); return { ...job } }
+  if (command === "aiStartAnalysis") { const settings = loadAISettings(); const subject = settings.subjects.find(item => item.id === payload?.subjectId), profile = settings.profiles.find(item => item.id === settings.defaultProfileId); if (!subject) throw new CardLinkError("subjectMissing"); if (!profile) throw new CardLinkError("aiProviderMissing"); if (hasActiveJob(subject.id)) throw new Error("该科目已有分析任务正在进行，请等待完成或先取消"); const job = { id: `job-${Date.now().toString(36)}`, subjectId: subject.id, status: "created", progress: 0, createdAt: new Date().toISOString(), cancelled: false }; jobs[job.id] = job; void runAnalysis(job, subject, profile); return { ...job } }
   if (command === "aiGetJob") return jobs[String(payload?.jobId)] || { status: "missing" }
   if (command === "aiCancelJob") { const job = jobs[String(payload?.jobId)]; if (job && !TERMINAL_JOB_STATUSES.includes(job.status)) cancelJob(job); return { cancelled: !!job } }
   if (command === "aiPreviewAnalysis") {
     const settings = loadAISettings(), subject = settings.subjects.find(item => item.id === payload?.subjectId)
-    if (!subject) throw new Error("科目不存在")
+    if (!subject) throw new CardLinkError("subjectMissing")
     const all = Object.values(loadMistakeState().records).filter(record => subject.studySetIds.includes(record.sourceNotebookId))
       .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))
     const records = all.slice(0, MAX_RECORDS), reader = createMistakeContentReader()

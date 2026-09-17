@@ -1,5 +1,9 @@
 # error-messages.ts — 用户可读错误文案
 ## 职责
-describeError：异常 → 用户可读文案（映射表 + 策划文案透传清单）；Error 实例取 message（避免 "Error: " 前缀使锚定失配）。
+`src/errors.ts` 定义稳定的 `ErrorCode`、参数与 `CardLinkError`；业务层只表达“错误是什么”。
+
+`describeError` 负责“错误怎么显示”：有码时通过 `error.<code>` 键和参数查文案表，无码时进入一个版本的关键字兼容层。`presentError` 在桥接边界产出 `{ code?, message }`，其中 `message` 已是用户文案。
 ## 验收
-透传清单（跳转超时/下载不完整/写入失败等）不被兜底吞掉。
+- 修改 `CardLinkError.message` 或抛错点文字不改变错误分类与最终文案。
+- passthrough 白名单不存在；策划过的文案必须通过错误码表达。
+- 未码化旧错误仍按既有关键字规则归类，未知错误使用安全兜底。

@@ -30,7 +30,7 @@ export function loadMatcherSettings(): MatcherSettings {
   if (settingsCache) return settingsCache
   const value = getLocalDataByKey(SETTINGS_KEY) as Partial<MatcherSettings> | undefined
   settingsCache = {
-    allowSameStudySetMindMap: value?.allowSameStudySetMindMap === true,
+    allowSameStudySetMindMap: value?.allowSameStudySetMindMap !== false,
     mistakeReviewCurves: normalizeMistakeReviewCurves(value?.mistakeReviewCurves),
     mistakeCustomCategories: normalizeMistakeCustomCategories(value?.mistakeCustomCategories),
     debugModeEnabled: value?.debugModeEnabled === true,

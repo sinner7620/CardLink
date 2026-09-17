@@ -17,6 +17,7 @@ const bridge = readFileSync("web/src/lib/mnBridge.js", "utf8")
 const core = readFileSync("src/rails-core.ts", "utf8")
 // 原生命令有两层分发：rails-core（插件核心）与 WebBridgeCommands（面板窗口自身命令）。
 const panelCommands = readFileSync("rails-native/WebBridgeCommands.js", "utf8")
+const panelController = readFileSync("rails-native/WebPanelController.js", "utf8")
 const mock = readFileSync("web/src/lib/previewBridge.js", "utf8")
 
 function webSentCommands(): Set<string> {
@@ -70,4 +71,9 @@ test("预览 mock 必须覆盖核心交互命令（防 mock 漂移）", () => {
 
 test("预览 mock 对未实现命令提供兜底响应", () => {
   assert.match(mock, /return \{ preview: true \}/)
+})
+
+test("桥接错误信封同时携带可选 code 与用户可读 message", () => {
+  assert.match(panelController, /error:\s*error\s*\?\s*\{\s*code:[^}]+message:\s*error\.message/s)
+  assert.match(panelController, /typeof error\.code === "string"/)
 })

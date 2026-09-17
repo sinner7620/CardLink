@@ -1,6 +1,7 @@
 import { delay, MN, NodeNote, popup, setTimeInterval, showHUD, UndoManager } from "marginnote"
 import type { MbBookNote } from "marginnote"
 import { renderCardHtml } from "./card-html"
+import { CardLinkError } from "./errors"
 import { appendBoundMindMapHandwriting, readBoundMindMapHandwriting } from "./bound-handwriting"
 import { answerCardHtml, refreshIndex } from "./matcher"
 import { findAnswersForQuestion } from "./answer-lookup"
@@ -481,7 +482,7 @@ export function recoverMistakesFromTags(): Promise<MistakeTagRecoveryResult> {
 }
 function recordById(recordId: string): MistakeRecord {
   const record = loadMistakeState().records[recordId]
-  if (!record) throw new Error("错题记录不存在")
+  if (!record) throw new CardLinkError("mistakeRecordMissing")
   return record
 }
 
@@ -676,13 +677,13 @@ async function confirmMistakeLevel(recordId: string, level: MistakeLevel): Promi
   if (!isMistakeLevel(Number(level))) throw new Error("错题等级必须为不会、不熟或掌握")
   const state = loadMistakeState()
   const stored = state.records[recordId]
-  if (!stored) throw new Error("错题记录不存在")
+  if (!stored) throw new CardLinkError("mistakeRecordMissing")
   const synced = syncManualTagsFromSource(stored)
   if (synced.cancelled) {
     archiveMistakeRecords([stored])
     removeMistakeRecord(state, recordId)
     saveMistakeState(state)
-    throw new Error("该错题的标签已在 MarginNote 内被移除，记录已同步取消")
+    throw new CardLinkError("mistakeTagRemoved")
   }
   const previous = synced.record
   const record = reviewMistake(
@@ -696,7 +697,7 @@ async function confirmMistakeLevel(recordId: string, level: MistakeLevel): Promi
     run: () => applySourceTags(record)
   }])
   if (!committed.length) {
-    throw new Error("复习失败：未能写入原题标签，请打开原题所在学习集后重试")
+    throw new CardLinkError("mistakeTagWriteFailed", { action: "复习" })
   }
   upsertMistakeRecord(state, withTagsWritten(record))
   saveMistakeState(state)
@@ -714,7 +715,7 @@ export function changeMistakeLevelById(recordId: string, level: MistakeLevel): P
 export async function resumeMistakeReviewById(recordId: string): Promise<MistakeRecord> {
   const state = loadMistakeState()
   const previous = state.records[recordId]
-  if (!previous) throw new Error("错题记录不存在")
+  if (!previous) throw new CardLinkError("mistakeRecordMissing")
   const record = resumeMistakeReview(previous, new Date(), loadMatcherSettings().mistakeReviewCurves)
   upsertMistakeRecord(state, record)
   saveMistakeState(state)
@@ -794,7 +795,7 @@ export async function reviewMistakesByIds(
 export async function setMistakeCategoryById(recordId: string, categories: string | string[]): Promise<MistakeRecord> {
   const state = loadMistakeState()
   const previous = state.records[recordId]
-  if (!previous) throw new Error("错题记录不存在")
+  if (!previous) throw new CardLinkError("mistakeRecordMissing")
   const manualCategories = cleanMistakeTags(categories).filter(tag => !isManagedMistakeTag(tag))
   const record = {
     ...previous,
@@ -808,7 +809,7 @@ export async function setMistakeCategoryById(recordId: string, categories: strin
     run: () => applySourceTags(record, previousTags)
   }])
   if (!committed.length) {
-    throw new Error("修改分类失败：未能写入原题标签，请打开原题所在学习集后重试")
+    throw new CardLinkError("mistakeTagWriteFailed", { action: "修改分类" })
   }
   upsertMistakeRecord(state, withTagsWritten(record))
   saveMistakeState(state)
@@ -1156,7 +1157,7 @@ export function saveMistakeReviewCurves(value: unknown): MistakeReviewCurves {
 export function setMistakeFavoriteById(recordId: string, favorite: boolean): MistakeRecord {
   const state = loadMistakeState()
   const previous = state.records[recordId]
-  if (!previous) throw new Error("错题记录不存在")
+  if (!previous) throw new CardLinkError("mistakeRecordMissing")
   const record: MistakeRecord = {
     ...previous,
     favorite: favorite === true,
@@ -1208,7 +1209,7 @@ const currentDbNoteResolver: ScopedNoteResolver = (_notebookId, noteId) => MN.db
 
 function questionHtml(record: MistakeRecord, resolveNote: ScopedNoteResolver = currentDbNoteResolver): string {
   const note = resolveNote(record.sourceNotebookId, record.sourceNoteId)
-  if (!note) throw new Error("原题卡片不存在或尚未同步")
+  if (!note) throw new CardLinkError("sourceNoteUnavailable")
   return renderCardHtml(note, "错题原题", id => resolveNote(record.sourceNotebookId, id), media, media)
 }
 
@@ -1237,9 +1238,9 @@ function previewQuestionHtml(record: MistakeRecord): string {
 export function mistakeQuestionById(recordId: string): MistakeQuestionData {
   const state = loadMistakeState()
   let record = state.records[recordId]
-  if (!record) throw new Error("错题记录不存在")
+  if (!record) throw new CardLinkError("mistakeRecordMissing")
   const note = MN.db.getNoteById(record.sourceNoteId)
-  if (!note) throw new Error("原题卡片不存在或尚未同步")
+  if (!note) throw new CardLinkError("sourceNoteUnavailable")
   const title = new NodeNote(note, record.sourceNotebookId).title?.trim() || record.sourceTitle
   if (title !== record.sourceTitle) {
     record = { ...record, sourceTitle: title, updatedAt: new Date(Math.max(Date.now(), (Date.parse(record.updatedAt) || 0) + 1)).toISOString() }
@@ -1323,14 +1324,14 @@ export function createMistakeContentReader(): MistakeContentReader {
   return {
     readQuestion(recordId: string): MistakeQuestionData {
       const record = loadMistakeState().records[recordId]
-      if (!record) throw new Error("错题记录不存在")
+      if (!record) throw new CardLinkError("mistakeRecordMissing")
       return { questionHtml: questionHtml(record, resolveNote) }
     },
     read(recordId: string): MistakeContentData {
       const record = loadMistakeState().records[recordId]
-      if (!record) throw new Error("错题记录不存在")
+      if (!record) throw new CardLinkError("mistakeRecordMissing")
       const note = resolveNote(record.sourceNotebookId, record.sourceNoteId)
-      if (!note) throw new Error("原题卡片不存在或尚未同步")
+      if (!note) throw new CardLinkError("sourceNoteUnavailable")
       const node = new NodeNote(note, record.sourceNotebookId)
       const { answers } = answerCandidatesForRecord(record, node, resolveNote)
       return { questionHtml: questionHtml(record, resolveNote), answers }
@@ -1342,13 +1343,13 @@ export function mistakeDetailById(recordId: string): MistakeDetailData {
   const detailStartedAt = Date.now()
   const state = loadMistakeState()
   const stored = state.records[recordId]
-  if (!stored) throw new Error("错题记录不存在")
+  if (!stored) throw new CardLinkError("mistakeRecordMissing")
   const synced = syncManualTagsFromSource(refreshRecord(stored))
   if (synced.cancelled) {
     archiveMistakeRecords([stored])
     removeMistakeRecord(state, recordId)
     saveMistakeState(state)
-    throw new Error("该错题的标签已在 MarginNote 内被移除，记录已同步取消")
+    throw new CardLinkError("mistakeTagRemoved")
   }
   const titleChanged = synced.record.sourceTitle !== stored.sourceTitle
   const record = titleChanged ? {
@@ -1361,7 +1362,7 @@ export function mistakeDetailById(recordId: string): MistakeDetailData {
     saveMistakeState(state)
   }
   const note = MN.db.getNoteById(record.sourceNoteId)
-  if (!note) throw new Error("原题卡片不存在或尚未同步")
+  if (!note) throw new CardLinkError("sourceNoteUnavailable")
   const node = new NodeNote(note, record.sourceNotebookId)
   const { answers, answerStatus, lookupDurationMs, answerHtmlDurationMs } = answerCandidatesForRecord(record, node)
   const questionHtmlStartedAt = Date.now()

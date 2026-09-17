@@ -845,12 +845,10 @@ function App() {
       {tab === "settings" && settingsPane === "root" && <section className="settingsPage">
         <div className="settingsColumns"><div className="settingsGroups settingsPrimary">
           <SettingsGroup title="答案匹配" tone="accent" items={[
-          ["bind", "同一学习集具体脑图绑定", data?.matching?.scopedBinding
-            ? "已开启：每个题目脑图可绑定具体答案脑图，点击关闭"
-            : "已关闭：点击开启，可选择同一学习集下的其他脑图", () => action("setScopedBinding", { enabled: !data?.matching?.scopedBinding }), <SvgSwitch checked={!!data?.matching?.scopedBinding} label="同一学习集具体脑图绑定" key="switch" />],
-          ["notebook", "绑定或更换答案脑图", data?.matching?.scopedBinding
-            ? "为当前题目脑图选择具体答案脑图"
-            : "当前按整个答案学习集绑定；开启上方选项可绑定具体脑图", () => action("bindAnswerNotebook")],
+          ["bind", "多题目脑图独立绑定", data?.matching?.scopedBinding
+            ? "已开启：每个题目脑图分别保存自己的答案脑图，互不覆盖"
+            : "已关闭：同一题目学习集共用答案学习集", () => action("setScopedBinding", { enabled: !data?.matching?.scopedBinding }), <SvgSwitch checked={!!data?.matching?.scopedBinding} label="多题目脑图独立绑定" key="switch" />],
+          ["notebook", "绑定或更换答案脑图", data?.matching?.scopedBinding ? "为当前题目脑图选择具体答案脑图" : "为当前题目学习集选择答案学习集", () => action("bindAnswerNotebook")],
           ["sliders", "设置答案匹配方式", data?.matching?.mode === "parent-order"
             ? `章节顺序配对：${data.matching.matchedGroups} 个父节点，${data.matching.pairs} 张卡片`
             : data?.matching?.mode === "regex"
@@ -1897,6 +1895,25 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, setManua
     }
   }
 
+  async function beginReviewMode() {
+    if (!visibleRecords.length) return
+    await action("startReviewMode", {
+      records: visibleRecords.map(item => ({
+        recordId: item.recordId,
+        sourceNoteId: item.sourceNoteId,
+        sourceNotebookId: item.sourceNotebookId,
+        sourceRootNodeId: item.sourceRootNodeId,
+        sourceTitle: item.sourceTitle,
+        sourceNotebookTitle: item.sourceNotebookTitle,
+        sourceRootTitle: item.sourceRootTitle,
+        sourcePathTitles: item.sourcePathTitles,
+        level: item.level,
+        reviewCount: item.reviewCount,
+        history: item.history
+      }))
+    }, false)
+  }
+
   function toggleQuestion(recordId) {
     const nextOpen = !(questionOpenById[recordId] === true)
     setQuestionOpenById(current => {
@@ -2035,7 +2052,7 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, setManua
     ].map(([key, label]) => <button aria-pressed={activeFilter === key} className={activeFilter === key ? "active" : ""} key={key} onClick={() => setActiveFilter(key)}>{label}<b>{counts[key]}</b></button>)}</nav><div><select aria-label="题目分类" value={categoryFilter} onChange={event => setCategoryFilter(event.target.value)}><option value="all">全部分类</option>{categories.map(category => <option key={category}>{category}</option>)}</select><select aria-label="掌握等级" value={levelFilter} onChange={event => setLevelFilter(event.target.value)}><option value="all">全部等级</option>{levelNames.map((name, level) => <option value={level} key={name}>{name}</option>)}</select></div></div>
     {activeFilter === "today" && <div className="reviewOverdueTools"><span><strong>今日任务量不够？</strong> 从逾期池随机补充：</span>{[1, 3, 5].map(count => <button type="button" key={count} onClick={() => addOverdue(count)}>+{count} 题</button>)}</div>}
     {queueNotice && <div className="reviewQueueNotice" role="status">{queueNotice}</div>}
-    <div className="reviewQueueHeading"><span><strong>{{ today: "今日队列", overdue: "逾期计划", upcoming: "未来计划", completed: "已结束" }[activeFilter]}</strong><small>完成评价后立即显示下次复习日期</small></span><div className="reviewQueueTools"><b>{visibleRecords.length} 道</b><button type="button" disabled={!visibleRecords.length} onClick={toggleAllQuestions}><MorphIcon from="collapse" to="expand" active={!allQuestionsOpen} />{allQuestionsOpen ? "收起全部题目" : "展开全部题目"}</button></div></div>
+    <div className="reviewQueueHeading"><span><strong>{{ today: "今日队列", overdue: "逾期计划", upcoming: "未来计划", completed: "已结束" }[activeFilter]}</strong><small>完成评价后立即显示下次复习日期</small></span><div className="reviewQueueTools"><button type="button" disabled={!visibleRecords.length} onClick={toggleAllQuestions}><MorphIcon from="collapse" to="expand" active={!allQuestionsOpen} />{allQuestionsOpen ? "收起全部题目" : "展开全部题目"}</button><button type="button" className="startReviewMode" disabled={!visibleRecords.length} onClick={beginReviewMode}>复习模式</button><b>共 {visibleRecords.length} 道题</b></div></div>
     <div className="reviewList">
     {!visibleRecords.length ? <Empty title="当前队列没有题目" text="可以切换其他复习状态或掌握等级查看。" icon={false} /> : visibleRecords.map(item => {
       const expanded = answerDetail?.record?.recordId === item.recordId

@@ -333,6 +333,154 @@ function focusNoteInMindmapByOfficialApi(noteId: string): void {
   MN.studyController.focusNoteInMindMapById(noteId)
 }
 
+export type FloatMindMapFocusResult = "dispatched" | "unavailable" | "failed"
+
+interface FloatMindMapFrameSnapshot {
+  container: any
+  frame: { x: number; y: number; width: number; height: number }
+}
+
+function belongsToCurrentStudyView(view: any): boolean {
+  try {
+    const studyView = MN.studyController?.view
+    let cursor = view
+    while (cursor) {
+      if (cursor === studyView) return true
+      cursor = cursor.superview
+    }
+  } catch {
+    return false
+  }
+  return false
+}
+
+function cachedFloatMindMapView(): any {
+  try {
+    const cached = self.answerNativeFloatMindMapView
+    if (cached?.superview && belongsToCurrentStudyView(cached)) return cached
+    const fromMNUtil = typeof MNUtil !== "undefined" ? (MNUtil as any).floatMindMapView : undefined
+    if (fromMNUtil?.superview && belongsToCurrentStudyView(fromMNUtil)) return fromMNUtil
+  } catch {
+    // 继续尝试从当前视图树中识别。
+  }
+  return undefined
+}
+
+function visibleView(view: any): boolean {
+  if (!view?.superview) return false
+  let cursor = view
+  while (cursor) {
+    if (cursor.hidden) return false
+    cursor = cursor.superview
+  }
+  return true
+}
+
+function discoverFloatMindMapView(): any {
+  const cached = cachedFloatMindMapView()
+  if (cached) return cached
+  try {
+    const controller = MN.studyController as any
+    const root = controller?.view
+    const mainMindMap = controller?.notebookController?.mindmapView
+    if (!root) return undefined
+    const queue = Array.from(root.subviews || []) as any[]
+    let inspected = 0
+    while (queue.length && inspected < 800) {
+      const candidate = queue.shift()
+      inspected += 1
+      if (!candidate) continue
+      if (candidate !== mainMindMap) {
+        try {
+          if (candidate.mindmapNodes !== undefined || candidate.selViewLst !== undefined) {
+            self.answerNativeFloatMindMapView = candidate
+            return candidate
+          }
+        } catch {
+          // 部分原生 UIView 不接受未知属性读取。
+        }
+      }
+      try { queue.push(...Array.from(candidate.subviews || [])) } catch { /* bridge-safe traversal */ }
+    }
+  } catch {
+    // 未识别到视图时保留原生 API 的默认行为。
+  }
+  return undefined
+}
+
+function topLevelFloatContainer(floatView: any): any {
+  const studyView = MN.studyController?.view
+  let container = floatView
+  while (container?.superview && container.superview !== studyView) container = container.superview
+  return container?.superview === studyView ? container : undefined
+}
+
+/**
+ * AddonLib 在真机识别过浮动脑图后会留下 floatMindMapView。它不是稳定公开接口，
+ * 因此这里只在对象已存在时保存其顶层容器 frame；无法识别时完全不碰宿主布局。
+ */
+function captureFloatMindMapFrame(): FloatMindMapFrameSnapshot | undefined {
+  try {
+    const studyView = MN.studyController?.view
+    let container = discoverFloatMindMapView()
+    if (!studyView || !container || !visibleView(container)) return
+    container = topLevelFloatContainer(container)
+    if (!container) return
+    const frame = container.frame
+    if (![frame?.x, frame?.y, frame?.width, frame?.height].every(Number.isFinite)) return
+    return {
+      container,
+      frame: { x: Number(frame.x), y: Number(frame.y), width: Number(frame.width), height: Number(frame.height) }
+    }
+  } catch {
+    return
+  }
+}
+
+function restoreFloatMindMapFrame(snapshot: FloatMindMapFrameSnapshot | undefined): void {
+  try {
+    if (!snapshot) return
+    const currentContainer = topLevelFloatContainer(discoverFloatMindMapView()) ?? snapshot.container
+    if (currentContainer?.superview) currentContainer.frame = snapshot.frame
+  } catch {
+    // 未公开宿主视图可能随版本变化；位置恢复失败不能阻断答案定位。
+  }
+}
+
+/**
+ * MarginNote 4 runtime API for its native floating card-source window.
+ * The method is present in the host/AddonLib but absent from the public npm
+ * typings, so it must remain capability-detected. The host exposes no readable
+ * float-focus state; successful dispatch means the method existed and returned
+ * without throwing, while device validation remains the final confirmation.
+ */
+export async function focusNoteInFloatMindMap(noteId: string): Promise<FloatMindMapFocusResult> {
+  const controller = MN.studyController as any
+  const focus = controller?.focusNoteInFloatMindMapById
+  if (typeof focus !== "function") {
+    recordRuntimeState("答案浮窗", "运行时接口不可用", `answerNoteId=${noteId}`)
+    return "unavailable"
+  }
+  try {
+    const existingFloatView = discoverFloatMindMapView()
+    if (self.answerNativeFloatLastNoteId === noteId && visibleView(existingFloatView)) {
+      recordRuntimeState("答案浮窗", "浮窗已显示目标答案，跳过重复聚焦", `answerNoteId=${noteId}`)
+      return "dispatched"
+    }
+    const frameSnapshot = captureFloatMindMapFrame()
+    focus.call(controller, noteId)
+    await delay(0.12)
+    restoreFloatMindMapFrame(frameSnapshot)
+    discoverFloatMindMapView()
+    self.answerNativeFloatLastNoteId = noteId
+    recordRuntimeState("答案浮窗", "已派发浮窗聚焦", `answerNoteId=${noteId}`)
+    return "dispatched"
+  } catch (error) {
+    captureDiagnosticError(error, "答案浮窗", `answerNoteId=${noteId}`)
+    return "failed"
+  }
+}
+
 const LOCATE_SYNC_OFF_HINT =
   "跳转失败，请检查脑图文档同步模式是否已设为“双向同步”或者“从文档定位到脑图”"
 

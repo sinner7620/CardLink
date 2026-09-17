@@ -15,7 +15,7 @@
     "build:source": "node build.mjs",
     "dev:web": "vite --config web/vite.config.js",
     "check": "tsc --noEmit",
-    "test": "tsx --experimental-test-module-mocks --test tests/ai-subsystem.test.ts tests/ai-input-behavior.test.ts tests/bridge-schema.test.ts tests/content-fingerprint.test.ts tests/domain.test.ts tests/mistake-export.test.ts tests/mistake-performance.test.ts tests/mistake-write-behavior.test.ts tests/plugin-events.test.ts tests/telemetry.test.ts tests/updater-behavior.test.ts tests/updater.test.ts tests/web-bridge.test.ts tests/web-render-smoke.test.ts tests/index-store-behavior.test.ts tests/card-preview.test.ts tests/review-detail-cache.test.ts"
+    "test": "tsx --experimental-test-module-mocks --test tests/ai-subsystem.test.ts tests/ai-input-behavior.test.ts tests/answer-card-creation.test.ts tests/bridge-schema.test.ts tests/content-fingerprint.test.ts tests/domain.test.ts tests/mistake-export.test.ts tests/mistake-performance.test.ts tests/mistake-write-behavior.test.ts tests/plugin-events.test.ts tests/telemetry.test.ts tests/updater-behavior.test.ts tests/updater.test.ts tests/web-bridge.test.ts tests/web-render-smoke.test.ts tests/index-store-behavior.test.ts tests/card-preview.test.ts tests/review-detail-cache.test.ts"
   },
   "dependencies": {
     "html2canvas": "1.4.1",

@@ -57,7 +57,8 @@ test("答案候选按卡片去重，并在唯一高置信匹配时收敛为单�
   ], []).length, 2)
 })
 import { readSafeNote } from "../src/safe-note"
-import { describeError } from "../src/error-messages"
+import { describeError, presentError } from "../src/error-messages"
+import { CardLinkError } from "../src/errors"
 import { renderCardHtml } from "../src/card-html"
 import { compareVersions } from "../src/version"
 import { freePositionFrame, isFrameFullyOutside } from "../src/answer-card-layout"
@@ -876,13 +877,25 @@ test("索引快照存 cachePath 文件并带旧存储迁移", () => {
 })
 
 
-test("describeError 透传已策划的用户文案，吞不掉具体提示", () => {
+test("describeError 优先按稳定错误码呈现，并为未码化错误保留正则兼容层", () => {
+  assert.equal(describeError(new CardLinkError("indexNotReady")), "答案索引尚未建立，请在插件菜单点击“刷新答案索引”")
   assert.equal(
-    describeError(new Error("原题脑图尚未加载完成，请稍后重试"), "fallback"),
-    "原题脑图尚未加载完成，请稍后重试"
+    describeError(new CardLinkError("mistakeTagWriteFailed", { action: "复习" })),
+    "复习失败：未能写入原题标签，请打开原题所在学习集后重试"
   )
-  assert.match(describeError(new Error("更新包下载不完整（4KB）"), "fallback"), /更新包下载不完整/)
+  assert.equal(describeError(new Error("原题脑图尚未加载完成，请稍后重试"), "fallback"), "fallback")
+  assert.equal(describeError(new Error("更新包下载不完整（4KB）"), "fallback"), "fallback")
   assert.equal(describeError(new Error("noteId invalid"), "fallback"), "所选卡片无效，请重新选择")
+})
+
+test("presentError 返回 Web 可直接展示的错误信封且不信任未知 code", () => {
+  assert.deepEqual(presentError(new CardLinkError("timeout", { detail: "连接服务" })), {
+    code: "timeout",
+    message: "网络请求超时：连接服务"
+  })
+  assert.deepEqual(presentError({ code: "notRegistered", message: "noteId invalid" }), {
+    message: "所选卡片无效，请重新选择"
+  })
 })
 
 test("跨脑图定位使用官方 MN4 卡片链接并保留 MN3 回退", () => {

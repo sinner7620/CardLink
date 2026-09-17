@@ -453,7 +453,7 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
       return __MN_ANSWER_CORE_GLOBAL__.cardToolbar.setEnabled(payload && payload.enabled === true, context.addon);
     }
     if (command === "dashboard") {
-      var dashboard = __MN_ANSWER_CORE_GLOBAL__.bridge(command, payload);
+      var dashboard = __MN_ANSWER_CORE_GLOBAL__.bridge(command, payload, context.addon);
       function attachPanelSettings(value) {
         if (value && value.matching) {
           value.matching.panelCloseButtonSide = context.panelCloseButtonSide();
@@ -479,7 +479,9 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
       }
       return { cancelled: !!task, id: task && task.id, status: task ? task.status : "idle" };
     }
-    var result = __MN_ANSWER_CORE_GLOBAL__.bridge(command, payload);
+    // 需要创建原生控件的命令必须拿到真正的 addon；WebPanelController 只负责
+    // 桥接与窗口，不具备 addon 上注册的 selector。
+    var result = __MN_ANSWER_CORE_GLOBAL__.bridge(command, payload, context.addon);
     if (command !== "exportMistakes" && command !== "previewMistakeExport") return result;
     if (result && typeof result.then === "function") return result.then(function (value) { return renderPdf(context, value); });
     return renderPdf(context, result);

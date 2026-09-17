@@ -50,9 +50,10 @@ import { validateRegexMatchingRules } from "./regex-matching"
 import { loadMatcherSettings, saveMatcherSettings } from "./settings"
 import { isCardToolbarEnabled } from "./card-toolbar-state"
 export { isCardToolbarEnabled, setCardToolbarEnabled } from "./card-toolbar-state"
-import { mindMapRoot, nodeIdentifier, MAIN_MINDMAP_SCOPE_ID } from "./mindmap-scope"
+import { isInMindMap, mindMapRoot, nodeIdentifier, MAIN_MINDMAP_SCOPE_ID } from "./mindmap-scope"
 import { collectChildMindMapNoteIds, mindMapScopeIdForNote } from "./mindmap-candidate"
 import { buildOrderedPairingForBinding } from "./ordered-pairing"
+import { selectReusableAnswerParent } from "./answer-card-creation"
 import {
   closeAnswerCard,
   syncAnswerCandidatesControl,
@@ -70,6 +71,7 @@ import { isMindMapNotebook, notebookNotes } from "./note-tree"
 import { chooseNotebook, closeNotebookPicker, onNotebookPickerAction } from "./notebook-picker"
 import { completePendingNoteNavigation, recordRuntimeState , captureDiagnosticError , maskText } from "./note-navigation"
 import { describeError } from "./error-messages"
+import { CardLinkError } from "./errors"
 import {
   ensureMnutilsEntrance,
   onMnutilsEntranceClick,
@@ -82,6 +84,19 @@ import {
   closeMistakeLevelPicker,
   onMistakeLevelPickerAction
 } from "./level-picker"
+import {
+  discardReviewMode,
+  onReviewModeExit,
+  onReviewModeIndex,
+  onReviewModeInfo,
+  onReviewModeNext,
+  onReviewModePrevious,
+  onReviewModeControlPress,
+  onReviewModeControlRelease,
+  onReviewModeControlHover,
+  restoreReviewModeToolbar,
+  startReviewMode
+} from "./review-mode"
 import {
   bindMistakeNotebook,
   legacyMistakeTagMigrationCompleted,
@@ -526,7 +541,7 @@ function saveMatchingTarget(
   target: BindingTarget
 ): void {
   if (scopedBindingEnabled()) {
-    if (!sourceRootNodeId) throw new Error("请先选中当前题目脑图中的任一卡片")
+    if (!sourceRootNodeId) throw new CardLinkError("questionNotSelected")
     setBinding(bindings, questionNotebookId, sourceRootNodeId, target)
   } else {
     bindings[questionNotebookId] = target
@@ -539,10 +554,10 @@ export function saveRegexMatchingRules(
   answerPattern: string
 ): { saved: true; mode: "regex" } {
   const questionNotebookId = currentNotebookId()
-  if (!questionNotebookId) throw new Error("请先打开题目脑图")
+  if (!questionNotebookId) throw new CardLinkError("notebookNotOpen")
   const source = sourceMindMap()
   if (scopedBindingEnabled() && !source) {
-    throw new Error("请先选中当前题目脑图中的任一卡片")
+    throw new CardLinkError("questionNotSelected")
   }
   const bindings = loadBindings()
   const target = getBindingForMode(
@@ -551,7 +566,7 @@ export function saveRegexMatchingRules(
     source?.rootNodeId,
     scopedBindingEnabled()
   )
-  if (!target) throw new Error("请先绑定答案脑图")
+  if (!target) throw new CardLinkError("bindingMissing")
   const regexRules = {
     questionPattern: String(questionPattern ?? "").trim(),
     answerPattern: String(answerPattern ?? "").trim()
@@ -570,12 +585,7 @@ export function saveRegexMatchingRules(
 
 export function setScopedBindingEnabled(enabled: boolean): void {
   saveMatcherSettings({ allowSameStudySetMindMap: enabled })
-  showHUD(
-    enabled
-      ? "已开启：可为每个题目脑图绑定具体答案脑图，包括同一学习集内的脑图"
-      : "已关闭：恢复按整个答案学习集绑定",
-    4
-  )
+  showHUD(enabled ? "已开启多题目脑图独立绑定" : "已关闭多题目脑图独立绑定", 3)
   notifyWorkbenchDataChanged()
 }
 
@@ -834,6 +844,29 @@ async function showAnswer(questionTitle: string, answer: IndexedAnswer, candidat
   )
 }
 
+async function openAnswerEditor(answerNoteId: string, answerNotebookId: string): Promise<void> {
+  const noteId = String(answerNoteId || "").trim()
+  if (!noteId) throw new Error("答案卡片没有有效 noteId，无法打开编辑器")
+  try {
+    if (typeof MNUtil !== "undefined" && typeof MNUtil.openNoteEditor === "function") {
+      await Promise.resolve(MNUtil.openNoteEditor(noteId))
+      return
+    }
+  } catch (error) {
+    recordRuntimeState("答案编辑", "MNUtil.openNoteEditor 调用失败", String(error))
+  }
+  const config = { topicid: answerNotebookId, cardedit: 1, cardid: noteId }
+  if (typeof MNUtil !== "undefined" && typeof MNUtil.setUIStatusByConfigAsync === "function") {
+    await MNUtil.setUIStatusByConfigAsync(config)
+    return
+  }
+  if (typeof MNUtil !== "undefined" && typeof MNUtil.setUIStatusByConfig === "function") {
+    await Promise.resolve(MNUtil.setUIStatusByConfig(config))
+    return
+  }
+  throw new Error("当前 MarginNote 环境不支持打开原生卡片编辑器")
+}
+
 /** 候选长条点击：复用 beta.61 的 MarginNote 原生多答案选择弹窗。 */
 export async function onChooseAnswerCandidate(): Promise<void> {
   await runSafely(async () => {
@@ -894,6 +927,7 @@ interface AnswerLookupContext {
   questionNotebookId: string
   question: NodeNote
   lookupQuestion: NodeNote
+  lookupQuestionNoteId: string
   mistakeContext: ReturnType<typeof mistakeAnswerContext> | undefined
   sourceNotebookId: string
   sourceRootNodeId: string
@@ -908,13 +942,15 @@ interface AnswerLookupContext {
  * 错题上下文解析 → 存储目标解析（含错题记录回退）→ 标题/路径归一。
  * 此前两处各写一遍，规则漂移会导致"工具栏能查到、工作台查不到"。
  */
-function resolveAnswerLookupContext(): ({ error: string; context?: undefined } | { error?: undefined } & AnswerLookupContext) {
+function resolveAnswerLookupContext(questionOverride?: NodeNote): ({ error: string; context?: undefined } | { error?: undefined } & AnswerLookupContext) {
   const questionNotebookId = currentNotebookId()
   if (!questionNotebookId) return { error: "请先打开题目脑图" }
-  const question = selectedQuestion()
+  const question = questionOverride ?? selectedQuestion()
   if (!question) return { error: "请先选中一张题目卡片" }
   const mistakeContext = mistakeAnswerContext(question, questionNotebookId)
   const lookupQuestion = mistakeContext?.sourceQuestion ?? question
+  const lookupQuestionNoteId = String(lookupQuestion.note?.noteId ?? "").trim()
+  if (!lookupQuestionNoteId) return { error: "所选题目卡片没有有效的 noteId，请重新选择" }
   const sourceNotebookId = mistakeContext?.record.sourceNotebookId ?? questionNotebookId
   const sourceRootNodeId = sourceMindMapId(sourceNotebookId, lookupQuestion)
   const storedTarget = bindingForSource(sourceNotebookId, sourceRootNodeId) ??
@@ -937,6 +973,7 @@ function resolveAnswerLookupContext(): ({ error: string; context?: undefined } |
     questionNotebookId,
     question,
     lookupQuestion,
+    lookupQuestionNoteId,
     mistakeContext,
     sourceNotebookId,
     sourceRootNodeId,
@@ -956,8 +993,184 @@ function answerNoteExists(answer: IndexedAnswer): boolean {
   }
 }
 
-export async function findCurrentAnswer(allowIndexRetry = true): Promise<void> {
-  const resolved = resolveAnswerLookupContext()
+function noteCandidatesForAnswerTarget(answerTarget: BindingTarget): Array<{
+  value: any
+  id: string
+  title: string
+  pathTitles: string[]
+}> {
+  const notebook = MN.db.getNotebookById(answerTarget.notebookId)
+  if (!notebook) return []
+  const childMapIds = collectChildMindMapNoteIds(notebookNotes(notebook))
+  return notebookNotes(notebook).flatMap(note => {
+    try {
+      const node = new NodeNote(note, answerTarget.notebookId)
+      if (!isInMindMap(node, answerTarget.rootNodeId, childMapIds)) return []
+      return [{
+        value: note,
+        id: nodeIdentifier(node),
+        title: node.title?.trim() || "",
+        pathTitles: node.ancestorNodes.map(ancestor => ancestor.title?.trim()).filter(Boolean) as string[]
+      }]
+    } catch {
+      return []
+    }
+  })
+}
+
+function noteIdOf(value: any): string {
+  return String(value?.noteId ?? "").trim()
+}
+
+function answerTargetRoot(answerTarget: BindingTarget): any | undefined {
+  const rootNodeId = String(answerTarget.rootNodeId ?? "").trim()
+  if (!rootNodeId || rootNodeId === MAIN_MINDMAP_SCOPE_ID) return undefined
+  const root = MN.db.getNoteById(rootNodeId)
+  if (!root || String(root.notebookId ?? "") !== answerTarget.notebookId) {
+    throw new CardLinkError("answerTargetInvalid")
+  }
+  return root
+}
+
+/**
+ * MN Utils' MNNote.addAsChildNote is the preferred tree-mutation wrapper. Its
+ * implementation normalizes both notes through realGroupNoteForTopicId before
+ * calling MbBookNote.addChild, which is required for child-mind-map roots.
+ * AddonLib is optional in CardLink, so the underlying host method remains a
+ * capability-checked fallback. Every path is verified by re-reading parentNote.
+ */
+function attachAnswerChild(parent: any, child: any, notebookId: string): void {
+  const parentId = noteIdOf(parent)
+  const childId = noteIdOf(child)
+  if (!parentId || !childId) {
+    throw new CardLinkError("answerCardCreationFailed", { detail: "目标父节点或新卡片 ID 无效" })
+  }
+  const isAttached = (): boolean => {
+    const liveChild = MN.db.getNoteById(childId)
+    return String(liveChild?.parentNote?.noteId ?? "") === parentId
+  }
+
+  try {
+    if (typeof MNNote !== "undefined" && typeof MNNote.new === "function") {
+      const wrappedParent = MNNote.new(parentId, false)
+      if (wrappedParent && typeof wrappedParent.addAsChildNote === "function") {
+        wrappedParent.addAsChildNote(child, false)
+        MN.db.savedb()
+        if (isAttached()) return
+      }
+    }
+  } catch (error) {
+    recordRuntimeState("答案匹配", "MNNote 挂载未生效", String(error))
+  }
+
+  const liveParent = MN.db.getNoteById(parentId) as any
+  const liveChild = MN.db.getNoteById(childId)
+  if (!liveParent || String(liveParent.notebookId ?? "") !== notebookId || !liveChild) {
+    throw new CardLinkError("answerCardCreationFailed", { detail: "答案父节点或新卡片不存在" })
+  }
+  if (typeof liveParent.addChild !== "function") {
+    throw new CardLinkError("answerCardCreationFailed", { detail: "当前 MarginNote 版本不支持脑图节点挂载" })
+  }
+  liveParent.addChild(liveChild)
+  MN.db.savedb()
+  if (!isAttached()) {
+    throw new CardLinkError("answerCardCreationFailed", { detail: "新卡片没有挂载到绑定的答案脑图" })
+  }
+}
+
+function createTitledAnswerNote(title: string, notebookId: string): any {
+  // The method is in the official JSBMbModelTool header/documentation but is
+  // still missing from the published `marginnote` package's MbModelTool type.
+  const db = MN.db as typeof MN.db & {
+    createNoteWithTitleTopicid(noteTitle: string, topicId: string): any
+  }
+  const created = db.createNoteWithTitleTopicid(title, notebookId)
+  if (!created || !noteIdOf(created)) {
+    throw new CardLinkError("answerCardCreationFailed", { detail: "MarginNote 没有返回新卡片" })
+  }
+  created.noteTitle = title
+  return created
+}
+
+function verifyAnswerPlacement(noteId: string, answerTarget: BindingTarget): any {
+  const created = MN.db.getNoteById(noteId)
+  if (!created || String(created.notebookId ?? "") !== answerTarget.notebookId) {
+    throw new CardLinkError("answerCardCreationFailed", { detail: "新卡片未写入绑定的答案学习集" })
+  }
+  const childMapIds = childMapIdsForNotebook(answerTarget.notebookId)
+  const node = new NodeNote(created, answerTarget.notebookId)
+  if (!isInMindMap(node, answerTarget.rootNodeId, childMapIds)) {
+    throw new CardLinkError("answerCardCreationFailed", { detail: "新卡片未落入绑定的答案脑图" })
+  }
+  return created
+}
+
+async function createAnswerCardFromQuestion(
+  resolved: AnswerLookupContext,
+  _openEditorAfterCreation: boolean
+): Promise<void> {
+  const { answerTarget, lookupQuestionNoteId, questionTitle, path } = resolved
+  if (!answerTarget) return
+  const creationKey = `${answerTarget.notebookId}:${answerTarget.rootNodeId || "*"}:${lookupQuestionNoteId}`
+  if (self.answerCardCreationKey === creationKey) return showHUD("正在生成答案卡片，请稍候")
+  self.answerCardCreationKey = creationKey
+  const createdNoteIds: string[] = []
+  try {
+    const targetNotebook = MN.db.getNotebookById(answerTarget.notebookId)
+    if (!targetNotebook) throw new CardLinkError("bindingNotebookMissing")
+    // 弹窗之后不再读取原题原生对象，也不克隆原题。官方创建 API 直接在答案
+    // 学习集生成同名空卡，随后按绑定 rootNodeId 明确挂入答案脑图。
+    const targetRoot = answerTargetRoot(answerTarget)
+    const candidatesBeforeCreation = noteCandidatesForAnswerTarget(answerTarget)
+    const reusableParent = selectReusableAnswerParent(path, candidatesBeforeCreation, answerTarget.rootNodeId)
+    let answerParent = reusableParent ?? targetRoot
+    let createdParent: any
+    // ancestorNodes 以直接父节点开头。直属绑定根节点的题目不再额外复制根；
+    // 其余题目在答案脑图没有唯一对应父节点时，仅创建同名直接父节点。
+    if (!reusableParent && path.length > 1) {
+      createdParent = createTitledAnswerNote(path[0] || "未命名父节点", answerTarget.notebookId)
+      createdNoteIds.push(noteIdOf(createdParent))
+      if (targetRoot) attachAnswerChild(targetRoot, createdParent, answerTarget.notebookId)
+      answerParent = createdParent
+    }
+    const created = createTitledAnswerNote(questionTitle, answerTarget.notebookId)
+    createdNoteIds.push(noteIdOf(created))
+    if (answerParent) attachAnswerChild(answerParent, created, answerTarget.notebookId)
+    MN.db.setNotebookSyncDirty(answerTarget.notebookId)
+    MN.db.savedb()
+    const verified = verifyAnswerPlacement(noteIdOf(created), answerTarget)
+    MN.app.refreshAfterDBChanged(answerTarget.notebookId)
+    recordRuntimeState(
+      "答案匹配",
+      "已生成答案卡片",
+      `answerNoteId=${verified.noteId} targetNotebookId=${answerTarget.notebookId}` +
+        ` targetRootNodeId=${answerTarget.rootNodeId || MAIN_MINDMAP_SCOPE_ID}` +
+        ` reusedParent=${Boolean(reusableParent)} createdParent=${Boolean(createdParent)}`
+    )
+    showHUD(reusableParent ? "已加入现有父节点（未重复创建分支）" : createdParent ? "已在答案脑图创建父节点和答案卡片" : "已在答案脑图生成答案卡片", 4)
+    // 新卡尚未进入索引，直接用真实 noteId 打开编辑器；既便来自单击查找，
+    // 用户也能立即填写答案，同时严格不触发索引刷新。
+    await openAnswerEditor(String(verified.noteId), answerTarget.notebookId)
+  } catch (error) {
+    // 创建链失败时只回滚本次生成的卡片，避免把半成品留在题目脑图或学习集根层。
+    for (const noteId of createdNoteIds.reverse()) {
+      try { if (noteId) MN.db.deleteBookNote(noteId) } catch { /* best-effort rollback */ }
+    }
+    try { MN.db.savedb() } catch { /* preserve original error */ }
+    if (error instanceof CardLinkError) throw error
+    const detail = String((error as { message?: unknown } | null | undefined)?.message ?? error).slice(0, 160)
+    throw new CardLinkError("answerCardCreationFailed", { detail })
+  } finally {
+    if (self.answerCardCreationKey === creationKey) self.answerCardCreationKey = undefined
+  }
+}
+
+export async function findCurrentAnswer(
+  allowIndexRetry = true,
+  questionOverride?: NodeNote,
+  openInEditor = false
+): Promise<void> {
+  const resolved = resolveAnswerLookupContext(questionOverride)
   if (resolved.error !== undefined) return showHUD(resolved.error)
   const { questionNotebookId, lookupQuestion, mistakeContext } = resolved
   const bindingSourceNotebookId = resolved.sourceNotebookId
@@ -1010,7 +1223,7 @@ export async function findCurrentAnswer(allowIndexRetry = true): Promise<void> {
       : answerTarget.matchMode === "regex"
         ? `题目规则未提取到可匹配键，或答案规则没有对应结果：${questionTitle}`
         : `未找到同标题答案：${questionTitle}`
-    if (!allowIndexRetry) return showHUD(`${notFoundMessage}；刷新索引后仍未匹配到答案`, 4)
+    if (!allowIndexRetry) return showHUD(notFoundMessage, 4)
     const updatedAt = answerIndexUpdatedAt(answerTarget)
     const updatedText = updatedAt && !Number.isNaN(new Date(updatedAt).getTime())
       ? new Date(updatedAt).toLocaleString("zh-CN", { hour12: false })
@@ -1018,24 +1231,29 @@ export async function findCurrentAnswer(allowIndexRetry = true): Promise<void> {
     const retry = await popup({
       title: "没有匹配到答案",
       message: `${notFoundMessage}\n索引更新时间：${updatedText}`,
-      buttons: ["取消", "刷新索引后重试"],
+      buttons: ["刷新索引后重试", "生成答案卡片"],
       canCancel: true
     })
-    if (retry.buttonIndex !== 1) return
+    if (retry.buttonIndex < 0) return
+    if (retry.buttonIndex === 1) {
+      await createAnswerCardFromQuestion(resolved, openInEditor)
+      return
+    }
     HUDController.show("正在刷新答案索引并重试…")
     try {
       await refreshIndex(answerTarget)
     } finally {
       HUDController.hidden()
     }
-    return findCurrentAnswer(false)
+    return findCurrentAnswer(false, questionOverride, openInEditor)
   }
   // 候选答案默认打开排序后的第一个（路径匹配分最高），不再弹窗打断；
   // 全部候选随窗口顶部下拉条提供切换。
   const answer = matches[0]
   if (answer) {
     recordRuntimeState("答案匹配", "最终选择答案", `answerNoteId=${answer.noteId} answerNodeId=${answer.id} candidates=${matches.length}`)
-    await showAnswer(questionTitle, answer, answerCandidatesForDisplay(matches, resolved.path))
+    if (openInEditor) await openAnswerEditor(answer.noteId, answerTarget.notebookId)
+    else await showAnswer(questionTitle, answer, answerCandidatesForDisplay(matches, resolved.path))
   }
 }
 
@@ -1051,6 +1269,21 @@ async function runSafely(action: () => Promise<void>): Promise<void> {
 export async function onAnswerToolbarClick(): Promise<void> {
   hideAnswerToolbar()
   await runSafely(findCurrentAnswer)
+}
+
+/** 单击立即查找并打开 CardLink 答案窗口，不再等待双击判定窗口。 */
+export function onAnswerToolbarSingleTap(): void {
+  self.answerToolbarTapStartedAt = Date.now()
+  if (Date.now() - Number(self.answerToolbarSuppressTapUntil || 0) < 1200) return
+  void onAnswerToolbarClick()
+}
+
+/** 长按“查找答案”按钮：匹配真实答案 noteId 后打开 MarginNote 原生编辑器。 */
+export function onAnswerToolbarLongPress(sender: any): void {
+  if (!sender || Number(sender.state) !== 1) return
+  self.answerToolbarSuppressTapUntil = Date.now()
+  hideAnswerToolbar()
+  void runSafely(() => findCurrentAnswer(true, undefined, true))
 }
 
 async function markSelectedQuestions(level?: number): Promise<void> {
@@ -1278,7 +1511,6 @@ export async function openMenu(): Promise<void> {
     [scoped ? "绑定/更换具体答案脑图" : "绑定/更换答案学习集", () => runSafely(bindAnswerNotebook)],
     ["刷新答案索引", () => runSafely(refreshCurrentIndex)],
     [`设置匹配方式：${matchingModeLabel(answerTarget)}`, () => runSafely(configureAnswerMatching)],
-    [`同学习集脑图绑定：${scoped ? "已开启" : "已关闭"}`, () => setScopedBindingEnabled(!scoped)],
     ["检查插件更新", () => checkForUpdates(true)],
     ["解除当前答案绑定", () => runSafely(unbindCurrent)]
   ]
@@ -1337,6 +1569,7 @@ export const lifecycle = defineLifecycleHandlers({
       }
       ensureMnutilsEntrance()
       void completePendingNoteNavigation(notebookId)
+      void delay(0.15).then(restoreReviewModeToolbar)
       recordRuntimeState("生命周期", "notebookWillOpen 调度完成", `openedNotebookId=${notebookId}`)
     },
     notebookWillClose() {
@@ -1360,6 +1593,7 @@ export const lifecycle = defineLifecycleHandlers({
       closeAnswerCard()
       closeNotebookPicker()
       closeMistakeLevelPicker()
+      discardReviewMode()
       stopMistakeReminderTimer()
       recordRuntimeState("生命周期", "sceneDidDisconnect 完成")
     }
@@ -1382,6 +1616,17 @@ export const lifecycle = defineLifecycleHandlers({
 })
 
 export { ensureMnutilsEntrance, onMnutilsEntranceClick, onMnutilsEntranceLongPress, onMnutilsEntrancePan }
+export {
+  onReviewModeControlPress,
+  onReviewModeControlRelease,
+  onReviewModeControlHover,
+  onReviewModeExit,
+  onReviewModeIndex,
+  onReviewModeInfo,
+  onReviewModeNext,
+  onReviewModePrevious,
+  startReviewMode
+}
 
 export const handlers = defineEventHandlers<(typeof events)[number]>({
   onPopupMenuOnNote(sender) {
@@ -1405,6 +1650,8 @@ export const handlers = defineEventHandlers<(typeof events)[number]>({
     await delay(0.15)
     if (shownAt !== self.answerToolbarShownAt) return
     if (self.mistakeLevelDropdown && !self.mistakeLevelDropdown.hidden) return
+    // 第一次按钮轻点可能关闭宿主卡片菜单；给长按识别器保留完整按压窗口。
+    if (Date.now() - Number(self.answerToolbarTapStartedAt || 0) < 500) return
     if (isCurrentNotePopupStillVisible()) return
     self.answerToolbarNoteId = undefined
     self.answerToolbarTargetRect = undefined

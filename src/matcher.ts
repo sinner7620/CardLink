@@ -1,6 +1,7 @@
 import { delay, MN, NodeNote } from "marginnote"
 import type { MbBookNote } from "marginnote"
 import { captureDiagnosticError, recordRuntimeState } from "./note-navigation"
+import { CardLinkError } from "./errors"
 import {
   AnswerLike,
   buildIndex,
@@ -80,7 +81,7 @@ export async function refreshIndex(scope: string | MindMapScope): Promise<Refres
   // 重建索引是整体纠正的唯一时机，必须先失效再重新探测。
   clearNotebookShapeCache()
   const notebook = MN.db.getNotebookById(notebookId)
-  if (!notebook) throw new Error("找不到已绑定的答案脑图，可能已被删除")
+  if (!notebook) throw new CardLinkError("bindingNotebookMissing")
 
   const byId = new Map<string, IndexedAnswer>()
   let skippedCards = 0
@@ -191,7 +192,7 @@ export function findAnswerByReference(
 ): IndexedAnswer | undefined {
   const key = scopeKey(scope)
   if (!answersByReference.has(key) && !restoreIndex(key)) {
-    throw new Error("答案索引尚未建立，请在插件菜单点击“刷新答案索引”")
+    throw new CardLinkError("indexNotReady")
   }
   const lookup = answersByReference.get(key)
   for (const reference of references) {
@@ -206,7 +207,7 @@ export function findAnswerByReference(
 export function answerReferenceIds(scope: string | MindMapScope): Set<string> {
   const key = scopeKey(scope)
   if (!answersByScope.has(key) && !restoreIndex(key)) {
-    throw new Error("答案索引尚未建立，请在插件菜单点击“刷新答案索引”")
+    throw new CardLinkError("indexNotReady")
   }
   const references = new Set<string>()
   for (const answer of answersByScope.get(key) ?? []) {
@@ -223,7 +224,7 @@ export function findAnswers(
 ): IndexedAnswer[] {
   const key = scopeKey(scope)
   if (!indexes.has(key) && !restoreIndex(key)) {
-    throw new Error("答案索引尚未建立，请在插件菜单点击“刷新答案索引”")
+    throw new CardLinkError("indexNotReady")
   }
   const index = indexes.get(key)
   const matchesById = new Map<string, IndexedAnswer>()
@@ -247,7 +248,7 @@ export function findAnswersByRegex(
 ): IndexedAnswer[] {
   const key = scopeKey(scope)
   if (!answersByScope.has(key) && !restoreIndex(key)) {
-    throw new Error("答案索引尚未建立，请在插件菜单点击“刷新答案索引”")
+    throw new CardLinkError("indexNotReady")
   }
   const questionExtractor = createRegexKeyExtractor(rules.questionPattern, "题目规则")
   const answerExtractor = createRegexKeyExtractor(rules.answerPattern, "答案规则")
@@ -282,7 +283,7 @@ export function answerCardHtml(
   resolveNote: (noteId: string) => MbBookNote | undefined = noteId => MN.db.getNoteById(noteId)
 ): string {
   const note = resolveNote(answer.noteId)
-  if (!note) throw new Error("答案卡片已不存在，请刷新答案索引")
+  if (!note) throw new CardLinkError("answerNoteMissing")
   return renderCardHtml(
     note,
     questionTitle,

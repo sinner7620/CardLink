@@ -26,7 +26,9 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
     var response = {
       requestId: requestId,
       payload: payload === undefined ? null : payload,
-      error: error ? { message: error.message || String(error) } : null
+      // 码化错误的 code 随信封透出（未码化错误无 code，序列化时省略）；
+      // Web 端只消费 message，code 仅供诊断与后续按码翻译。
+      error: error ? { code: typeof error.code === "string" ? error.code : undefined, message: error.message || String(error) } : null
     };
     var raw = JSON.stringify(response);
     if (raw.length > RESPONSE_CHUNK_LIMIT) {
@@ -333,6 +335,11 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
     controller.bootLabel = bootLabel;
     controller.headerPan = new UIPanGestureRecognizer(controller, "handleHeaderPan:");
     controller.headerPan.cancelsTouchesInView = false;
+    // UIWebView 会把 iPad 蓝牙鼠标/触控板的间接指针事件优先交给网页。
+    // 显式允许 direct touch(0) 与 indirect pointer(4)，让同一原生标题栏拖动
+    // 架构同时接收手指和外接鼠标，不另叠一层会遮挡网页按钮的透明视图。
+    try { controller.headerPan.allowedTouchTypes = [0, 4]; } catch (error) {}
+    try { controller.headerPan.allowedScrollTypesMask = 3; } catch (error) {}
     controller.headerPan.delegate = controller;
     controller.webView.addGestureRecognizer(controller.headerPan);
     layoutCloseButton(controller, panelCloseButtonSide());
@@ -344,7 +351,11 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
     resize.textColor = UIColor.grayColor();
     resize.userInteractionEnabled = true;
     resize.autoresizingMask = (1 << 0) | (1 << 3);
-    resize.addGestureRecognizer(new UIPanGestureRecognizer(controller, "handleResize:"));
+    var resizePan = new UIPanGestureRecognizer(controller, "handleResize:");
+    try { resizePan.allowedTouchTypes = [0, 4]; } catch (error) {}
+    try { resizePan.allowedScrollTypesMask = 3; } catch (error) {}
+    resize.addGestureRecognizer(resizePan);
+    controller.resizePan = resizePan;
     controller.view.addSubview(resize);
 
     var entry = NSURL.fileURLWithPath(controller.mainPath + "/web-dist/index.html");

@@ -1,5 +1,6 @@
 import { delay, fetch, MN, popup, saveFile, showHUD } from "marginnote"
 import { backupBindings } from "./store"
+import { CardLinkError } from "./errors"
 import { compareVersions } from "./version"
 import { describeError } from "./error-messages"
 import { captureDiagnosticError } from "./note-navigation"
@@ -114,7 +115,7 @@ async function downloadAsset(release: GitHubRelease, asset: ReleaseAsset): Promi
   // 封装层拿不到 HTTP 状态码：404/限流页只有几 KB，用体积下限拦下坏包
   const size = Number(response.data?.length() || 0)
   if (size < 64 * 1024) {
-    throw new Error(`更新包下载不完整（${Math.round(size / 1024)}KB，可能是限流或错误页），请稍后重试或到 Gitee Releases 手动下载`)
+    throw new CardLinkError("updatePackageIncomplete", { sizeKb: Math.round(size / 1024) })
   }
   if (!response.data.writeToFileAtomically(path, true)) {
     throw new Error("更新包下载或写入失败")

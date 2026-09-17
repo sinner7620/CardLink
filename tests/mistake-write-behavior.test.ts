@@ -328,7 +328,7 @@ test("写入校验失败：记录回滚为原等级，不标记提交", async ()
   noWriteNotes.add(`nF${seq - 1}`)
   ;(marginnoteMock.MN as any).currnetNotebookId = notebookId
 
-  await assert.rejects(() => manager.reviewMistakeById(recordId, 1), /未能写入原题标签/)
+  await assert.rejects(() => manager.reviewMistakeById(recordId, 1), (error: any) => error?.code === "mistakeTagWriteFailed")
   const stored = mistakeStateRecords()[recordId]
   assert.equal(stored.level, 0, "失败后记录必须回滚")
   assert.equal(stored.reviewCount, 0)
@@ -357,7 +357,7 @@ test("写入后无法回读：不得乐观提交数据库状态", async () => {
     set(value) { comments = value }
   })
 
-  await assert.rejects(() => manager.reviewMistakeById(recordId, 1), /未能写入原题标签/)
+  await assert.rejects(() => manager.reviewMistakeById(recordId, 1), (error: any) => error?.code === "mistakeTagWriteFailed")
   const stored = mistakeStateRecords()[recordId]
   assert.equal(stored.level, 0, "无法回读时数据库必须回滚，不能把 unverified 当成功")
   assert.ok(!refreshed.includes(notebookId), "无法回读时不得提交数据库刷新")
@@ -417,7 +417,7 @@ test("卡片托管标签被清空：复习调用同步取消记录（标签即�
   seq++
   ;(marginnoteMock.MN as any).currnetNotebookId = notebookId
 
-  await assert.rejects(() => manager.reviewMistakeById(recordId, 1), /记录已同步取消/)
+  await assert.rejects(() => manager.reviewMistakeById(recordId, 1), (error: any) => error?.code === "mistakeTagRemoved")
   assert.ok(!mistakeStateRecords()[recordId], "取消的记录必须从库中删除")
 })
 
@@ -428,7 +428,7 @@ test("未写过标签的旧记录：无托管标签也不能通过复习复活�
   seq++
   ;(marginnoteMock.MN as any).currnetNotebookId = notebookId
 
-  await assert.rejects(() => manager.reviewMistakeById(recordId, 2), /记录已同步取消/)
+  await assert.rejects(() => manager.reviewMistakeById(recordId, 2), (error: any) => error?.code === "mistakeTagRemoved")
   assert.ok(!mistakeStateRecords()[recordId])
   assert.equal(tagsOf(notesById["nL" + (seq - 1)]).length, 0)
   assert.ok(JSON.parse(kv["mn4-answer-matcher.mistakes.detached-archive.v1"])[recordId])

@@ -15,6 +15,8 @@ import {
   onAnswerControlRelease,
   onChooseAnswerCandidate,
   onAnswerToolbarClick,
+  onAnswerToolbarSingleTap,
+  onAnswerToolbarLongPress,
   onCloseAnswerCard,
   openPluginGuide,
   onRefreshAnswerCard,
@@ -35,6 +37,15 @@ import {
   refreshCurrentIndex,
   saveRegexMatchingRules,
   setScopedBindingEnabled,
+  startReviewMode,
+  onReviewModeIndex,
+  onReviewModePrevious,
+  onReviewModeNext,
+  onReviewModeInfo,
+  onReviewModeExit,
+  onReviewModeControlPress,
+  onReviewModeControlRelease,
+  onReviewModeControlHover,
   unbindCurrent
 } from "./plugin"
 import {
@@ -64,6 +75,8 @@ import { checkForUpdates } from "./updater"
 import { runTelemetryConnectivityTest } from "./telemetry"
 import { exportMistakes, previewMistakeExport, cancelMistakeExportPreparation } from "./mistake-export"
 import { captureDiagnosticError, clearNavigationRuntimeLog, consumePendingLocateHint, exportNavigationRuntimeLog, recordRuntimeState } from "./note-navigation"
+import { presentError } from "./error-messages"
+import { CardLinkError } from "./errors"
 import { loadMatcherSettings, saveMatcherSettings } from "./settings"
 import { aiBridge, isAICommand, aiRuntimeEnabled } from "./ai-subsystem"
 
@@ -76,7 +89,7 @@ function selectedNode(): NodeNote | undefined {
   return focus ? new NodeNote(focus) : undefined
 }
 
-async function bridgeInternal(command: string, payload: any): Promise<any> {
+async function bridgeInternal(command: string, payload: any, owner?: any): Promise<any> {
   if (command === "aiConfirmDevelopmentWarning" || command === "aiGetSettings" || command === "aiListReports" || command === "aiGetReport" ||
     command === "aiGetJob" || command === "aiPreviewAnalysis" || command === "aiStartAnalysis" ||
     command === "aiOpenEvidence" || command === "aiCancelJob" || command === "aiListStudySets" || command === "aiListMistakeStudySets" ||
@@ -122,11 +135,10 @@ async function bridgeInternal(command: string, payload: any): Promise<any> {
     return onMistakeToolbarClick()
   }
   if (command === "findCurrentAnswer") return onAnswerToolbarClick()
+  if (command === "startReviewMode") return startReviewMode(payload?.records, owner ?? self)
   if (command === "openPluginGuide") return openPluginGuide()
   if (command === "bindAnswerNotebook") return bindAnswerNotebook()
-  if (command === "setScopedBinding") {
-    return setScopedBindingEnabled(payload?.enabled === true)
-  }
+  if (command === "setScopedBinding") return setScopedBindingEnabled(payload?.enabled === true)
   if (command === "configureAnswerMatching") return configureAnswerMatching()
   if (command === "saveRegexMatchingRules") {
     return saveRegexMatchingRules(
@@ -165,7 +177,7 @@ async function bridgeInternal(command: string, payload: any): Promise<any> {
   if (command === "cancelMistakeExportPreparation") return cancelMistakeExportPreparation()
   if (command === "exportRuntimeLog") return exportNavigationRuntimeLog()
   if (command === "testTelemetryConnectivity") {
-    if (!loadMatcherSettings().debugModeEnabled) throw new Error("请先开启调试模式")
+    if (!loadMatcherSettings().debugModeEnabled) throw new CardLinkError("debugModeRequired")
     return runTelemetryConnectivityTest()
   }
   if (command === "setDebugMode") {
@@ -185,7 +197,7 @@ async function bridgeInternal(command: string, payload: any): Promise<any> {
  * 桥接统一观测层：每个命令记录 traceId、耗时、载荷/响应字节数与异常（仅调试模式写入环形缓冲）。
  * 不记录 payload/response 内容本身，避免日志携带错题正文。
  */
-async function bridge(command: string, payload: any): Promise<any> {
+async function bridge(command: string, payload: any, owner?: any): Promise<any> {
   const traceId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
   const startedAt = Date.now()
   const debug = loadMatcherSettings().debugModeEnabled
@@ -195,7 +207,7 @@ async function bridge(command: string, payload: any): Promise<any> {
     recordRuntimeState("桥接", "bridge.start", `trace=${traceId} cmd=${command} payloadBytes=${payloadBytes}`)
   }
   try {
-    const result = await bridgeInternal(command, payload)
+    const result = await bridgeInternal(command, payload, owner)
     if (debug) {
       let responseBytes = -1
       try { responseBytes = JSON.stringify(result ?? null)?.length || 0 } catch { /* 循环结构忽略 */ }
@@ -204,7 +216,8 @@ async function bridge(command: string, payload: any): Promise<any> {
     return result
   } catch (error) {
     captureDiagnosticError(error, "桥接", `trace=${traceId} cmd=${command} durationMs=${Date.now() - startedAt}`)
-    throw error
+    // 码化错误在此换成表内用户文案并携带 code；未码化错误原样透传给信封
+    throw presentError(error)
   }
 }
 
@@ -217,6 +230,8 @@ async function bridge(command: string, payload: any): Promise<any> {
   cardToolbar: { isEnabled: isCardToolbarEnabled, setEnabled: setCardToolbarEnabled },
   instanceMethods: {
     onAnswerToolbarClick,
+    onAnswerToolbarSingleTap,
+    onAnswerToolbarLongPress,
     onChooseAnswerCandidate,
     onMistakeToolbarClick,
     onMistakeLevel0Click,
@@ -237,5 +252,13 @@ async function bridge(command: string, payload: any): Promise<any> {
     onMnutilsEntranceClick,
     onMnutilsEntranceLongPress,
     onMnutilsEntrancePan,
+    onReviewModeIndex,
+    onReviewModePrevious,
+    onReviewModeNext,
+    onReviewModeInfo,
+    onReviewModeExit,
+    onReviewModeControlPress,
+    onReviewModeControlRelease,
+    onReviewModeControlHover,
   }
 }
