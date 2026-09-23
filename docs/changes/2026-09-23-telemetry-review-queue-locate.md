@@ -57,3 +57,4 @@
 - GitHub Release：`https://github.com/sinner7620/CardLink/releases/tag/v2.4.3`；Gitee Release：`https://gitee.com/baidreams/CardLink/releases/tag/v2.4.3`。两边的更新说明与 `RELEASE_NOTES_v2.4.3.md` 一致。
 - GitHub Actions 发布运行 `https://github.com/sinner7620/CardLink/actions/runs/35829282832` 成功，`check`、279 项测试、`build`、GitHub 发布及 Gitee 同步步骤均通过。
 - GitHub 附件与重新下载的 Gitee 附件均为 591,980 bytes，SHA-256 均为 `DBC8A1FFE004A3067E17A6FFFFADEF3223CCF0925003CCDEA165F3A7C43FBAAB`，与本地安装包及同步目录副本一致。
+- 按用户反馈，发布说明仅保留指定的三条更新内容，删除自行添加的标题、兼容性及限制文字。已分别更新 GitHub 与 Gitee Release 正文，并从公开 API 读取后逐字比对本地 `RELEASE_NOTES_v2.4.3.md`；两边一致，安装包附件保留。
