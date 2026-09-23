@@ -49,4 +49,11 @@
 
 最终输入的 `pnpm check`、`pnpm test`（279/279）和 `pnpm build` 均通过；构建仅报告既有 `.sfIconGlyph:svg` CSS 选择器警告。ZIP 完整性检查通过，包内版本与身份正确，原生队列存储键存在，旧 Web 队列存储键不存在。
 
-`dist/CardLink-v2.4.3.mnaddon` 与已替换的 `E:\iCloudDrive\同步文件夹\CardLink-v2.4.3.mnaddon` 均为 591,980 bytes，SHA-256 均为 `DBC8A1FFE004A3067E17A6FFFFADEF3223CCF0925003CCDEA165F3A7C43FBAAB`。未进行 GitHub/Gitee 发布；MarginNote 真机刷新、原生选择弹窗及跨学习集焦点呈现尚待设备验收。
+`dist/CardLink-v2.4.3.mnaddon` 与已替换的 `E:\iCloudDrive\同步文件夹\CardLink-v2.4.3.mnaddon` 均为 591,980 bytes，SHA-256 均为 `DBC8A1FFE004A3067E17A6FFFFADEF3223CCF0925003CCDEA165F3A7C43FBAAB`。MarginNote 真机刷新、原生选择弹窗及跨学习集焦点呈现尚待设备验收。
+
+## 正式版 2.4.3 发布
+
+- 发布提交 `18b6603a1b288dd294ae515679acaeaac239607b`，Git 标签 `v2.4.3`；仅提交本次发布涉及的源码、测试、功能文档和更新说明。
+- GitHub Release：`https://github.com/sinner7620/CardLink/releases/tag/v2.4.3`；Gitee Release：`https://gitee.com/baidreams/CardLink/releases/tag/v2.4.3`。两边的更新说明与 `RELEASE_NOTES_v2.4.3.md` 一致。
+- GitHub Actions 发布运行 `https://github.com/sinner7620/CardLink/actions/runs/35829282832` 成功，`check`、279 项测试、`build`、GitHub 发布及 Gitee 同步步骤均通过。
+- GitHub 附件与重新下载的 Gitee 附件均为 591,980 bytes，SHA-256 均为 `DBC8A1FFE004A3067E17A6FFFFADEF3223CCF0925003CCDEA165F3A7C43FBAAB`，与本地安装包及同步目录副本一致。
