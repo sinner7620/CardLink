@@ -105,21 +105,22 @@ import {
 } from "../src/mistake-domain"
 import { normalizeMistakeReviewCurves } from "../src/mistake-review-settings"
 
-test("答案悬浮条左右换边时整体贴边并镜像三控件顺序", () => {
+test("答案悬浮条左右换边时整体贴边并镜像控件顺序", () => {
   const left = answerControlBarLayout(500, "left", true)
   const right = answerControlBarLayout(500, "right", true)
   assert.equal(left.bar.x, 6)
   assert.equal(right.bar.x + right.bar.width, 494)
-  assert.ok(left.close.x < left.refresh.x && left.refresh.x < left.candidates.x)
-  assert.ok(right.candidates.x < right.refresh.x && right.refresh.x < right.close.x)
-  // 与插件页选中页签同高：88×36 连续胶囊；每个槽位 44×36，无内边距与中缝。
+  assert.ok(left.close.x < left.locate.x && left.locate.x < left.refresh.x && left.refresh.x < left.candidates.x)
+  assert.ok(right.candidates.x < right.refresh.x && right.refresh.x < right.locate.x && right.locate.x < right.close.x)
+  // 与插件页选中页签同高；每个槽位 44×36，无内边距与中缝。
   assert.equal(left.close.width, 44)
   assert.equal(left.close.height, 36)
   assert.equal(left.refresh.width, 44)
   assert.equal(left.candidates.height, 36)
   assert.equal(left.bar.height, 36)
-  assert.equal(answerControlBarLayout(500, "left", false).bar.width, 88)
-  assert.equal(left.bar.width, 132)
+  assert.equal(left.locate.width, 44)
+  assert.equal(answerControlBarLayout(500, "left", false).bar.width, 132)
+  assert.equal(left.bar.width, 176)
 })
 
 test("同一学习集中的不同脑图可保存独立答案绑定并兼容旧绑定", () => {

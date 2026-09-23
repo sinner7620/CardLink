@@ -167,6 +167,7 @@ test("GitHub 检查失败自动回退 Gitee，交互确认后不下载", async (
   await updater.checkForUpdates(true)
   assert.ok(calls.fetches.some(call => call.url.includes("gitee.com")))
   const popup = calls.popups[0]
+  assert.match(popup.title, /^CardLink：/)
   assert.match(popup.title, /v9\.9\.9/)
   assert.match(popup.message, /Gitee 备用源/)
   assert.equal(calls.writes.length, 0)

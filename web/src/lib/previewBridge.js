@@ -5,6 +5,8 @@ const levelCurves = [[1, 3, 7], [2, 5, 10], [14]]
 let customCategories = ["计算题", "概念辨析", "需要重做"]
 let debugModeEnabled = false
 let pluginEnabled = true
+let sourceLocateMode = "locate"
+let manualTodayIds = []
 
 function endOfTodayTs(now = new Date()) {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime()
@@ -262,6 +264,7 @@ export async function previewSend(command, payload = null) {
   if (command === "dashboard") return {
     version: "2.4.0 · 完整界面预览",
     mistakes: workbenchPage(),
+    manualTodayIds,
     aiEnabled: true,
     matching: {
       scopedBinding: true,
@@ -270,11 +273,19 @@ export async function previewSend(command, payload = null) {
       pairs: 0,
       regexRules: { questionPattern: "", answerPattern: "" },
       debugModeEnabled,
-      pluginEnabled
+      pluginEnabled,
+      sourceLocateMode
     }
   }
   if (command === "mistakes") return workbenchPage()
   if (command === "mistakesPage") return workbenchPage(payload?.offset, String(payload?.transferId || "preview-workbench"))
+  if (command === "addManualTodayOverdue") {
+    const startToday = new Date(new Date().setHours(0, 0, 0, 0)).getTime()
+    const pool = records.filter(item => !item.reviewCompleted && new Date(item.nextReviewAt).getTime() < startToday && !manualTodayIds.includes(item.recordId))
+    const added = pool.slice(0, Math.max(0, Math.min(5, Number(payload?.count) || 0))).map(item => item.recordId)
+    manualTodayIds = [...manualTodayIds, ...added]
+    return { ids: manualTodayIds, addedCount: added.length }
+  }
   if (command === "testTelemetryConnectivity") {
     if (!debugModeEnabled) throw new Error("请先开启调试模式")
     return {
@@ -282,8 +293,7 @@ export async function previewSend(command, payload = null) {
       testedAt: new Date().toISOString(),
       results: [
         { key: "测试1", reachable: true, accepted: true, statusCode: 204, durationMs: 12 },
-        { key: "测试2", reachable: true, accepted: true, statusCode: 204, durationMs: 30 },
-        { key: "测试3", reachable: false, error: "无响应", durationMs: 8000 }
+        { key: "测试2", reachable: true, accepted: true, statusCode: 204, durationMs: 30 }
       ]
     }
   }
@@ -299,6 +309,10 @@ export async function previewSend(command, payload = null) {
   if (command === "mistakeQuestion") {
     const value = detail(String(payload?.recordId ?? ""))
     return { questionHtml: value.questionHtml }
+  }
+  if (command === "chooseSourceLocateMode") {
+    sourceLocateMode = sourceLocateMode === "focus" ? "locate" : "focus"
+    return { mode: sourceLocateMode }
   }
   if (command === "setMistakeFavorite") {
     const record = records.find(item => item.recordId === String(payload?.recordId ?? ""))
@@ -320,6 +334,7 @@ export async function previewSend(command, payload = null) {
   if (command === "reviewMistake") {
     const record = records.find(item => item.recordId === String(payload?.recordId ?? ""))
     if (!record) throw new Error("错题记录不存在")
+    manualTodayIds = manualTodayIds.filter(id => id !== record.recordId)
     const nextLevel = Math.max(0, Math.min(2, Number(payload?.level) || 0))
     const sameLevel = nextLevel === record.level
     record.reviewCount = sameLevel ? record.reviewCount + 1 : 0

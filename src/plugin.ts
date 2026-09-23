@@ -69,7 +69,7 @@ import { checkForUpdates, scheduleAutomaticUpdateCheck } from "./updater"
 import { scheduleTelemetryReport } from "./telemetry"
 import { isMindMapNotebook, notebookNotes } from "./note-tree"
 import { chooseNotebook, closeNotebookPicker, onNotebookPickerAction } from "./notebook-picker"
-import { completePendingNoteNavigation, recordRuntimeState , captureDiagnosticError , maskText } from "./note-navigation"
+import { completePendingNoteNavigation, focusNoteInFloatMindMap, recordRuntimeState , captureDiagnosticError , maskText } from "./note-navigation"
 import { describeError } from "./error-messages"
 import { CardLinkError } from "./errors"
 import {
@@ -508,6 +508,7 @@ export interface AnswerMatchingSettingsData {
   matchedGroups: number
   regexRules: RegexMatchingRules
   debugModeEnabled: boolean
+  sourceLocateMode: "locate" | "focus"
 }
 
 export function answerMatchingSettingsData(): AnswerMatchingSettingsData {
@@ -530,7 +531,8 @@ export function answerMatchingSettingsData(): AnswerMatchingSettingsData {
       questionPattern: "",
       answerPattern: ""
     },
-    debugModeEnabled: settings.debugModeEnabled
+    debugModeEnabled: settings.debugModeEnabled,
+    sourceLocateMode: settings.sourceLocateMode
   }
 }
 
@@ -833,7 +835,8 @@ async function showAnswer(questionTitle: string, answer: IndexedAnswer, candidat
   // 候选清单与题名存到 addon 上：点击长条后由 MarginNote 原生 select 弹窗选择。
   self.answerCardCandidates = candidates
   self.answerCardQuestionTitle = questionTitle
-  showAnswerCard(answerCardHtml(answer, questionTitle))
+  self.answerCardAnswerNoteId = answer.noteId
+  showAnswerCard(answerCardHtml(answer, questionTitle, undefined, true))
   syncAnswerCandidatesControl(
     candidates.map(candidate => ({
       id: candidate.id,
@@ -913,6 +916,14 @@ export function onCloseAnswerCard(): void {
 
 export function onRefreshAnswerCard(): void {
   refreshAnswerCard()
+}
+
+export async function onLocateAnswerCard(): Promise<void> {
+  const noteId = String(self.answerCardAnswerNoteId || "").trim()
+  if (!noteId) return showHUD("当前答案卡片无法定位", 3)
+  const result = await focusNoteInFloatMindMap(noteId)
+  if (result === "unavailable") showHUD("当前 MarginNote 版本不支持在浮窗中定位答案卡片", 4)
+  else if (result === "failed") showHUD("答案卡片浮窗定位失败，请稍后重试", 4)
 }
 
 export function onPanelCloseButtonSideChanged(side: unknown): void {

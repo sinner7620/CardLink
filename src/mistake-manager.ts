@@ -14,6 +14,7 @@ import {
 } from "./store"
 import { collectChildMindMapNoteIds, MAIN_MINDMAP_SCOPE_ID, mindMapScopeIdForNote } from "./mindmap-candidate"
 import { loadMatcherSettings, normalizeMistakeReviewCurves, saveMatcherSettings } from "./settings"
+import { addOverdueToToday, manualTodayIds, removeFromManualToday } from "./manual-review-queue"
 import {
   compareMistakeRecords,
   automaticCategoryPath,
@@ -699,6 +700,7 @@ async function confirmMistakeLevel(recordId: string, level: MistakeLevel): Promi
   if (!committed.length) {
     throw new CardLinkError("mistakeTagWriteFailed", { action: "复习" })
   }
+  removeFromManualToday(recordId, state.records)
   upsertMistakeRecord(state, withTagsWritten(record))
   saveMistakeState(state)
   return record
@@ -706,6 +708,14 @@ async function confirmMistakeLevel(recordId: string, level: MistakeLevel): Promi
 
 export function reviewMistakeById(recordId: string, level: MistakeLevel): Promise<MistakeRecord> {
   return confirmMistakeLevel(recordId, level)
+}
+
+export function getManualTodayIds(): string[] {
+  return manualTodayIds(loadMistakeState().records)
+}
+
+export function addManualTodayOverdue(count: number): { ids: string[]; addedCount: number } {
+  return addOverdueToToday(loadMistakeState().records, count)
 }
 
 export function changeMistakeLevelById(recordId: string, level: MistakeLevel): Promise<MistakeRecord> {
@@ -782,7 +792,10 @@ export async function reviewMistakesByIds(
     const committed = new Set(committedIds)
     records = changedRecords.filter(record => committed.has(record.sourceNotebookId))
     // 标签写入未验证通过的学习集不落记录，保持记录与卡片一致。
-    for (const record of records) upsertMistakeRecord(state, withTagsWritten(record))
+    for (const record of records) {
+      removeFromManualToday(record.recordId, state.records)
+      upsertMistakeRecord(state, withTagsWritten(record))
+    }
     const blocked = changedRecords.length - records.length
     if (blocked) {
       showHUD(`${blocked} 道错题复习失败：未能写入原题标签，记录已保留原状态`, 5)
@@ -1387,9 +1400,13 @@ export function mistakeDetailById(recordId: string): MistakeDetailData {
   return detail
 }
 
-export async function openSourceByMistakeId(recordId: string): Promise<{ locateHint?: string }> {
+export async function openSourceByMistakeId(
+  recordId: string,
+  options: { enterFocusMode?: boolean } = {}
+): Promise<{ locateHint?: string }> {
   const record = recordById(recordId)
-  const locateHint = await openNoteInMindMap(record.sourceNoteId, record.sourceNotebookId)
+  const enterFocusMode = options.enterFocusMode ?? loadMatcherSettings().sourceLocateMode === "focus"
+  const locateHint = await openNoteInMindMap(record.sourceNoteId, record.sourceNotebookId, { enterFocusMode })
   return locateHint ? { locateHint } : {}
 }
 
@@ -1398,7 +1415,9 @@ export async function openMistakeById(recordId: string): Promise<{ locateHint?: 
 }
 
 export async function openMistakeRecord(record: MistakeRecord): Promise<void> {
-  await openNoteInMindMap(record.sourceNoteId, record.sourceNotebookId)
+  await openNoteInMindMap(record.sourceNoteId, record.sourceNotebookId, {
+    enterFocusMode: loadMatcherSettings().sourceLocateMode === "focus"
+  })
 }
 
 export async function openLinkedMistakeOrSource(question: NodeNote, currentNotebookId: string): Promise<void> {

@@ -31,6 +31,11 @@ interface PendingNavigation {
   noteId: string
   notebookId?: string
   createdAtMs: number
+  enterFocusMode?: boolean
+}
+
+export interface OpenNoteInMindMapOptions {
+  enterFocusMode?: boolean
 }
 
 function savePendingNavigation(target: PendingNavigation, persist = false): void {
@@ -333,6 +338,34 @@ function focusNoteInMindmapByOfficialApi(noteId: string): void {
   MN.studyController.focusNoteInMindMapById(noteId)
 }
 
+export type MindMapFocusModeResult = "focused" | "unavailable" | "failed"
+
+export async function focusNoteInMindMapFocusMode(noteId: string): Promise<MindMapFocusModeResult> {
+  const target = MN.db.getNoteById(noteId)
+  const controller = MN.notebookController as any
+  if (!target || typeof controller?.changeFocusToNote !== "function") {
+    debugLog(`无法进入焦点模式 target=${Boolean(target)} changeFocus=${typeof controller?.changeFocusToNote}`)
+    return "unavailable"
+  }
+  try {
+    controller.changeFocusToNote(target)
+    debugLog("已将目标卡片设为脑图焦点根节点")
+    // changeFocusToNote 会重建焦点脑图与画布；必须等布局完成后再执行官方
+    // 定位，否则先前的滚动位置会被重建过程覆盖，部分卡片无法居中。
+    await delay(0.08)
+    focusNoteInMindmapByOfficialApi(noteId)
+    await delay(0.06)
+    // 焦点模式会清空普通选中态，focusNote / visibleFocusNote 不保证继续指向
+    // 根卡片，不能复用普通定位的 isTargetFocused 判据。原生切焦与定位均未
+    // 抛错即视为已派发；最终视图效果由 MarginNote 接管。
+    debugLog("已进入焦点模式并在布局完成后重新派发目标卡片定位")
+    return "focused"
+  } catch (error) {
+    debugLog(`进入目标卡片焦点模式或重新居中失败=${String(error)}`)
+    return "failed"
+  }
+}
+
 export type FloatMindMapFocusResult = "dispatched" | "unavailable" | "failed"
 
 interface FloatMindMapFrameSnapshot {
@@ -486,6 +519,8 @@ const LOCATE_SYNC_OFF_HINT =
 
 const LOCATE_TIMEOUT_HINT = "已发出跳转请求，但 MarginNote 暂未完成响应，请稍候后重试"
 
+const LOCATE_FOCUS_MODE_HINT = "已定位目标卡片，但未能进入焦点模式，请稍后重试"
+
 function isTargetFocused(noteId: string): boolean {
   const state = currentControllerState()
   return state.focusNoteId === noteId ||
@@ -541,10 +576,21 @@ export function consumePendingLocateHint(): string | undefined {
   return hint
 }
 
-async function locateJumpInCurrentStudySet(noteId: string, runId: string): Promise<string | undefined> {
+async function locateJumpInCurrentStudySet(
+  noteId: string,
+  runId: string,
+  enterFocusMode = false
+): Promise<string | undefined> {
   const result = await focusWithFallback(noteId, runId)
   if (result === "focused") {
     debugLog("已确认目标卡片成为焦点或选中项")
+    if (enterFocusMode) {
+      const focusModeResult = await focusNoteInMindMapFocusMode(noteId)
+      if (focusModeResult !== "focused") {
+        clearPendingNavigation(runId)
+        return LOCATE_FOCUS_MODE_HINT
+      }
+    }
     clearPendingNavigation(runId)
     return undefined
   }
@@ -555,11 +601,12 @@ async function locateJumpInCurrentStudySet(noteId: string, runId: string): Promi
 async function locateJumpCrossStudySet(
   noteId: string,
   notebookId: string,
-  runId: string
+  runId: string,
+  enterFocusMode: boolean
 ): Promise<string | undefined> {
   // 持久化接力记录：MarginNote 真机可能在 openURL 返回 false 后仍完成学习集切换，
   // 切换完成由 notebookWillOpen → completePendingNoteNavigation 接力聚焦。
-  savePendingNavigation({ runId, noteId, notebookId, createdAtMs: Date.now() }, true)
+  savePendingNavigation({ runId, noteId, notebookId, createdAtMs: Date.now(), enterFocusMode }, true)
   // 跨学习集跳转会触发宿主切换笔记本；记录时间戳供面板恢复时跳过一次自动
   // 刷新——跳转不改变错题数据，恢复触发的 load() 属于多余刷新且会让列表
   // 滚动位置丢失（消费与清除在 WebAddon.shouldSuppressPanelReload）。
@@ -575,7 +622,7 @@ async function locateJumpCrossStudySet(
     if (!isNavigationRunActive(runId)) return undefined
     if (String(MN.currnetNotebookId ?? "") === notebookId) {
       debugLog("已确认切换到目标学习集")
-      return locateJumpInCurrentStudySet(noteId, runId)
+      return locateJumpInCurrentStudySet(noteId, runId, enterFocusMode)
     }
     await delay(0.1)
   }
@@ -583,7 +630,11 @@ async function locateJumpCrossStudySet(
   return LOCATE_TIMEOUT_HINT
 }
 
-export async function openNoteInMindMap(noteId: string, notebookId?: string): Promise<string | undefined> {
+export async function openNoteInMindMap(
+  noteId: string,
+  notebookId?: string,
+  options: OpenNoteInMindMapOptions = {}
+): Promise<string | undefined> {
   if (!noteId) throw new Error("目标卡片缺少 noteId")
   if (!MN.db.getNoteById(noteId)) throw new Error("目标卡片不存在或尚未同步")
 
@@ -595,10 +646,10 @@ export async function openNoteInMindMap(noteId: string, notebookId?: string): Pr
   const runId = startNavigationDebug(noteId, actualNotebookId || undefined)
   if (actualNotebookId && String(MN.currnetNotebookId ?? "") !== actualNotebookId) {
     // 跨学习集：先派发链接完成切换，聚焦由 notebookWillOpen 接力执行
-    return await locateJumpCrossStudySet(noteId, actualNotebookId, runId)
+    return await locateJumpCrossStudySet(noteId, actualNotebookId, runId, options.enterFocusMode === true)
   }
   // 官方跳转指令 + 同步开关检测：关闭时面板顶栏下提示检查关联模式
-  return await locateJumpInCurrentStudySet(noteId, runId)
+  return await locateJumpInCurrentStudySet(noteId, runId, options.enterFocusMode === true)
 }
 
 export async function completePendingNoteNavigation(openedNotebookId?: string): Promise<void> {
@@ -623,7 +674,7 @@ export async function completePendingNoteNavigation(openedNotebookId?: string): 
 
   await delay(0.2)
   // 学习集切换完成后由接力派发官方聚焦；同步关闭时同样提示检查关联模式。
-  const hint = await locateJumpInCurrentStudySet(target.noteId, target.runId)
+  const hint = await locateJumpInCurrentStudySet(target.noteId, target.runId, target.enterFocusMode === true)
   if (hint) self.mn4PendingLocateHint = hint
 }
 

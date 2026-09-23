@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs"
 import test from "node:test"
 import {
   isTelemetryDue,
-  TELEMETRY_EU_ENDPOINT,
   TELEMETRY_FALLBACK_ENDPOINT,
   TELEMETRY_INTERVAL,
   TELEMETRY_PRIMARY_ENDPOINT,
@@ -16,9 +15,8 @@ test("版本号映射到 stable 与 beta 匿名统计渠道", () => {
   assert.equal(telemetryChannel("2.3.11-beta.1"), "beta")
 })
 
-test("优先使用 xyz 自定义域名，并保留 EU 与 workers.dev 两级备用入口", () => {
+test("优先使用 xyz 自定义域名，并保留 workers.dev 备用入口", () => {
   assert.equal(TELEMETRY_PRIMARY_ENDPOINT, "https://telemetry.2608204.xyz/ping")
-  assert.equal(TELEMETRY_EU_ENDPOINT, "https://cardlink.cn.eu.org/ping")
   assert.equal(
     TELEMETRY_FALLBACK_ENDPOINT,
     "https://mnrails-telemetry.mr-wuyzhn.workers.dev/ping"
@@ -42,7 +40,8 @@ test("匿名统计按成功时间节流 12 小时", () => {
 test("上报只接受 204，并在成功后记录时间且失败全程静默", () => {
   const source = readFileSync("src/telemetry.ts", "utf8")
   assert.match(source, /statusCode === 204/)
-  assert.match(source, /TELEMETRY_PRIMARY_ENDPOINT,[\s\S]*TELEMETRY_EU_ENDPOINT,[\s\S]*TELEMETRY_FALLBACK_ENDPOINT/)
+  assert.match(source, /TELEMETRY_PRIMARY_ENDPOINT,[\s\S]*TELEMETRY_FALLBACK_ENDPOINT/)
+  assert.doesNotMatch(source, /cardlink\.cn\.eu\.org/)
   assert.match(source, /for \(const endpoint of/)
   assert.match(source, /if \(await postTelemetry\(id\)\) rememberSuccess/)
   assert.match(source, /const REQUEST_TIMEOUT_SECONDS = 8/)

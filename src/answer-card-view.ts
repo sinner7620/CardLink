@@ -9,12 +9,38 @@ import {
   type WindowControlSide
 } from "./window-controls"
 
+const ANSWER_WINDOW_Z_POSITION = 100000
+const ANSWER_WINDOW_FRONT_INTERVAL = 0.25
+
+function keepAnswerCardInFront(): void {
+  const view = self.answerCardView
+  if (!view || view.hidden || !view.superview) return
+  view.layer.zPosition = ANSWER_WINDOW_Z_POSITION
+  view.superview.bringSubviewToFront?.(view)
+}
+
+function stopAnswerCardFrontCorrection(): void {
+  self.answerCardFrontTimer?.invalidate?.()
+  self.answerCardFrontTimer = undefined
+}
+
+function startAnswerCardFrontCorrection(): void {
+  stopAnswerCardFrontCorrection()
+  keepAnswerCardInFront()
+  self.answerCardFrontTimer = NSTimer.scheduledTimerWithTimeInterval(
+    ANSWER_WINDOW_FRONT_INTERVAL,
+    true,
+    keepAnswerCardInFront
+  )
+}
+
 function layoutAnswerCardWindowControls(width: number, side: WindowControlSide = storedWindowControlSide()): void {
   if (!self.answerCardView) return
   const candidatesVisible = Boolean(self.answerCandidatesButton && !self.answerCandidatesButton.hidden)
   const frames = answerControlBarLayout(width, side, candidatesVisible)
   self.answerCardControlBar.frame = frames.bar
   self.answerCardCloseButton.frame = frames.close
+  self.answerCardLocateButton.frame = frames.locate
   self.answerCardRefreshButton.frame = frames.refresh
   // 拖动区覆盖顶部整条：关闭/刷新/候选控件叠于其上（可点），其余区域拖动窗口
   if (self.answerCardDragArea) self.answerCardDragArea.frame = { x: 0, y: 0, width, height: ANSWER_BAR_DRAG_STRIP_HEIGHT }
@@ -53,6 +79,7 @@ function applyAnswerControlJellyScale(scaleX: number, scaleY: number): void {
     height: slot.height * scaleY
   })
   self.answerCardCloseButton.frame = scaleSlot(frames.close)
+  self.answerCardLocateButton.frame = scaleSlot(frames.locate)
   self.answerCardRefreshButton.frame = scaleSlot(frames.refresh)
   if (self.answerCandidatesButton) self.answerCandidatesButton.frame = scaleSlot(frames.candidates)
 }
@@ -159,6 +186,9 @@ export function showAnswerCard(html: string): void {
     const closeButton = createWindowControlButton("✕", "onCloseAnswerCard:")
     controlBar.addSubview(closeButton)
 
+    const locateButton = createWindowControlButton("↗", "onLocateAnswerCard:")
+    controlBar.addSubview(locateButton)
+
     const refreshButton = createWindowControlButton("↻", "onRefreshAnswerCard:")
     controlBar.addSubview(refreshButton)
 
@@ -188,6 +218,7 @@ export function showAnswerCard(html: string): void {
     self.answerCardView = container
     self.answerCardWebView = webView
     self.answerCardCloseButton = closeButton
+    self.answerCardLocateButton = locateButton
     self.answerCardRefreshButton = refreshButton
     self.answerCandidatesButton = candidatesButton
     self.answerCardControlBar = controlBar
@@ -209,10 +240,12 @@ export function showAnswerCard(html: string): void {
   ;(self.answerCardWebView as any).loadHTMLStringBaseURL(html, null)
   self.answerCardView.hidden = false
   if (!self.answerCardView.superview) host.addSubview(self.answerCardView)
+  startAnswerCardFrontCorrection()
 }
 
 export function closeAnswerCard(): void {
   if (self.answerCardView) self.answerCardView.hidden = true
+  stopAnswerCardFrontCorrection()
 }
 
 /** 设置切换时仅重排已创建的答案窗口；不会创建、显示或复位窗口。 */
@@ -295,6 +328,7 @@ export function resetAnswerCardPosition(): void {
   })
   view.hidden = false
   if (!view.superview) MN.studyController.view.addSubview(view)
+  startAnswerCardFrontCorrection()
 }
 
 /** 答案窗口刷新：同时恢复默认位置/尺寸，并重新载入当前答案。 */

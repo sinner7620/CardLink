@@ -231,7 +231,7 @@ test("刷新确认弹窗渲染", () => {
   assert.match(consent, /.+/)
 })
 
-test("联通测试结果只显示测试 1/2/3 与状态，不显示端点网址", () => {
+test("联通测试结果只显示测试 1/2 与状态，不显示端点网址", () => {
   const html = renderToString(React.createElement(ui.ConnectivityResult, {
     result: {
       testedAt: new Date().toISOString(),

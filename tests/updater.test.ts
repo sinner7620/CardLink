@@ -26,3 +26,9 @@ test("更新菜单只保留下载并手动安装", () => {
   assert.doesNotMatch(source, /"稍后"|"下载并安装"|下载并保存（手动安装）/)
   assert.doesNotMatch(source, /downloadAndInstall/)
 })
+
+test("交互与自动更新提示都显示插件名称", () => {
+  const source = readFileSync("src/updater.ts", "utf8")
+  assert.match(source, /title: `CardLink：发现/)
+  assert.match(source, /showHUD\(`CardLink 发现/)
+})

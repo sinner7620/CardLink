@@ -1,4 +1,4 @@
-import { MN, NodeNote, showHUD } from "marginnote"
+import { delay, MN, NodeNote, select, showHUD } from "marginnote"
 import {
   answerMatchingSettingsData,
   isCardToolbarEnabled,
@@ -18,6 +18,7 @@ import {
   onAnswerToolbarSingleTap,
   onAnswerToolbarLongPress,
   onCloseAnswerCard,
+  onLocateAnswerCard,
   openPluginGuide,
   onRefreshAnswerCard,
   onPanelCloseButtonSideChanged,
@@ -51,6 +52,8 @@ import {
 import {
   deleteMistakeTag,
   beginMistakeWorkbenchTransfer,
+  addManualTodayOverdue,
+  getManualTodayIds,
   changeMistakeLevelById,
   continueMistakeWorkbenchTransfer,
   legacyMistakeTagMigrationCompleted,
@@ -115,6 +118,7 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
       locateHint: consumePendingLocateHint(),
       mistakeRefreshConsentRequired: !legacyMistakeTagMigrationCompleted(),
       mistakes: beginMistakeWorkbenchTransfer(),
+      manualTodayIds: getManualTodayIds(),
       matching: answerMatchingSettingsData(),
       // AI 运行时门闸：总开关关闭时 Web 不装载 AI 模块、不发送任何 AI 命令。
       aiEnabled: aiRuntimeEnabled()
@@ -131,6 +135,7 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
   if (command === "mistakesPage") {
     return continueMistakeWorkbenchTransfer(String(payload?.transferId ?? ""), Number(payload?.offset ?? 0))
   }
+  if (command === "addManualTodayOverdue") return addManualTodayOverdue(Number(payload?.count ?? 0))
   if (command === "markMistake") {
     return onMistakeToolbarClick()
   }
@@ -154,6 +159,19 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
   if (command === "setMistakeFavorite") return setMistakeFavoriteById(String(payload?.recordId ?? ""), payload?.favorite === true)
   if (command === "migrateLegacyFavorites") return migrateLegacyMistakeFavorites(payload?.titles)
   if (command === "openSource") return openSourceByMistakeId(String(payload?.recordId ?? ""))
+  if (command === "chooseSourceLocateMode") {
+    await delay(0.08)
+    const current = loadMatcherSettings().sourceLocateMode
+    const choice = await select(
+      [`仅定位${current === "locate" ? "（当前）" : ""}`, `定位并聚焦${current === "focus" ? "（当前）" : ""}`],
+      "定位原题方式",
+      "选择复习模式外定位原题时的操作",
+      true
+    )
+    const mode = choice.index === 0 ? "locate" : choice.index === 1 ? "focus" : current
+    if (mode !== current) saveMatcherSettings({ sourceLocateMode: mode })
+    return { mode }
+  }
   if (command === "reviewMistake") return reviewMistakeById(String(payload?.recordId ?? ""), Number(payload?.level) as any)
   if (command === "changeMistakeLevel") return changeMistakeLevelById(String(payload?.recordId ?? ""), Number(payload?.level) as any)
   if (command === "reviewMistakes" || command === "changeMistakeLevels") return reviewMistakesByIds(payload?.recordIds, Number(payload?.level) as any)
@@ -241,6 +259,7 @@ async function bridge(command: string, payload: any, owner?: any): Promise<any> 
     onMistakeLinkToolbarClick,
     onNotebookPickerAction,
     onCloseAnswerCard,
+    onLocateAnswerCard,
     onRefreshAnswerCard,
     onPanelCloseButtonSideChanged,
     onAnswerCardPan,

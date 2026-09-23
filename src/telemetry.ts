@@ -1,6 +1,5 @@
 
 export const TELEMETRY_PRIMARY_ENDPOINT = "https://telemetry.2608204.xyz/ping"
-export const TELEMETRY_EU_ENDPOINT = "https://cardlink.cn.eu.org/ping"
 export const TELEMETRY_FALLBACK_ENDPOINT = "https://mnrails-telemetry.mr-wuyzhn.workers.dev/ping"
 export const TELEMETRY_INTERVAL = 12 * 60 * 60 * 1000
 
@@ -96,7 +95,7 @@ function postTelemetryTo(endpoint: string, id: string): Promise<boolean> {
 }
 
 export interface ConnectivityTestResult {
-  /** 展示用序号：测试1/测试2/测试3（不暴露端点网址） */
+  /** 展示用序号：测试1/测试2（不暴露端点网址） */
   key: string
   reachable: boolean
   accepted: boolean
@@ -146,7 +145,7 @@ function connectivityTestTo(key: string, endpoint: string, payload: Record<strin
   })
 }
 
-/** 联通测试：逐通道发送明确标注的测试内容，结果只以 测试1/2/3 呈现，不含端点网址。 */
+/** 联通测试：逐通道发送明确标注的测试内容，结果只以 测试1/2 呈现，不含端点网址。 */
 export async function runTelemetryConnectivityTest(): Promise<{
   test: true
   testedAt: string
@@ -164,7 +163,7 @@ export async function runTelemetryConnectivityTest(): Promise<{
     tested_at: testedAt
   }
   const results = [] as ConnectivityTestResult[]
-  const endpoints = [TELEMETRY_PRIMARY_ENDPOINT, TELEMETRY_EU_ENDPOINT, TELEMETRY_FALLBACK_ENDPOINT]
+  const endpoints = [TELEMETRY_PRIMARY_ENDPOINT, TELEMETRY_FALLBACK_ENDPOINT]
   for (let index = 0; index < endpoints.length; index++) {
     results.push(await connectivityTestTo(`测试${index + 1}`, endpoints[index], payload))
   }
@@ -174,7 +173,6 @@ export async function runTelemetryConnectivityTest(): Promise<{
 async function postTelemetry(id: string): Promise<boolean> {
   for (const endpoint of [
     TELEMETRY_PRIMARY_ENDPOINT,
-    TELEMETRY_EU_ENDPOINT,
     TELEMETRY_FALLBACK_ENDPOINT
   ]) {
     if (await postTelemetryTo(endpoint, id)) return true

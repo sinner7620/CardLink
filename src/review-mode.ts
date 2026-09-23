@@ -2,6 +2,7 @@ import { delay, MN, popup, select, showHUD } from "marginnote"
 import { ChevronLeft, ChevronRight, Info, LogOut, type IconNode } from "lucide"
 import { LEVEL_DESCRIPTIONS, MistakeLevel } from "./mistake-domain"
 import { openSourceByMistakeId } from "./mistake-manager"
+import { focusNoteInMindMapFocusMode } from "./note-navigation"
 import { UI_COLORS } from "./ui-tokens"
 
 export interface ReviewModeItem {
@@ -292,7 +293,6 @@ function mountReviewViews(owner: any = self): void {
 
 async function focusQueueItem(owner: any, item: ReviewModeItem): Promise<void> {
   const current = state(owner)
-  const notebookController = MN.notebookController as any
   const target = MN.db.getNoteById(item.sourceNoteId)
   if (!target) {
     showHUD("该题目卡片已不存在", 2)
@@ -303,10 +303,17 @@ async function focusQueueItem(owner: any, item: ReviewModeItem): Promise<void> {
     current?.focusedRootNodeId &&
     current.focusedRootNodeId === item.sourceRootNodeId
   )
-  if (sameMindMap && typeof notebookController?.changeFocusToNote === "function") {
-    notebookController.changeFocusToNote(target)
+  if (sameMindMap) {
+    const result = await focusNoteInMindMapFocusMode(item.sourceNoteId)
+    if (result !== "focused") {
+      showHUD("无法将题目卡片居中显示在焦点模式中", 3)
+      return
+    }
   } else {
-    const result = await openSourceByMistakeId(item.recordId)
+    // 跨学习集/跨脑图必须把焦点模式意图交给定位状态机。该意图会随 pending
+    // 记录由 notebookWillOpen 接力，在新学习集的 controller 上执行，不能复用
+    // 切换前捕获的 notebookController。
+    const result = await openSourceByMistakeId(item.recordId, { enterFocusMode: true })
     if (result.locateHint) {
       showHUD(result.locateHint, 3)
       return
@@ -316,7 +323,7 @@ async function focusQueueItem(owner: any, item: ReviewModeItem): Promise<void> {
     current.focusedNotebookId = item.sourceNotebookId
     current.focusedRootNodeId = item.sourceRootNodeId
   }
-  owner.cardLinkReviewLastFocus = target
+  owner.cardLinkReviewLastFocus = MN.db.getNoteById(item.sourceNoteId) ?? target
 }
 
 async function goTo(index: number, owner: any = self): Promise<void> {

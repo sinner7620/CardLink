@@ -172,12 +172,12 @@ export async function checkForUpdates(interactive = true): Promise<void> {
     const sourceLabel = release.source === "gitee" ? "Gitee 备用源" : "GitHub"
     if (!interactive) {
       // An automatic check must never steal focus with a modal dialog.
-      showHUD(`发现${channel} v${version}（${sourceLabel}），可在插件菜单选择「检查插件更新」安装`, 5)
+      showHUD(`CardLink 发现${channel} v${version}（${sourceLabel}），可在插件菜单选择「检查插件更新」安装`, 5)
       return
     }
     const notes = String(release.body ?? "暂无更新说明").trim().slice(0, 900)
     const result = await popup({
-      title: `发现${channel} v${version}`,
+      title: `CardLink：发现${channel} v${version}`,
       message: `当前版本：v${__APP_VERSION__}\n来源：${sourceLabel}\n\n${notes}`,
       buttons: ["下载并手动安装"],
       canCancel: true,

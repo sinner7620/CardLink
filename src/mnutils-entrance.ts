@@ -5,12 +5,33 @@ import { UI_COLORS } from "./ui-tokens"
 const ENTRANCE_SIZE = 44
 const EDGE_MARGIN = 18
 const INITIAL_TOP = 64
+const ENTRANCE_DOCK_KEY = "marginnote.extension.mn4-answer-matcher.entrance-dock.v1"
 
 type DockEdge = "left" | "right" | "top" | "bottom"
 
 interface EntranceDock {
   edge: DockEdge
   ratio: number
+}
+
+function storedDock(): EntranceDock | undefined {
+  try {
+    const raw = NSUserDefaults.standardUserDefaults().objectForKey(ENTRANCE_DOCK_KEY)
+    if (typeof raw !== "string") return
+    const value = JSON.parse(raw)
+    if (!["left", "right", "top", "bottom"].includes(value?.edge)) return
+    const ratio = Number(value?.ratio)
+    if (!Number.isFinite(ratio)) return
+    return { edge: value.edge, ratio: clampRatio(ratio) }
+  } catch {
+    return
+  }
+}
+
+function rememberDock(dock: EntranceDock): void {
+  const defaults = NSUserDefaults.standardUserDefaults()
+  defaults.setObjectForKey(JSON.stringify(dock), ENTRANCE_DOCK_KEY)
+  defaults.synchronize()
 }
 
 function mnutilsButtonAvailable(): boolean {
@@ -140,7 +161,7 @@ export function ensureMnutilsEntrance(): void {
     MNButton.addLongPressGesture(button.button ?? button, self, "onMnutilsEntranceLongPress:", 1)
     window.bringSubviewToFront?.(button.button)
     self.mnutilsEntranceBall = button
-    self.mnutilsEntranceDock = self.mnutilsEntranceDock ?? {
+    self.mnutilsEntranceDock = self.mnutilsEntranceDock ?? storedDock() ?? {
       edge: "right",
       ratio: clampRatio((Number(button.frame.y) - EDGE_MARGIN) / Math.max(1, height - ENTRANCE_SIZE - EDGE_MARGIN * 2))
     }
@@ -250,6 +271,7 @@ export function onMnutilsEntrancePan(sender: any): void {
       self.mnutilsEntranceDragOffset = undefined
       const dock = nearestDock(button, window)
       self.mnutilsEntranceDock = dock
+      rememberDock(dock)
       applyDock(button, window, dock, true)
     }
   } catch (error) {

@@ -53,7 +53,7 @@ await esbuild({
   minify: true,
   platform: "browser",
   target: "safari13",
-    define: {
+  define: {
       __APP_VERSION__: JSON.stringify(pkg.version),
       __MN_CHANNEL__: JSON.stringify(betaChannel ? "beta" : "stable"),
       __GITHUB_REPOSITORY__: JSON.stringify(repository),

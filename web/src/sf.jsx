@@ -19,8 +19,9 @@ import fileText from "./sf/fileText.svg?raw"
 import wifi from "./sf/wifi.svg?raw"
 import close from "./sf/close.svg?raw"
 import locate from "./sf/locate.svg?raw"
+import focusMode from "./sf/focusMode.svg?raw"
 
-const svgs = { link, notebook: book, sliders, refresh, unlink: linkBreak, flag, download: share, toggle, info, guide, arrowsLR, reset, update, fileText, wifi, close, locate }
+const svgs = { link, notebook: book, sliders, refresh, unlink: linkBreak, flag, download: share, toggle, info, guide, arrowsLR, reset, update, fileText, wifi, close, locate, focusMode }
 
 // 大类 tone → 色板色（--mn-* 同源：accent / level1 / level2 / level0）
 export const SF_TONE_COLORS = {

@@ -446,7 +446,6 @@ function App() {
   const [locateHint, setLocateHint] = useState("")
   const locateHintTimerRef = useRef(0)
   const [pendingNotice, setPendingNotice] = useState("")
-  const [manualTodayIds, setManualTodayIds] = useState([])
   const [reviewFocusId, setReviewFocusId] = useState("")
   const [settingsPane, setSettingsPane] = useState("root")
   const [streamLoading, setStreamLoading] = useState(false)
@@ -460,6 +459,7 @@ function App() {
   const aiWarningPendingRef = useRef(false)
   selectedIdRef.current = selectedId
   dataRef.current = data
+
 
   async function performLoad(quiet = false) {
     const seq = ++loadSeqRef.current
@@ -563,17 +563,21 @@ function App() {
     try {
       const result = await MNBridge.send(command, payload)
       if (reload && command === "reviewMistake" && result) {
-        setData(current => patchReviewedMistake(current, result))
+        setData(current => ({ ...patchReviewedMistake(current, result), manualTodayIds: (current?.manualTodayIds || []).filter(id => id !== result.recordId) }))
         setBusy(false)
       }
       else if (reload && command === "changeMistakeLevel" && result?.recordId) {
         // 侧边改等级：用返回的记录就地更新队列，保证实时刷新，不依赖下一轮 dashboard。
-        setData(current => patchReviewedMistake(current, result))
+        setData(current => ({ ...patchReviewedMistake(current, result), manualTodayIds: (current?.manualTodayIds || []).filter(id => id !== result.recordId) }))
         setBusy(false)
       }
       else if (reload && command === "changeMistakeLevels" && Array.isArray(result?.records)) {
         // 批量更改等级：逐条就地更新。
-        setData(current => result.records.reduce((data, record) => patchReviewedMistake(data, record), current))
+        setData(current => {
+          const changedIds = new Set(result.records.map(record => record.recordId))
+          const patched = result.records.reduce((data, record) => patchReviewedMistake(data, record), current)
+          return { ...patched, manualTodayIds: (current?.manualTodayIds || []).filter(id => !changedIds.has(id)) }
+        })
         setBusy(false)
       }
       else if (reload && command === "setMistakeCategory" && result?.recordId) {
@@ -609,6 +613,13 @@ function App() {
         // 不再依赖整页 dashboard 重载，大错题库下开关不再被分页状态卡住。
         setData(current => ({ ...current, matching: { ...current?.matching, debugModeEnabled: result.enabled === true } }))
         setBusy(false)
+      }
+      else if (command === "chooseSourceLocateMode" && result) {
+        setData(current => ({ ...current, matching: { ...current?.matching, sourceLocateMode: result.mode } }))
+        setBusy(false)
+      }
+      else if (command === "addManualTodayOverdue" && result) {
+        setData(current => ({ ...current, manualTodayIds: result.ids }))
       }
       else if (reload) await load()
       else if (reload) setBusy(false)
@@ -829,8 +840,7 @@ function App() {
         records={(data?.mistakes?.records || []).filter(item => item.noteAvailable)}
         reviewCurves={data?.mistakes?.reviewCurves}
         action={action}
-        manualTodayIds={manualTodayIds}
-        setManualTodayIds={setManualTodayIds}
+        manualTodayIds={data?.manualTodayIds || []}
         showLocateHint={showLocateHint}
       />}
 
@@ -863,6 +873,7 @@ function App() {
           ["sliders", "AI 错题分析（开发中…）", "科目、模型与定期总结", openAISettings],
           ["flag", "标记所选卡片错题", "支持脑图多选，统一选择错题等级", () => action("markMistake")],
           ["locate", "定位当前错题原题", "跳转到当前错题记录的原脑图位置", () => action("openCurrentMistakeSource", null, false)],
+          ["focusMode", "定位原题方式", `当前：${data?.matching?.sourceLocateMode === "focus" ? "定位并聚焦" : "仅定位"} · 点击选择`, () => action("chooseSourceLocateMode", null, false)],
 
           ["refresh", "刷新错题分类索引", "重新读取脑图标题、父节点路径和答案绑定", () => action("repairMistakes")],
           ["download", "导出错题", "以 PDF 或 Markdown 格式预览导出", openExport]
@@ -884,7 +895,7 @@ function App() {
           {debugModeEnabled && <>
             <SettingsGroup title="调试功能" tone="red" items={[
               ["fileText", "导出运行日志", "仅记录并导出调试模式开启期间的运行事件", exportRuntimeLog],
-              ["wifi", "联通测试", "测试三个上报通道是否可达（仅发送测试标记，不含笔记内容）", runConnectivityTest],
+              ["wifi", "联通测试", "测试两个上报通道是否可达（仅发送测试标记，不含笔记内容）", runConnectivityTest],
               ["close", "退出调试模式", "停止日志记录并清空运行日志", () => action("setDebugMode", { enabled: false })]
             ]} />
           </>}
@@ -1779,7 +1790,7 @@ function retainReviewDetail(current, recordId, detail) {
   return next
 }
 
-function DueReviewList({ records, reviewCurves, action, manualTodayIds, setManualTodayIds, showLocateHint, focusRecordId, onRecordChanged }) {
+function DueReviewList({ records, reviewCurves, action, manualTodayIds, showLocateHint, focusRecordId, onRecordChanged }) {
   const [answerDetail, setAnswerDetail] = useState(null)
   const [answerLoadingId, setAnswerLoadingId] = useState("")
   const [activeFilter, setActiveFilter] = useState("today")
@@ -1852,23 +1863,14 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, setManua
     return () => { cancelAnimationFrame(timer); cancelAnimationFrame(correction); clearTimeout(clear) }
   }, [focusRecordId, activeFilter])
   const manualTodaySet = new Set(manualTodayIds)
-  // 记录被改级或复习后不再是逾期状态时，把它从手动补入的今日队列里移除。
-  useEffect(() => {
-    setManualTodayIds(current => current.length
-      ? current.filter(recordId => {
-        const item = records.find(record => record.recordId === recordId)
-        return item && statusOf(item) === "overdue"
-      })
-      : current)
-  }, [records])
   const statusMatches = item => activeFilter === "today"
-    ? statusOf(item) === "today" || manualTodaySet.has(item.recordId)
+    ? statusOf(item) === "today" || (statusOf(item) === "overdue" && manualTodaySet.has(item.recordId))
     : activeFilter === "overdue"
       ? statusOf(item) === "overdue" && !manualTodaySet.has(item.recordId)
       : statusOf(item) === activeFilter
   const categories = Array.from(new Set(records.map(item => item.categoryPath?.[0] || item.sourceNotebookTitle).filter(Boolean)))
   const counts = {
-    today: records.filter(item => statusOf(item) === "today" || manualTodaySet.has(item.recordId)).length,
+    today: records.filter(item => statusOf(item) === "today" || (statusOf(item) === "overdue" && manualTodaySet.has(item.recordId))).length,
     overdue: records.filter(item => statusOf(item) === "overdue" && !manualTodaySet.has(item.recordId)).length,
     upcoming: records.filter(item => statusOf(item) === "upcoming").length,
     completed: records.filter(item => statusOf(item) === "completed").length
@@ -2010,7 +2012,6 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, setManua
         : `本次结果：${levelNames[level]} · ${nextDays(item, level)} 天后再次复测。`
     }))
     if (answerDetail?.record?.recordId === item.recordId) setAnswerDetail(null)
-    setManualTodayIds(current => current.filter(recordId => recordId !== item.recordId))
   }
 
   async function resume(item) {
@@ -2027,15 +2028,14 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, setManua
     return Math.round(30 + Math.min(days, 120) * 4)
   }
 
-  function addOverdue(count) {
-    const pool = records.filter(item => statusOf(item) === "overdue" && !manualTodaySet.has(item.recordId))
-    const picked = [...pool].sort(() => Math.random() - .5).slice(0, count)
-    if (!picked.length) {
+  async function addOverdue(count) {
+    const result = await action("addManualTodayOverdue", { count }, false)
+    if (!result) return
+    if (!result.addedCount) {
       setQueueNotice("逾期池已经清空。")
       return
     }
-    setManualTodayIds(current => [...new Set([...current, ...picked.map(item => item.recordId)])])
-    setQueueNotice(`已从逾期池加入 ${picked.length} 道题到今日队列。`)
+    setQueueNotice(`已从逾期池加入 ${result.addedCount} 道题到今日队列。`)
   }
 
   const summary = [

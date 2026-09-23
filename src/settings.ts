@@ -12,6 +12,7 @@ export interface MatcherSettings {
   mistakeCustomCategories: string[]
   debugModeEnabled: boolean
   cardToolbarEnabled: boolean
+  sourceLocateMode: "locate" | "focus"
 }
 
 export function normalizeMistakeCustomCategories(value: unknown): string[] {
@@ -34,7 +35,8 @@ export function loadMatcherSettings(): MatcherSettings {
     mistakeReviewCurves: normalizeMistakeReviewCurves(value?.mistakeReviewCurves),
     mistakeCustomCategories: normalizeMistakeCustomCategories(value?.mistakeCustomCategories),
     debugModeEnabled: value?.debugModeEnabled === true,
-    cardToolbarEnabled: value?.cardToolbarEnabled !== false
+    cardToolbarEnabled: value?.cardToolbarEnabled !== false,
+    sourceLocateMode: value?.sourceLocateMode === "focus" ? "focus" : "locate"
   }
   return settingsCache
 }
@@ -46,7 +48,8 @@ export function saveMatcherSettings(settings: Partial<MatcherSettings>): void {
     ...current,
     ...settings,
     mistakeReviewCurves: normalizeMistakeReviewCurves(settings.mistakeReviewCurves ?? current.mistakeReviewCurves),
-    mistakeCustomCategories: normalizeMistakeCustomCategories(settings.mistakeCustomCategories ?? current.mistakeCustomCategories)
+    mistakeCustomCategories: normalizeMistakeCustomCategories(settings.mistakeCustomCategories ?? current.mistakeCustomCategories),
+    sourceLocateMode: settings.sourceLocateMode === "focus" ? "focus" : settings.sourceLocateMode === "locate" ? "locate" : current.sourceLocateMode
   }
   setLocalDataByKey(next, SETTINGS_KEY)
   settingsCache = next

@@ -31,6 +31,7 @@ test("面板启动只返回首批错题并在首屏绘制后分页续传", () =>
   assert.doesNotMatch(manager, /let workbenchTransfer:/)
   assert.match(manager, /const records = data\.records\.slice\(safeOffset, safeOffset \+ WORKBENCH_PAGE_SIZE\)/)
   assert.match(core, /mistakes: beginMistakeWorkbenchTransfer\(\)/)
+  assert.match(core, /manualTodayIds: getManualTodayIds\(\)/)
   assert.match(core, /command === "mistakesPage"/)
   assert.doesNotMatch(core.slice(core.indexOf('command === "dashboard"'), core.indexOf('command === "answer"')), /mistakeWorkbenchData\(\)/)
   assert.match(ui, /setData\(next\)[\s\S]*await waitForPaint\(\)[\s\S]*MNBridge\.send\("mistakesPage"/)

@@ -123,7 +123,7 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
     var height = Math.max(MIN_HEIGHT, Math.min(560, bounds.height - 32));
     return {
       x: 16,
-      y: 16,
+      y: Math.max(safeAreaTop(controller), (bounds.height - height) / 2),
       width: width,
       height: height
     };

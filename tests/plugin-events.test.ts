@@ -4,6 +4,15 @@ import test from "node:test"
 import { runInNewContext } from "node:vm"
 import { transpileModule } from "typescript"
 
+test("定位原题设置由原生选择器处理，取消时保留原选项", () => {
+  const core = readFileSync("src/rails-core.ts", "utf8")
+  const web = readFileSync("web/src/main.jsx", "utf8")
+  assert.match(core, /command === "chooseSourceLocateMode"[\s\S]*?await select\([\s\S]*?仅定位[\s\S]*?定位并聚焦[\s\S]*?choice\.index === 0 \? "locate" : choice\.index === 1 \? "focus" : current/)
+  assert.match(core, /if \(mode !== current\) saveMatcherSettings\(\{ sourceLocateMode: mode \}\)/)
+  assert.match(web, /"定位原题方式"[\s\S]*?action\("chooseSourceLocateMode", null, false\)/)
+  assert.doesNotMatch(web, /className="sourceLocateSelect"/)
+})
+
 test("关闭侧边按钮只持久化设置并隐藏当前工具栏，重新开启不创建第二套 UI", () => {
   const source = readFileSync("src/card-toolbar-state.ts", "utf8")
   const fn = source.match(/export function setCardToolbarEnabled[\s\S]*?\n\}/)?.[0]
@@ -229,7 +238,7 @@ test("复习模式入口冻结当前队列并提供原生导航、信息和退�
   assert.match(review, /index: current\.index \+ 1/)
   assert.match(review, /button\.setTitleForState\("", 0\)/)
   assert.doesNotMatch(review, /\["上一题",\s*"‹"\]|\["下一题",\s*"›"\]|\["错题信息",\s*"ⓘ"\]/)
-  assert.match(review, /sameMindMap[\s\S]*notebookController\.changeFocusToNote\(target\)[\s\S]*openSourceByMistakeId\(item\.recordId\)/)
+  assert.match(review, /sameMindMap[\s\S]*await focusNoteInMindMapFocusMode\(item\.sourceNoteId\)[\s\S]*openSourceByMistakeId\(item\.recordId, \{ enterFocusMode: true \}\)/)
   assert.doesNotMatch(review, /focusNoteInFloatMindMapById/)
   assert.match(review, /button\.enabled = !current\.navigating[\s\S]*index === 1 && current\.index === 0[\s\S]*index === 2 && current\.index === current\.items\.length - 1/)
   assert.match(review, /alpha = button\.enabled \? 1 : 0\.28/)
@@ -336,6 +345,9 @@ test("MN Utils 可用时使用 MNButton 创建带插件图标的第二入口", (
   assert.match(entrance, /self\.answerCardView && !self\.answerCardView\.hidden && self\.answerCardView\.superview/)
   assert.match(entrance, /sender\.locationInView/)
   assert.match(entrance, /function nearestDock/)
+  assert.match(entrance, /ENTRANCE_DOCK_KEY/)
+  assert.match(entrance, /storedDock\(\)/)
+  assert.match(entrance, /rememberDock\(dock\)/)
   assert.match(entrance, /MNUtil\.animate\(update\)/)
   assert.match(plugin, /notebookWillOpen[\s\S]*ensureMnutilsEntrance\(\)/)
   assert.match(plugin, /sceneDidDisconnect[\s\S]*removeMnutilsEntrance\(\)/)
@@ -359,11 +371,13 @@ test("答案窗口刷新按钮同时复位位置尺寸并重新载入当前答�
   assert.match(main, /onRefreshAnswerCard/)
 })
 
-test("答案窗口关闭、刷新与候选按钮共用连续胶囊规格", () => {
+test("答案窗口关闭、定位、刷新与候选按钮共用连续胶囊规格", () => {
   const view = readFileSync("src/answer-card-view.ts", "utf8")
   const controls = readFileSync("src/window-controls.ts", "utf8")
   assert.match(view, /createWindowControlButton\("✕", "onCloseAnswerCard:"\)/)
+  assert.match(view, /createWindowControlButton\("↗", "onLocateAnswerCard:"\)/)
   assert.match(view, /createWindowControlButton\("↻", "onRefreshAnswerCard:"\)/)
+  assert.doesNotMatch(controls, /systemImageNamed|setImageForState/)
   assert.match(view, /createWindowControlButton\("", "onChooseAnswerCandidate:", true\)/)
   assert.match(controls, /ANSWER_BAR_CONTROL_WIDTH = 44/)
   assert.match(controls, /ANSWER_BAR_HEIGHT = 36/)
@@ -374,7 +388,7 @@ test("答案窗口关闭、刷新与候选按钮共用连续胶囊规格", () =>
   assert.match(controls, /titleEdgeInsets = \{ top: 0, left: 0, bottom: 0, right: 0 \}/)
 })
 
-test("答案窗口三控件合并为可左右换边的悬浮条，候选复用原生弹窗", () => {
+test("答案窗口控件合并为可左右换边的悬浮条，候选复用原生弹窗", () => {
   const view = readFileSync("src/answer-card-view.ts", "utf8")
   const controls = readFileSync("src/window-controls.ts", "utf8")
   const plugin = readFileSync("src/plugin.ts", "utf8")
@@ -394,7 +408,8 @@ test("答案窗口三控件合并为可左右换边的悬浮条，候选复用�
   // 悬浮条整体跟随关闭按钮位置设置；右侧时控件顺序镜像。
   assert.match(view, /answerControlBarLayout\(width, side, candidatesVisible\)/)
   assert.match(controls, /close: slot\(left \? 0 : count - 1\)/)
-  assert.match(controls, /candidates: slot\(left \? 2 : 0\)/)
+  assert.match(controls, /locate: slot\(left \? 1 : count - 2\)/)
+  assert.match(controls, /candidates: slot\(left \? 3 : 0\)/)
   assert.match(view, /setTitleForState\(String\(safeIndex \+ 1\), 0\)/)
   // 选择器与切换逻辑：路径、标准答案标记、正文摘要和弹窗文案沿用 beta.61。
   assert.match(plugin, /export async function onChooseAnswerCandidate/)
@@ -403,7 +418,7 @@ test("答案窗口三控件合并为可左右换边的悬浮条，候选复用�
   assert.match(plugin, /`找到 \$\{candidates\.length\} 个答案`/)
   assert.match(plugin, /"请选择要展示的答案卡片"/)
   assert.match(core, /instanceMethods:[\s\S]*onChooseAnswerCandidate/)
-  assert.match(plugin, /showAnswerCard\(answerCardHtml\(answer, questionTitle\)\)/)
+  assert.match(plugin, /showAnswerCard\(answerCardHtml\(answer, questionTitle, undefined, true\)\)/)
   // 候选数按答案卡去重；路径唯一胜出或唯一标准答案时不再显示候选。
   assert.match(domain, /export function distinctAnswers[\s\S]*answer\.noteId \|\| answer\.id/)
   assert.match(domain, /topScore > 0 && tiedTop\.length === 1/)
@@ -413,6 +428,31 @@ test("答案窗口三控件合并为可左右换边的悬浮条，候选复用�
   assert.doesNotMatch(view, /answerCandidatesDropdown|answerCardCandidateButtons|CANDIDATE_ROW_HEIGHT/)
   assert.doesNotMatch(matcher, /candidateBarHtml|AnswerCandidateOption/)
   assert.doesNotMatch(core, /switchAnswerCandidate/)
+})
+
+test("答案窗口置顶校正随显示启动并在关闭后停止", () => {
+  const view = readFileSync("src/answer-card-view.ts", "utf8")
+  assert.match(view, /ANSWER_WINDOW_Z_POSITION = 100000/)
+  assert.match(view, /bringSubviewToFront\?\.\(view\)/)
+  assert.match(view, /NSTimer\.scheduledTimerWithTimeInterval\([\s\S]*true,[\s\S]*keepAnswerCardInFront/)
+  assert.match(view, /export function closeAnswerCard[\s\S]*stopAnswerCardFrontCorrection\(\)/)
+})
+
+test("答案窗口定位当前答案并为脑图绑定手写启用双击切换", () => {
+  const plugin = readFileSync("src/plugin.ts", "utf8")
+  const matcher = readFileSync("src/matcher.ts", "utf8")
+  const main = readFileSync("src/main.ts", "utf8")
+  assert.match(plugin, /self\.answerCardAnswerNoteId = answer\.noteId/)
+  assert.match(plugin, /export async function onLocateAnswerCard[\s\S]*focusNoteInFloatMindMap\(noteId\)/)
+  assert.match(main, /onLocateAnswerCard/)
+  assert.match(plugin, /answerCardHtml\(answer, questionTitle, undefined, true\)/)
+  assert.match(matcher, /readBoundMindMapHandwriting\(answer\.notebookId, answer\.noteId\)/)
+  assert.match(matcher, /appendBoundMindMapHandwriting\([\s\S]*true/)
+})
+
+test("插件面板默认与复位位置位于左侧垂直中部", () => {
+  const panel = readFileSync("rails-native/WebPanelController.js", "utf8")
+  assert.match(panel, /function defaultFrame[\s\S]*x: 16,[\s\S]*y: Math\.max\(safeAreaTop\(controller\), \(bounds\.height - height\) \/ 2\)/)
 })
 
 test("答案窗口胶囊按压驱动整体果冻回弹并尊重减弱动态", () => {
@@ -451,9 +491,9 @@ test("原题跳转：以真实焦点为成功判据，官方聚焦失败后才�
   assert.match(navigation, /if \(result === "focused"\) \{[\s\S]*?clearPendingNavigation/)
   assert.match(navigation, /result === "sync-off" \? LOCATE_SYNC_OFF_HINT : LOCATE_TIMEOUT_HINT/)
   assert.match(navigation, /跳转失败，请检查脑图文档同步模式/)
-  assert.match(navigation, /const hint = await locateJumpInCurrentStudySet\(target\.noteId, target\.runId\)[\s\S]*?mn4PendingLocateHint = hint/)
-  assert.match(navigation, /openNoteInMindMap\(noteId: string, notebookId\?: string\): Promise<string \| undefined>/)
-  assert.match(manager, /openSourceByMistakeId\(recordId: string\): Promise<\{ locateHint\?: string \}>/)
+  assert.match(navigation, /const hint = await locateJumpInCurrentStudySet\(target\.noteId, target\.runId, target\.enterFocusMode === true\)[\s\S]*?mn4PendingLocateHint = hint/)
+  assert.match(navigation, /export async function openNoteInMindMap\([\s\S]*options: OpenNoteInMindMapOptions = \{\}[\s\S]*Promise<string \| undefined>/)
+  assert.match(manager, /export async function openSourceByMistakeId\([\s\S]*options: \{ enterFocusMode\?: boolean \} = \{\}[\s\S]*Promise<\{ locateHint\?: string \}>/)
   assert.match(web, /<MistakeBrowser[\s\S]*showLocateHint=\{showLocateHint\}/)
   assert.match(web, /<DueReviewList[\s\S]*showLocateHint=\{showLocateHint\}/)
   assert.match(web, /function DueReviewList\(\{[^}]*\bfocusRecordId\b[^}]*\}\)/)
@@ -469,7 +509,12 @@ test("跨学习集只派发官方链接，前台等待与 notebookWillOpen 接�
   assert.match(navigation, /PENDING_NAVIGATION_MAX_AGE_MS = 30_000/)
   assert.match(navigation, /从跨学习集接力记录恢复定位/)
   assert.match(navigation, /忽略非目标学习集/)
-  assert.match(navigation, /const hint = await locateJumpInCurrentStudySet\(target\.noteId, target\.runId\)/)
+  assert.match(navigation, /savePendingNavigation\(\{ runId, noteId, notebookId, createdAtMs: Date\.now\(\), enterFocusMode \}, true\)/)
+  assert.match(navigation, /const hint = await locateJumpInCurrentStudySet\(target\.noteId, target\.runId, target\.enterFocusMode === true\)/)
+  assert.match(navigation, /controller\.changeFocusToNote\(target\)/)
+  assert.match(navigation, /controller\.changeFocusToNote\(target\)[\s\S]*await delay\(0\.08\)[\s\S]*focusNoteInMindmapByOfficialApi\(noteId\)/)
+  const focusModeBody = navigation.match(/export async function focusNoteInMindMapFocusMode[\s\S]*?\n\}/)?.[0] || ""
+  assert.doesNotMatch(focusModeBody, /isTargetFocused\(noteId\)/)
 })
 
 test("卡片侧边按钮开关持久化且不再关闭全局后台服务", () => {

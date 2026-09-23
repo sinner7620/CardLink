@@ -19,6 +19,7 @@ import { clearNotebookShapeCache, notebookNotes } from "./note-tree"
 import { IndexScope as MindMapScope, scopeKey } from "./scope-key"
 import type { RegexMatchingRules } from "./binding"
 import { createRegexKeyExtractor } from "./regex-matching"
+import { appendBoundMindMapHandwriting, readBoundMindMapHandwriting } from "./bound-handwriting"
 
 export interface IndexedAnswer extends AnswerLike {
   noteId: string
@@ -280,11 +281,12 @@ export function answerText(answer: IndexedAnswer): string {
 export function answerCardHtml(
   answer: IndexedAnswer,
   questionTitle: string,
-  resolveNote: (noteId: string) => MbBookNote | undefined = noteId => MN.db.getNoteById(noteId)
+  resolveNote: (noteId: string) => MbBookNote | undefined = noteId => MN.db.getNoteById(noteId),
+  includeBoundHandwriting = false
 ): string {
   const note = resolveNote(answer.noteId)
   if (!note) throw new CardLinkError("answerNoteMissing")
-  return renderCardHtml(
+  const html = renderCardHtml(
     note,
     questionTitle,
     resolveNote,
@@ -307,4 +309,11 @@ export function answerCardHtml(
       }
     }
   )
+  return includeBoundHandwriting
+    ? appendBoundMindMapHandwriting(
+      html,
+      readBoundMindMapHandwriting(answer.notebookId, answer.noteId),
+      true
+    )
+    : html
 }
