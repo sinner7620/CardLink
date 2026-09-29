@@ -36,7 +36,7 @@ jobs:
         shell: bash
         run: |
           asset="dist/CardLink-${GITHUB_REF_NAME}.mnaddon"
-          notes="RELEASE_NOTES_${GITHUB_REF_NAME}.md"
+          notes="docs/release-notes/RELEASE_NOTES_${GITHUB_REF_NAME}.md"
           prerelease=()
           if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
             prerelease=(--prerelease)
@@ -61,7 +61,7 @@ jobs:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           GITEE_REPO: baidreams/CardLink
           RELEASE_TAG: ${{ github.ref_name }}
-          RELEASE_NOTES_FILE: RELEASE_NOTES_${{ github.ref_name }}.md
+          RELEASE_NOTES_FILE: docs/release-notes/RELEASE_NOTES_${{ github.ref_name }}.md
         run: node scripts/sync-gitee-release-notes.mjs
       - name: Upload manual-build artifact
         if: github.event_name == 'workflow_dispatch'

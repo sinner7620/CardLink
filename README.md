@@ -12,7 +12,7 @@ MarginNote 4 插件，用于为题目脑图绑定答案脑图，选中题目卡�
 
 | 渠道 | 当前版本 | 说明 |
 | --- | --- | --- |
-| 正式版 | 见 [package.json](package.json) 与对应 `RELEASE_NOTES_v<version>.md` | 跨脑图答案匹配、错题工作台、到期复习与导出；已发布安装包见 Releases |
+| 正式版 | 见 [package.json](package.json) 与对应的[发布说明](docs/release-notes/) | 跨脑图答案匹配、错题工作台、到期复习与导出；已发布安装包见 Releases |
 
 ## 正式版功能
 

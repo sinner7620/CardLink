@@ -4,7 +4,7 @@ import path from "node:path"
 const token = process.env.GITEE_TOKEN
 const repo = process.env.GITEE_REPO || "baidreams/CardLink"
 const tag = process.env.RELEASE_TAG
-const notesFile = process.env.RELEASE_NOTES_FILE || (tag ? `RELEASE_NOTES_${tag}.md` : "")
+const notesFile = process.env.RELEASE_NOTES_FILE || (tag ? `docs/release-notes/RELEASE_NOTES_${tag}.md` : "")
 const api = `https://gitee.com/api/v5/repos/${repo}`
 
 function apiUrl(route) {

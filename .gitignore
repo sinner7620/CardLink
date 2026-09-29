@@ -18,16 +18,15 @@
 !/pnpm-workspace.yaml
 !/tsconfig.json
 !/build.mjs
-# 发布 CI 按标签读取，正式版和预发布说明都属于发布输入。
-!/RELEASE_NOTES_v*.md
+# 发布说明统一放入已允许跟踪的 docs/release-notes/，根目录不再接纳。
 
 # 仅保留在本机，不纳入插件 Git 仓库。
 /workers/
 
 # 已结束版本的预发布说明不再收录；正式版和未来版本说明仍可跟踪。
-/RELEASE_NOTES_v2.3.3-beta.*.md
-/RELEASE_NOTES_v2.4.[1-4]-b*.md
-/RELEASE_NOTES_v2.4.1b*.md
+/docs/release-notes/RELEASE_NOTES_v2.3.3-beta.*.md
+/docs/release-notes/RELEASE_NOTES_v2.4.[1-4]-b*.md
+/docs/release-notes/RELEASE_NOTES_v2.4.1b*.md
 
 # 依赖、构建和安装包产物（包括源码目录中误放的副本）。
 node_modules/

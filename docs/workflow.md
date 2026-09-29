@@ -34,7 +34,7 @@ pnpm exec tsx --experimental-test-module-mocks --test tests/review-detail-cache.
 
 ## 交付清单
 
-1. 根据当前版本确定未使用的新版本；正式发布按用户决定。更新 `package.json` 与 `RELEASE_NOTES_v<version>.md`。
+1. 根据当前版本确定未使用的新版本；正式发布按用户决定。更新 `package.json` 与 `docs/release-notes/RELEASE_NOTES_v<version>.md`。
 2. 对最终输入完成 `pnpm check`、受影响行为测试、`pnpm build`。检查包内版本、正式插件 ID 和标题；不固定执行 `pnpm test`。
 3. 将 dist 安装包复制到 `E:\iCloudDrive\同步文件夹\`；记录源文件与交付位置，不做哈希比对。
 4. 如已授权远端发布，标签 `v<version>` 与 package 版本一致，核对 GitHub/Gitee 发布附件。CI 重新构建的包与本地包分别记录来源。
@@ -48,7 +48,7 @@ pnpm exec tsx --experimental-test-module-mocks --test tests/review-detail-cache.
 - 构建输出、依赖目录、临时参考资料、浏览器截图和测试输出、压缩包及本机配置不进入 Git。忽略规则不会删除本地文件，也不会自动取消已跟踪文件；如需停止跟踪，按明确文件清单单独处理，保留本地内容，不批量重建索引。
 - [文档索引](README.md) 负责导航；[验收清单](acceptance.md) 按受影响功能选用，不是每轮全量手工测试门槛。
 - 历史变更记录、旧发布说明、调查和交接材料可通过 Git 历史追溯。按用户授权可清理已过期的历史文档，同时修正索引和链接，保留现行契约、当前验证及未验证限制。旧版本状态、一次性整改计划和当时的测试数量不能自动成为现行约束。
-- 发布说明目前由 CI 按根目录文件名读取，保留 `RELEASE_NOTES_v*.md` 的位置。仅为根目录整齐而搬移会破坏发布路径。
+- 发布说明统一保存在 `docs/release-notes/RELEASE_NOTES_v<version>.md`。CI 和 Gitee 同步脚本按该路径读取；后续如调整位置，必须同步更新这些读取方。
 - 正式版发布后可按用户授权移除该版本的旧预发布说明，并忽略已结束版本的预发布文件，防止再次入库；保留正式版说明及未来待发布版本的说明。本次清理仅影响当前文件树，不删除历史 Git 提交、标签或平台 Release。
 - `docs/modules/` 保留现有资料；仅在相关契约改变时更新，不要求为每个新文件再建镜像文档。
 - 临时文件、安装包副本、未跟踪的网站目录和已有删除项不自动提交或删除。整理提交只选择本任务的具体路径，不无差别暂存或清理。

@@ -10,6 +10,7 @@
 | [pages/](pages/) | **功能页文档**：面板主页与全部功能页的结构、数据流、边界、验收 |
 | [design/](design/) | **设计规范**：Apple 设计准则对照、设计令牌速查、交互与动效规范 |
 | [changes/](changes/) | **近期变更记录**：当前轮次的目的、实现、影响、验证与未验证项；已清理的旧记录可查 Git 历史 |
+| [release-notes/](release-notes/) | **发布说明**：按版本保存，GitHub/Gitee 发布流程从此读取 |
 | [acceptance.md](acceptance.md) | **验收标准**（按功能页，含统一前置） |
 | [boundaries.md](boundaries.md) | **边界与设计决策**（明确不做 / deferred / 数据·口径·隐私·平台边界） |
 | [workflow.md](workflow.md) | **开发流程**：验证范围、版本与交付、历史文档和工作区整理 |
