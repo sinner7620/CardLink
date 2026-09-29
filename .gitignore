@@ -7,7 +7,6 @@
 !/web/
 !/rails-native/
 !/assets/
-!/workers/
 !/scripts/
 !/tests/
 !/docs/
@@ -21,6 +20,9 @@
 !/build.mjs
 # 发布 CI 按标签读取，正式版和预发布说明都属于发布输入。
 !/RELEASE_NOTES_v*.md
+
+# 仅保留在本机，不纳入插件 Git 仓库。
+/workers/
 
 # 已结束版本的预发布说明不再收录；正式版和未来版本说明仍可跟踪。
 /RELEASE_NOTES_v2.3.3-beta.*.md

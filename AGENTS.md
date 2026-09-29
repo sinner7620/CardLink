@@ -31,6 +31,7 @@
 - Before delivering an installation package, run `pnpm check`, behavior tests selected for the affected scope, and `pnpm build` for final artifact inputs. Do not require the full `pnpm test` command. Verify package version/identity and copy the `.mnaddon` to `E:\iCloudDrive\同步文件夹\`. Hash verification is not a delivery step.
 - For explicitly authorized same-version replacement, update its release notes and task record, rebuild, and replace the delivery copy. The exception does not carry forward.
 - GitHub/Gitee publishing follows user release authorization; local modification or commit alone is not a request to publish.
+- Use `main` tracking `origin/main` for authorized Git commits and synchronization. Keep GitHub remote branches limited to `main`; do not create or push feature/release branches or PRs unless the user explicitly requests an exception. Keep `workers/` local-only and untracked.
 
 ## SVG icon morph animations (Morphicons)
 
