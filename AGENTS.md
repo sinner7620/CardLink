@@ -12,6 +12,7 @@
 
 - Create or update one `docs/changes/YYYY-MM-DD-<topic>.md` per coherent modification task, including rule/documentation changes. Continue that record for follow-up fixes within the task. Pure spelling, formatting or link fixes that do not change a contract may be recorded only in the final response.
 - Record purpose, implemented behavior, affected files/modules, compatibility/data impact, validation actually performed and unverified limitations. Keep the record aligned with the final change.
+- Keep `docs/changes/` local-only and untracked. Continue writing task records there, but never stage or force-add them to Git.
 - Update architecture, interface or feature documentation when its contract changes. A new code file does not automatically require a matching documentation file.
 - Write `docs/release-notes/RELEASE_NOTES_v<version>.md` when delivering that version; emphasize user-visible changes and material limitations rather than repeating the engineering record.
 

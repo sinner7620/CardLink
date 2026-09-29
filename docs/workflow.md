@@ -42,6 +42,7 @@ pnpm exec tsx --experimental-test-module-mocks --test tests/review-detail-cache.
 
 ## 文档和仓库整理
 
+- `docs/changes/` 仅用于本机任务记录，继续按 AGENTS.md 编写，但不暂存、提交或强制添加到 Git；公开版本更新内容仍保存在 `docs/release-notes/`。
 - GitHub 远程仅保留 `main`；本地正式项目使用 `main` 跟踪 `origin/main`。获授权提交和同步时直接同步 main，默认不再新建或推送开发/发布分支及 PR。版本标签与 Release 保留；远端发布仍遵循用户授权。
 - `workers/` 仅保留在本地，已从 Git 跟踪范围移除；不得通过强制添加将其重新提交。历史提交中的文件不在本次改写范围内。
 - Git 跟踪范围由根目录 `.gitignore` 白名单约束：保留插件源码、运行资源、测试、构建和发布脚本、依赖清单及锁文件，以及项目维护文档。新增顶层模块时显式更新白名单；安装包通过 Release 附件分发，不提交到 Git。
