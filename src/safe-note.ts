@@ -7,6 +7,18 @@ export interface SafeNoteData {
   brokenLinks: number
 }
 
+/**
+ * Per the official NoteComment reference, MarginNote 4 stores linked notes as
+ * plain TextNote comments whose text is `marginnote4app://note/{noteId}`
+ * (older builds/cards use the marginnote3app variant). Comments that are note
+ * links must be resolved like LinkNote targets instead of being dropped.
+ */
+const NOTE_LINK_PATTERN = /^marginnote(?:3|4)app:\/\/note\/([A-Za-z0-9]+)/
+
+export function noteLinkTarget(text: string): string {
+  return NOTE_LINK_PATTERN.exec(text.trim())?.[1] ?? ""
+}
+
 function arrayOf<T>(value: unknown): T[] {
   try {
     return value ? Array.from(value as ArrayLike<T>) : []
@@ -42,6 +54,17 @@ function directContent(
     if (type === "TextNote" && text.startsWith("#")) {
       tags.push(...text.split(/\s+/).filter(tag => tag.startsWith("#")).map(tag => tag.slice(1)))
     } else if ((type === "TextNote" || type === "HtmlNote") && text) {
+      const linkedId = type === "TextNote" ? noteLinkTarget(text) : ""
+      if (linkedId) {
+        const linked = resolveNote(linkedId)
+        if (!linked) {
+          brokenLinks++
+          continue
+        }
+        const linkedExcerpt = textOf(linked.excerptText)
+        if (linkedExcerpt) excerpts.push(linkedExcerpt)
+        continue
+      }
       if (!text.includes("marginnote3app") && !text.includes("marginnote4app")) comments.push(text)
     } else if (type === "LinkNote") {
       const embeddedText = textOf(comment?.q_htext)

@@ -1,0 +1,25 @@
+import { delay, select } from "marginnote"
+import { LEVEL_DESCRIPTIONS, MistakeLevel } from "./mistake-domain"
+
+/**
+ * Use MarginNote's own selector instead of mounting a second native overlay.
+ * Presenting a UIView from a UIWebView delegate callback can crash on iPad.
+ */
+export async function chooseMistakeLevel(current?: MistakeLevel, count = 1): Promise<MistakeLevel | undefined> {
+  await delay(0.08)
+  const options = ([0, 1, 2] as MistakeLevel[]).map(level =>
+    `${LEVEL_DESCRIPTIONS[level]}${current === level ? "（当前）" : ""}`
+  )
+  const batch = count > 1
+  const result = await select(
+    options,
+    batch ? `批量标记 ${count} 道错题` : "标记掌握状态",
+    batch ? "所选卡片将统一使用该掌握等级" : "请选择这道题目前的掌握状态",
+    true
+  )
+  return result.index >= 0 && result.index <= 2 ? result.index as MistakeLevel : undefined
+}
+
+// Kept as compatibility no-ops for older cached Rails instance method tables.
+export function onMistakeLevelPickerAction(): void {}
+export function closeMistakeLevelPicker(): void {}

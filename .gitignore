@@ -1,3 +1,54 @@
+# 根目录仅接纳插件源码、构建/发布输入、测试及项目维护文档。
+# 新增顶层模块时，在这里显式加入；临时资料默认不进入 Git。
+/*
+!/.gitignore
+!/.github/
+!/src/
+!/web/
+!/rails-native/
+!/assets/
+!/workers/
+!/scripts/
+!/tests/
+!/docs/
+!/AGENTS.md
+!/README.md
+!/THIRD_PARTY_NOTICES.txt
+!/package.json
+!/pnpm-lock.yaml
+!/pnpm-workspace.yaml
+!/tsconfig.json
+!/build.mjs
+# 发布 CI 按标签读取，正式版和预发布说明都属于发布输入。
+!/RELEASE_NOTES_v*.md
+
+# 依赖、构建和安装包产物（包括源码目录中误放的副本）。
 node_modules/
 dist/
+web-dist/
+*.mnaddon
+*.zip
+*.tsbuildinfo
+
+# 本地参考资料、预览、截图、日志和测试输出。
+.codex-tmp/
+.playwright-cli/
+ui-preview/
+output/
+test-results/
+playwright-report/
+coverage/
+demo/
+heart-glow-demo/
+/web/export-demo/
 *.log
+
+# 本机配置与缓存；模板配置可以跟踪。
+.env
+.env.*
+!.env.example
+!.env.sample
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc

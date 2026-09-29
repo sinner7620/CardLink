@@ -1,0 +1,35 @@
+/* The revealed list width is also the detail region's left edge. */
+.mistakeSplitView.mistakeAutoHide { position: relative; display: block; overflow: hidden; isolation: isolate; --drawer-visible-width: 0px; --drawer-width: 0px; }
+.mistakeAutoHide.drawerOpen { --drawer-visible-width: var(--drawer-width); }
+.mistakeAutoHide > .mistakeDetailStage {
+  position: absolute; inset: 0 0 0 auto; width: calc(100% - var(--drawer-visible-width)); height: 100%;
+  transition: width 320ms cubic-bezier(.22, .8, .25, 1);
+}
+.mistakeDetailStage > .mistakeDetailSurface { width: 100%; height: 100%; box-sizing: border-box; }
+.mistakeWorkspace .mistakeAutoHide > .mistakeSidebar {
+  position: absolute; inset: 0 auto 0 0; z-index: 5; box-sizing: border-box;
+  width: min(340px, 50%); height: 100%; padding-left: 20px;
+  border-radius: 0 18px 18px 0; background: var(--drawer-background, rgba(250,250,252,.97));
+  box-shadow: 8px 0 28px rgba(25,35,55,.16); touch-action: pan-y; user-select: none; -webkit-user-select: none;
+  transform: translate3d(calc(var(--drawer-visible-width) - var(--drawer-width)), 0, 0);
+  transition: transform 320ms cubic-bezier(.22, .8, .25, 1);
+  visibility: hidden;
+}
+.mistakeWorkspace .mistakeAutoHide.drawerOpen > .mistakeSidebar { visibility: visible; }
+.mistakeWorkspace .mistakeAutoHide.drawerDragging > .mistakeSidebar { visibility: visible; }
+.mistakeWorkspace .mistakeAutoHide.drawerDragging > .mistakeSidebar,
+.mistakeAutoHide.drawerDragging > .mistakeDetailStage { transition: none; will-change: width; }
+.mistakeWorkspace .mistakeAutoHide[data-drawer-held] > .mistakeSidebar,
+.mistakeAutoHide[data-drawer-held] > .mistakeDetailStage,
+.mistakeWorkspace .mistakeAutoHide[data-drawer-measuring] > .mistakeSidebar,
+.mistakeAutoHide[data-drawer-measuring] > .mistakeDetailStage { transition: none; }
+.mistakeWorkspace .mistakeAutoHide:not(.drawerOpen):not(.drawerDragging) > .mistakeSidebar { transition: transform 320ms cubic-bezier(.22,.8,.25,1), visibility 0s 320ms; }
+.mistakeDrawerEdge { position: absolute; inset: 0 auto 0 0; width: 24px; z-index: 6; border: 0; padding: 0; background: transparent; touch-action: pan-y; cursor: ew-resize; }
+.mistakeDrawerEdge span { display: block; width: 4px; height: 44px; margin: auto; border-radius: 3px; background: #8b95a8; }
+.mistakeDrawerEdge:focus-visible { outline: none; }
+.mistakeDrawerEdge:focus-visible span { outline: 2px solid #3478f6; outline-offset: 4px; }
+@media (prefers-reduced-motion: reduce) {
+  .mistakeWorkspace .mistakeAutoHide > .mistakeSidebar,
+  .mistakeAutoHide > .mistakeDetailStage,
+  .mistakeWorkspace .mistakeAutoHide:not(.drawerOpen):not(.drawerDragging) > .mistakeSidebar { transition: none; }
+}
