@@ -1,5 +1,5 @@
 # 设计令牌速查
-## CSS（web/src/tokens.css，第一个导入）
+## CSS（web/src/ui/tokens.css）
 - --mn-accent: #0e8dfd（当前主强调）
 - --mn-gray-fill: #d8d8dd（选中灰底）
 - --mn-blue-legacy: #5369df / -deep: #3157a4 / -bright: #5c70e6（历史层，勿新增）

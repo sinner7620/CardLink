@@ -1,120 +1,29 @@
-# CardLink 代码文档
+# CardLink 项目文档
 
-> 开发规则以 [AGENTS.md](../AGENTS.md) 和 [验证与交付流程](workflow.md) 为准。产品版本读取 [package.json](../package.json)。模块与页面说明多数起始于 2.3.3-beta.71，未全量复核，不代表当前代码逐文件一致。
+插件介绍与安装方法见 [项目首页](../README.md)。开发约定以 [AGENTS.md](../AGENTS.md) 为准。
 
-## 文档地图
+## 维护入口
 
-| 目录 | 内容 |
-|---|---|
-| [modules/](modules/) | **模块参考**：职责、关键导出、边界和验收，按 src · web · native 三层组织；按相关契约变化维护 |
-| [pages/](pages/) | **功能页文档**：面板主页与全部功能页的结构、数据流、边界、验收 |
-| [design/](design/) | **设计规范**：Apple 设计准则对照、设计令牌速查、交互与动效规范 |
-| [changes/](changes/) | **近期变更记录**：当前轮次的目的、实现、影响、验证与未验证项；已清理的旧记录可查 Git 历史 |
-| [release-notes/](release-notes/) | **发布说明**：按版本保存，GitHub/Gitee 发布流程从此读取 |
-| [acceptance.md](acceptance.md) | **验收标准**（按功能页，含统一前置） |
-| [boundaries.md](boundaries.md) | **边界与设计决策**（明确不做 / deferred / 数据·口径·隐私·平台边界） |
-| [workflow.md](workflow.md) | **开发流程**：验证范围、版本与交付、历史文档和工作区整理 |
+| 文档 | 用途 |
+| --- | --- |
+| [开发流程](workflow.md) | 验证、版本交付、main 同步与仓库整理 |
+| [功能验收](acceptance.md) | 按本次改动选择检查项 |
+| [边界与设计决策](boundaries.md) | 数据口径、隐私及历史设计背景 |
+| [模块参考](modules/) | 插件核心、Web 界面和原生桥接 |
+| [设计令牌](design/tokens.md) | CSS 与原生侧的颜色和层级入口 |
+| [交互与动效](design/interaction.md) | 手势、动画与减弱动态约定 |
+| [版本说明](release-notes/) | 用户更新内容，发布流程从此读取 |
+| [近期记录](changes/) | 当前版本验证及尚需保留的任务记录 |
 
-## 功能页（主页与页面）
+## 功能文档
 
-| 页面 | 入口 | 文档 |
-|---|---|---|
-| **面板主页**（错题本，默认页签） | main.jsx `MistakeBrowser` + `MistakeDetail` | [pages/browse.md](pages/browse.md) |
-| 面板壳与导航 | main.jsx `App` | [pages/panel-home.md](pages/panel-home.md) |
-| 总览 | `MistakeOverview` | [pages/overview.md](pages/overview.md) |
-| 待复习 | `DueReviewList` | [pages/review.md](pages/review.md) |
-| 设置 | 设置页签 | [pages/settings.md](pages/settings.md) |
-| 导出 | `MistakeExport` | [pages/export.md](pages/export.md) |
-| 答题卡（浮层） | `showAnswerCard` | [pages/answer-card.md](pages/answer-card.md) |
-| 悬浮工具栏（浮层） | `showAnswerToolbar` | [pages/toolbar.md](pages/toolbar.md) |
+- [面板与导航](pages/panel-home.md)
+- [错题本](pages/browse.md)
+- [总览](pages/overview.md)
+- [待复习](pages/review.md)
+- [设置](pages/settings.md)
+- [导出](pages/export.md)
+- [答案窗口](pages/answer-card.md)
+- [工具栏](pages/toolbar.md)
 
-## 模块索引
-
-### src/（插件核心，TypeScript）
-- [src/answer-card-layout](modules/src/answer-card-layout.md)
-- [src/answer-card-view](modules/src/answer-card-view.md)
-- [src/answer-lookup](modules/src/answer-lookup.md)
-- [src/base64](modules/src/base64.md)
-- [src/binding](modules/src/binding.md)
-- [src/card-html](modules/src/card-html.md)
-- [src/card-markdown](modules/src/card-markdown.md)
-- [src/domain](modules/src/domain.md)
-- [src/error-messages](modules/src/error-messages.md)
-- [src/floating-toolbar](modules/src/floating-toolbar.md)
-- [src/globals.d](modules/src/globals.d.md)
-- [src/index-store](modules/src/index-store.md)
-- [src/level-picker](modules/src/level-picker.md)
-- [src/main](modules/src/main.md)
-- [src/markdown](modules/src/markdown.md)
-- [src/matcher](modules/src/matcher.md)
-- [src/mindmap-candidate](modules/src/mindmap-candidate.md)
-- [src/mindmap-scope](modules/src/mindmap-scope.md)
-- [src/mistake-domain](modules/src/mistake-domain.md)
-- [src/mistake-export](modules/src/mistake-export.md)
-- [src/mistake-manager](modules/src/mistake-manager.md)
-- [src/mistake-review-settings](modules/src/mistake-review-settings.md)
-- [src/mistake-store](modules/src/mistake-store.md)
-- [src/mistake-tags](modules/src/mistake-tags.md)
-- [src/note-link](modules/src/note-link.md)
-- [src/note-navigation](modules/src/note-navigation.md)
-- [src/note-tree](modules/src/note-tree.md)
-- [src/notebook-picker](modules/src/notebook-picker.md)
-- [src/ordered-pairing-domain](modules/src/ordered-pairing-domain.md)
-- [src/ordered-pairing](modules/src/ordered-pairing.md)
-- [src/pkdrawing-core-webview](modules/src/pkdrawing-core-webview.md)
-- [src/pkdrawing-core](modules/src/pkdrawing-core.md)
-- [src/pkdrawing-renderer](modules/src/pkdrawing-renderer.md)
-- [src/pkdrawing-svg](modules/src/pkdrawing-svg.md)
-- [src/plugin](modules/src/plugin.md)
-- [src/rails-core](modules/src/rails-core.md)
-- [src/regex-matching](modules/src/regex-matching.md)
-- [src/safe-note](modules/src/safe-note.md)
-- [src/scope-key](modules/src/scope-key.md)
-- [src/session-state](modules/src/session-state.md)
-- [src/settings](modules/src/settings.md)
-- [src/source-insights](modules/src/source-insights.md)
-- [src/store](modules/src/store.md)
-- [src/telemetry](modules/src/telemetry.md)
-- [src/ui-tokens](modules/src/ui-tokens.md)
-- [src/updater](modules/src/updater.md)
-- [src/version](modules/src/version.md)
-
-### web/src（面板前端）
-- [web/a11y](modules/web/a11y.md)
-- [web/card-preview](modules/web/card-preview.md)
-- [web/review-detail-cache](modules/web/review-detail-cache.md)
-- [web/icons](modules/web/icons.md)
-- [web/lib](modules/web/lib)
-- [web/main](modules/web/main.md)
-- [web/morphicons-vendor](modules/web/morphicons-vendor.md)
-- [web/ui-styles](modules/web/ui-styles.md)
-- [web/preview-favorites](modules/web/preview-favorites.md)
-- [web/tokens](modules/web/tokens.md)
-
-### rails-native/（原生层）
-- [native/WebAddon](modules/native/WebAddon.md)
-- [native/WebBridgeCommands](modules/native/WebBridgeCommands.md)
-- [native/WebPanelController](modules/native/WebPanelController.md)
-- [native/main](modules/native/main.md)
-- [native/ui-constants](modules/native/ui-constants.md)
-
-## 关键链路速查
-
-- 查答案：工具栏 → findCurrentAnswer → resolveAnswerLookupContext → findAnswersForQuestion → showAnswerCard
-- 标记错题：工具栏 → markSelectedQuestions → markQuestionAsMistake(s) → commitSourceTagTasks → mistake-store
-- 复习/改级：面板/工具栏 → reviewMistakeById → reviewMistake（domain 纯函数）→ 标签写入 → store
-- 标签恢复：设置「刷新错题分类索引」→ repairAndOrganizeMistakes → recoverMistakesFromTags（只增不删）
-- 导出：导出页 → exportMistakes/previewMistakeExport → 任务式 PDF（pdfTaskStatus 轮询）/ MD 打包
-- 更新：检查更新 → GitHub→Gitee 回退 → 体积校验 → 系统保存面板
-
-## 维护约定
-
-- 任务记录、验证和交付按 [AGENTS.md](../AGENTS.md) 与 [workflow.md](workflow.md) 执行，不在本索引重复定义门槛。
-- 改主题：只改 web/src/ui/tokens.css（+ 原生侧 src/ui-tokens.ts）
-- 面板样式按 `web/src/ui/` 页面所有权维护；禁止恢复全局覆盖层
-- 新增桥接命令：rails-core bridge 分发 + WebBridgeCommands（如涉及面板）+ tests/bridge-schema.test.ts 白名单
-- 架构、接口或用户行为改变时更新相关说明；无需为每个新增代码文件建立同名文档。
-
-## 历史资料查阅
-
-旧 beta 调查报告、UI 交接材料、已过期方案及 2026-09-29 之前的逐轮记录已从当前目录清理。需要追溯时使用 Git 历史，例如 `git log --all -- docs`。旧记录中的结论按当时版本解读，不作为当前缺陷清单；现行功能说明以本索引列出的模块、页面和维护文档为入口。
+模块和设计参考中保留了部分旧版本背景，具体实现以当前源码为准；旧验收结论不代表当前版本已通过真机检查。已清理的历史文档可通过 `git log --all -- docs` 查阅。
