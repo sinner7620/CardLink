@@ -10,7 +10,7 @@
 
 ## Documentation
 
-- Create or update one `docs/changes/YYYY-MM-DD-<topic>.md` per coherent modification task, including rule/documentation changes. Continue that record for follow-up fixes within the task.
+- Create or update one `docs/changes/YYYY-MM-DD-<topic>.md` per coherent modification task, including rule/documentation changes. Continue that record for follow-up fixes within the task. Pure spelling, formatting or link fixes that do not change a contract may be recorded only in the final response.
 - Record purpose, implemented behavior, affected files/modules, compatibility/data impact, validation actually performed and unverified limitations. Keep the record aligned with the final change.
 - Update architecture, interface or feature documentation when its contract changes. A new code file does not automatically require a matching documentation file.
 - Write `RELEASE_NOTES_v<version>.md` when delivering that version; emphasize user-visible changes and material limitations rather than repeating the engineering record.
@@ -25,11 +25,11 @@
 ## Version and delivery
 
 - Ordinary development commits and documentation/rule-only changes do not automatically create an installable release or bump the product version.
-- Each delivered code/config/UI artifact uses a new version based on current `package.json`, unless the user explicitly authorizes same-version replacement for that round. Do not reuse a delivered version with different content by default.
+- Each delivered installation package uses a new version based on current `package.json`, unless the user explicitly authorizes same-version replacement for that round. Do not reuse a delivered version with different content by default.
 - Use `X.Y.Z-bN` for new prereleases and `X.Y.Z` for formal releases. The user decides formal promotion. Do not copy obsolete hardcoded version baselines or rename historical versions.
 - Always build the formal channel: `mnChannel: "stable"`, ID `marginnote.extension.mn4-answer-matcher`, title `CardLink`. Prerelease versions must not switch plugin identity.
-- Before delivering an installation package, run `pnpm check`, `pnpm test`, `pnpm build` for final artifact inputs. Verify package version/identity, copy the `.mnaddon` to `E:\iCloudDrive\同步文件夹\`, and record SHA-256 matching the dist original.
-- For explicitly authorized same-version replacement, update its release notes and task record, rebuild, replace the delivery copy and record the new matching hash. The exception does not carry forward.
+- Before delivering an installation package, run `pnpm check`, behavior tests selected for the affected scope, and `pnpm build` for final artifact inputs. Do not require the full `pnpm test` command. Verify package version/identity and copy the `.mnaddon` to `E:\iCloudDrive\同步文件夹\`. Hash verification is not a delivery step.
+- For explicitly authorized same-version replacement, update its release notes and task record, rebuild, and replace the delivery copy. The exception does not carry forward.
 - GitHub/Gitee publishing follows user release authorization; local modification or commit alone is not a request to publish.
 
 ## SVG icon morph animations (Morphicons)

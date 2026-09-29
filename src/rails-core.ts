@@ -1,6 +1,15 @@
 import { delay, MN, NodeNote, select, showHUD } from "marginnote"
+import { clipperSnapshot, recordClipperTool, saveClipperSetting, saveClipperAnswerSetting, configureClipperTitleFormat } from "./question-clipper"
+import { openClipperQuickMenu, onClipperEnd, onClipperBindMother, onClipperResetQuestion, onClipperEditTitle } from "./mnutils-entrance"
 import {
   answerMatchingSettingsData,
+  managedAnswerBindings,
+  updateManagedAnswerBinding,
+  deleteManagedAnswerBinding,
+  addManagedAnswerBindingColor,
+  refreshManagedAnswerBinding,
+  chooseManagedAnswerMindMap,
+  chooseCurrentAnswerBinding,
   isCardToolbarEnabled,
   setCardToolbarEnabled,
   answerWorkbenchData,
@@ -31,6 +40,15 @@ import {
   onMnutilsEntranceClick,
   onMnutilsEntranceLongPress,
   onMnutilsEntrancePan,
+  onMnutilsQuickMenuDismiss,
+  onMnutilsQuickMenuWindowTap,
+  onMnutilsQuickMenuOpenPanel,
+  onMnutilsQuickMenuFilter,
+  onMnutilsQuickMenuSelectAll,
+  onMnutilsQuickMenuToggleQuestion,
+  onMnutilsQuickMenuToggleBranch,
+  onMnutilsQuickMenuStart,
+  onMnutilsQuickMenuModePress,
   notifyWorkbenchDataChanged,
   onMistakeLevelPickerAction,
   onNotebookPickerAction,
@@ -77,7 +95,7 @@ import {
 import { checkForUpdates } from "./updater"
 import { runTelemetryConnectivityTest } from "./telemetry"
 import { exportMistakes, previewMistakeExport, cancelMistakeExportPreparation } from "./mistake-export"
-import { captureDiagnosticError, clearNavigationRuntimeLog, consumePendingLocateHint, exportNavigationRuntimeLog, recordRuntimeState } from "./note-navigation"
+import { captureDiagnosticError, clearNavigationRuntimeLog, consumePendingLocateHint, exportNavigationRuntimeLog, focusNoteInFloatMindMap, recordRuntimeState } from "./note-navigation"
 import { presentError } from "./error-messages"
 import { CardLinkError } from "./errors"
 import { loadMatcherSettings, saveMatcherSettings } from "./settings"
@@ -120,9 +138,16 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
       mistakes: beginMistakeWorkbenchTransfer(),
       manualTodayIds: getManualTodayIds(),
       matching: answerMatchingSettingsData(),
+      clipper: clipperSnapshot(owner ?? self),
+      answerBindings: managedAnswerBindings(),
       // AI 运行时门闸：总开关关闭时 Web 不装载 AI 模块、不发送任何 AI 命令。
       aiEnabled: aiRuntimeEnabled()
     }
+  }
+  if (command === "bindingSettingsSnapshot") return {
+    clipper: clipperSnapshot(owner ?? self),
+    matching: answerMatchingSettingsData(),
+    answerBindings: managedAnswerBindings()
   }
   if (command === "answer") return answerWorkbenchData()
   if (command === "acceptMistakeRefreshConsent") {
@@ -143,6 +168,46 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
   if (command === "startReviewMode") return startReviewMode(payload?.records, owner ?? self)
   if (command === "openPluginGuide") return openPluginGuide()
   if (command === "bindAnswerNotebook") return bindAnswerNotebook()
+  if (command === "chooseCurrentAnswerBinding") return chooseCurrentAnswerBinding()
+  if (command === "openClipperMode") { openClipperQuickMenu(owner ?? self); return clipperSnapshot(owner ?? self) }
+  if (command === "recordClipperTool") { recordClipperTool(String(payload?.slot ?? ""), owner ?? self); return clipperSnapshot(owner ?? self) }
+  if (command === "setClipperAnswer") { saveClipperAnswerSetting(payload?.enabled === true, owner ?? self); return clipperSnapshot(owner ?? self) }
+  if (command === "setClipperTitle") { saveClipperSetting(payload?.enabled === true, owner ?? self); return clipperSnapshot(owner ?? self) }
+  if (command === "configureClipperTitleFormat") { await configureClipperTitleFormat(owner ?? self); return clipperSnapshot(owner ?? self) }
+  if (command === "chooseClipperAnswerPosition") {
+    await select(["子卡片（当前）"], "答案位置", "摘录的答案放在题目子卡片中", true)
+    return clipperSnapshot(owner ?? self)
+  }
+  if (command === "updateManagedAnswerBinding") return updateManagedAnswerBinding(String(payload?.key ?? ""), payload?.changes ?? {})
+  if (command === "deleteManagedAnswerBinding") return deleteManagedAnswerBinding(String(payload?.key ?? ""))
+  if (command === "addManagedAnswerBindingColor") return addManagedAnswerBindingColor(String(payload?.key ?? ""))
+  if (command === "refreshManagedAnswerBinding") return refreshManagedAnswerBinding(String(payload?.key ?? ""))
+  if (command === "chooseManagedAnswerMindMap") return chooseManagedAnswerMindMap(String(payload?.key ?? ""), payload?.activateMixed === true)
+  if (command === "setPersonalSetting") {
+    const key = String(payload?.key ?? "")
+    if (key === "subcardAnswerDisplay" && ["reveal", "window"].includes(payload?.value)) saveMatcherSettings({ subcardAnswerDisplay: payload.value })
+    else if (key === "boundHandwritingDisplay" && ["always", "doubleTap"].includes(payload?.value)) saveMatcherSettings({ boundHandwritingDisplay: payload.value })
+    else if (key === "mistakeListDisplay" && ["always", "autoHide"].includes(payload?.value)) saveMatcherSettings({ mistakeListDisplay: payload.value })
+    else if (key === "answerMaskStyle" && ["dark", "light"].includes(payload?.value)) saveMatcherSettings({ answerMaskStyle: payload.value })
+    else if (key === "answerMaskColor" && /^#[0-9a-f]{6}$/i.test(String(payload?.value ?? ""))) saveMatcherSettings({ answerMaskColor: payload.value, answerMaskImage: "" })
+    else if (key === "answerMaskImage" && (payload?.value === "" || (typeof payload?.value === "string" && /^data:image\/(?:png|jpeg|webp);base64,/.test(payload.value) && payload.value.length <= 400000))) saveMatcherSettings({ answerMaskImage: payload.value })
+    else if (key === "autoCollapseComments") saveMatcherSettings({ autoCollapseComments: payload?.value === true })
+    else if (key === "reviewExpandedCommentCount" && Number.isInteger(payload?.value) && payload.value >= 0 && payload.value <= 10) saveMatcherSettings({ reviewExpandedCommentCount: payload.value })
+    else throw new Error("无效的个性设置")
+    return answerMatchingSettingsData()
+  }
+  if (command === "chooseReviewCommentCount") {
+    await delay(0.08)
+    const current = loadMatcherSettings().reviewExpandedCommentCount
+    const choice = await select(
+      Array.from({ length: 11 }, (_, count) => `默认展开 ${count} 条${count === current ? "（当前）" : ""}`),
+      "卡片评论自动折叠",
+      "选择待复习题目预览默认展开的评论数量",
+      true
+    )
+    if (choice.index >= 0 && choice.index <= 10) saveMatcherSettings({ reviewExpandedCommentCount: choice.index })
+    return answerMatchingSettingsData()
+  }
   if (command === "setScopedBinding") return setScopedBindingEnabled(payload?.enabled === true)
   if (command === "configureAnswerMatching") return configureAnswerMatching()
   if (command === "saveRegexMatchingRules") {
@@ -159,6 +224,13 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
   if (command === "setMistakeFavorite") return setMistakeFavoriteById(String(payload?.recordId ?? ""), payload?.favorite === true)
   if (command === "migrateLegacyFavorites") return migrateLegacyMistakeFavorites(payload?.titles)
   if (command === "openSource") return openSourceByMistakeId(String(payload?.recordId ?? ""))
+  if (command === "openMistakeAnswer") {
+    const answerNoteId = String(payload?.answerNoteId ?? "").trim()
+    if (!answerNoteId) return { locateHint: "当前错题没有可定位的答案卡片" }
+    const result = await focusNoteInFloatMindMap(answerNoteId)
+    return result === "dispatched" ? {}
+      : { locateHint: result === "unavailable" ? "当前 MarginNote 版本不支持在浮窗中定位答案卡片" : "答案卡片浮窗定位失败，请稍后重试" }
+  }
   if (command === "chooseSourceLocateMode") {
     await delay(0.08)
     const current = loadMatcherSettings().sourceLocateMode
@@ -247,6 +319,7 @@ async function bridge(command: string, payload: any, owner?: any): Promise<any> 
   notifyWorkbenchDataChanged,
   cardToolbar: { isEnabled: isCardToolbarEnabled, setEnabled: setCardToolbarEnabled },
   instanceMethods: {
+    onClipperEnd, onClipperBindMother, onClipperResetQuestion, onClipperEditTitle,
     onAnswerToolbarClick,
     onAnswerToolbarSingleTap,
     onAnswerToolbarLongPress,
@@ -271,6 +344,15 @@ async function bridge(command: string, payload: any, owner?: any): Promise<any> 
     onMnutilsEntranceClick,
     onMnutilsEntranceLongPress,
     onMnutilsEntrancePan,
+    onMnutilsQuickMenuDismiss,
+    onMnutilsQuickMenuWindowTap,
+    onMnutilsQuickMenuOpenPanel,
+    onMnutilsQuickMenuFilter,
+    onMnutilsQuickMenuSelectAll,
+    onMnutilsQuickMenuToggleQuestion,
+    onMnutilsQuickMenuToggleBranch,
+    onMnutilsQuickMenuStart,
+  onMnutilsQuickMenuModePress,
     onReviewModeIndex,
     onReviewModePrevious,
     onReviewModeNext,

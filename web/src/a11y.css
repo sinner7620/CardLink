@@ -11,6 +11,16 @@ button,
 [role="button"] {
   transition: opacity .14s ease-out;
 }
+.reviewToolbar nav button {
+  transition: color .28s ease .06s, opacity .14s ease-out;
+}
+.reviewToolbar nav button:active {
+  transition: color .28s ease .06s, opacity .06s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .reviewToolbar nav button,
+  .reviewToolbar nav button:active { transition: none; }
+}
 /* iOS 点击灰色高亮与按压反馈重复，且在通栏控件（如标签触发栏 width:100%）
    上会渲染成整条灰块；按压反馈统一走 :active opacity。 */
 button,

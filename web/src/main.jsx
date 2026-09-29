@@ -1,7 +1,7 @@
 import React, { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { createRoot } from "react-dom/client"
-import html2canvas from "html2canvas"
+import { ensureHtml2Canvas } from "./lib/html2canvas-loader.mjs"
 import MNBridge from "./lib/mnBridge"
 import { Icon } from "./icons"
 import { buildMindMapOptions, buildParentInsights, sourceInsightKey } from "../../src/source-insights"
@@ -21,13 +21,20 @@ import "./ui/detail.css"
 import { useDockableBar } from "./detail-dock"
 import "./a11y.css"
 import { CardPreview } from "./CardPreview"
+import { MistakeLayout } from "./MistakeLayout"
 import { createReviewDetailCache } from "./lib/reviewDetailCache"
 import { createMorph } from "morphicons/dom"
-import { Check, Star, X, Wrench, Plus, ChevronDown, FileQuestion, FileCheck, Trash2, ChevronUp } from "lucide"
+import { Check, Star, X, Wrench, Plus, ChevronDown, FileQuestion, FileCheck, Trash2, ChevronUp, ListFilter, RefreshCw } from "lucide"
 import { clearLegacyFavoriteTitles, readLegacyFavoriteTitles } from "./preview-favorites"
 import { SFTileIcon, SF_TONE_COLORS } from "./sf"
 
 const levelNames = ["不会", "不熟", "掌握"]
+const cardColorSwatches = [
+  "#f8d65c", "#f5a65b", "#ee7970", "#de76a2",
+  "#ad83c5", "#7d91cc", "#6baed0", "#6dbeb3",
+  "#83bd78", "#bad078", "#e7c577", "#d8a57d",
+  "#b4a49b", "#a6b7bf", "#8f9db7", "#c6b9d5"
+]
 const levelExplanations = [
   "无法独立完成",
   "无法稳定完成",
@@ -428,6 +435,7 @@ function MistakeRefreshConsent({ onAccept, onCancel }) {
 }
 
 function App() {
+  const mainRef = useRef(null)
   const startupSnapshotRef = useRef(readDashboardShellCache())
   const [tab, setTab] = useState("mistakes")
   const [data, setData] = useState(startupSnapshotRef.current)
@@ -448,6 +456,11 @@ function App() {
   const [pendingNotice, setPendingNotice] = useState("")
   const [reviewFocusId, setReviewFocusId] = useState("")
   const [settingsPane, setSettingsPane] = useState("root")
+  const [settingsSection, setSettingsSection] = useState("answer")
+  const [maskSettingsOpen, setMaskSettingsOpen] = useState(false)
+  const [clipSettingsOpen, setClipSettingsOpen] = useState(false)
+  const topNavRef = useRef(null)
+  const [topNavSlider, setTopNavSlider] = useState(null)
   const [streamLoading, setStreamLoading] = useState(false)
   const selectedIdRef = useRef("")
   const dataRef = useRef(null)
@@ -547,6 +560,16 @@ function App() {
     return activeLoadRef.current
   }
 
+  async function refreshBindingSettings() {
+    const snapshot = await MNBridge.send("bindingSettingsSnapshot")
+    setData(current => ({
+      ...current,
+      matching: { ...current?.matching, ...snapshot.matching },
+      clipper: snapshot.clipper,
+      answerBindings: snapshot.answerBindings
+    }))
+  }
+
   // 长耗时命令的等待提示：顶部进度线之外给出明确的转圈通知
   const PENDING_NOTICES = {
     repairMistakes: "正在刷新错题分类索引…",
@@ -554,14 +577,20 @@ function App() {
     checkUpdates: "正在检查插件更新…"
   }
   async function action(command, payload, reload = true) {
+    const settingsOnly = ["chooseManagedAnswerMindMap", "updateManagedAnswerBinding", "addManagedAnswerBindingColor", "deleteManagedAnswerBinding", "bindAnswerNotebook", "chooseCurrentAnswerBinding", "unbindAnswerNotebook", "setScopedBinding", "configureAnswerMatching", "saveRegexMatchingRules", "setPersonalSetting", "setPanelCloseButtonSide"].includes(command)
     // 定位、关闭面板等无数据写入动作只由各自按钮反馈，不再遮住整页并制造
     // “重载所有错题”的假象。整页 busy 只属于真正会走 dashboard 的操作。
-    if (reload) setBusy(true)
+    if (reload && !settingsOnly) setBusy(true)
     const pendingText = PENDING_NOTICES[command]
     if (pendingText) setPendingNotice(pendingText)
     setError("")
     try {
       const result = await MNBridge.send(command, payload)
+      if (["recordClipperTool", "setClipperTitle", "setClipperAnswer", "openClipperMode", "chooseClipperAnswerPosition", "configureClipperTitleFormat"].includes(command) && result) {
+        setData(current => ({ ...current, clipper: result,
+          matching: { ...current?.matching, ...(command === "openClipperMode" ? { pluginEnabled: false } : {}) } }))
+        return result
+      }
       if (reload && command === "reviewMistake" && result) {
         setData(current => ({ ...patchReviewedMistake(current, result), manualTodayIds: (current?.manualTodayIds || []).filter(id => id !== result.recordId) }))
         setBusy(false)
@@ -618,6 +647,14 @@ function App() {
         setData(current => ({ ...current, matching: { ...current?.matching, sourceLocateMode: result.mode } }))
         setBusy(false)
       }
+      else if ((command === "setPersonalSetting" || command === "chooseReviewCommentCount") && result) {
+        setData(current => ({ ...current, matching: { ...current?.matching, ...result } }))
+        if (command === "setPersonalSetting" && payload?.key === "boundHandwritingDisplay" && selectedId) await openDetail(selectedId)
+      }
+      else if (command === "setPanelCloseButtonSide" && result?.side) {
+        setData(current => ({ ...current, matching: { ...current?.matching, panelCloseButtonSide: result.side } }))
+      }
+      else if (settingsOnly) await refreshBindingSettings()
       else if (command === "addManualTodayOverdue" && result) {
         setData(current => ({ ...current, manualTodayIds: result.ids }))
       }
@@ -626,9 +663,9 @@ function App() {
       return result
     } catch (reason) {
       setError(reason.message || String(reason))
-      if (reload) setBusy(false)
+      if (reload && !settingsOnly) setBusy(false)
       // 操作失败（含写入回滚、记录被同步取消）也要刷新数据，让队列立刻反映真实状态。
-      if (reload) await load(true)
+      if (reload && !settingsOnly) await load(true)
       return undefined
     } finally {
       if (pendingText) setPendingNotice("")
@@ -688,6 +725,10 @@ function App() {
     window.__onPanelShow = async options => {
       setConsentAttempt(value => value + 1)
       touchLocateOnShow()
+      // Clipper lifecycle changes do not change the mistake index revision.
+      // Refresh settings even when the existing list can stay on screen.
+      try { await refreshBindingSettings() }
+      catch (reason) { setError(reason.message || String(reason)) }
       // 跨学习集定位跳转后面板恢复时原生会携带 skipReload（true）：跳转不改变
       // 错题数据，跳过这次自动刷新可避免列表重建与滚动位置丢失。
       const skipReload = options === true || (options && options.skipReload === true)
@@ -699,9 +740,11 @@ function App() {
       }
     }
     window.__onNativeDataChanged = () => { touchLocateOnShow(); load() }
+    window.__onNativeBindingsChanged = () => { void refreshBindingSettings().catch(reason => setError(reason.message || String(reason))) }
     return () => {
       delete window.__onPanelShow
       delete window.__onNativeDataChanged
+      delete window.__onNativeBindingsChanged
       clearTimeout(initialTimer)
       clearTimeout(locateHintTimerRef.current)
     }
@@ -782,18 +825,52 @@ function App() {
     ["review", "待复习", data?.mistakes?.todayDueCount || 0],
     ["settings", "设置"]
   ]
+  useLayoutEffect(() => {
+    function measure() {
+      const nav = topNavRef.current
+      const active = nav?.querySelector('[data-tab="' + tab + '"]')
+      if (nav && active) setTopNavSlider({ left: active.offsetLeft, width: active.offsetWidth })
+    }
+    measure()
+    window.addEventListener("resize", measure)
+    return () => window.removeEventListener("resize", measure)
+  }, [tab, data?.mistakes?.totalCount, data?.mistakes?.todayDueCount])
 
   const panelCloseSide = data?.matching?.panelCloseButtonSide === "right" ? "right" : "left"
   const refreshButton = <button className="iconButton" aria-label="刷新并复位插件窗口" title="刷新并复位窗口" onClick={refreshPanel} disabled={busy}><Icon name="refresh" /></button>
   const closeButton = <button className="iconButton" aria-label="关闭插件窗口" onClick={() => action("closePanel", null, false)}><Icon name="close" /></button>
+  async function uploadMaskImage(event) {
+    const file = event.target.files?.[0]
+    if (!file) return
+    try {
+      const url = URL.createObjectURL(file)
+      const image = new Image()
+      try {
+        await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = reject; image.src = url })
+        const scale = Math.min(1, 512 / Math.max(image.width, image.height))
+        const canvas = document.createElement("canvas")
+        canvas.width = Math.max(1, Math.round(image.width * scale))
+        canvas.height = Math.max(1, Math.round(image.height * scale))
+        canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height)
+        const value = canvas.toDataURL("image/jpeg", .72)
+        if (value.length > 400000) throw new Error("图片过大，请换一张图片")
+        await action("setPersonalSetting", { key: "answerMaskImage", value })
+      } finally { URL.revokeObjectURL(url); event.target.value = "" }
+    } catch (reason) { setError(reason.message || "图片读取失败") }
+  }
 
   return <div className={`shell panelClose-${panelCloseSide} tab-${tab}`}>
-    <main>
+    <main ref={mainRef}>
       <header className="topBar">
         <div className="topTools topTools-left">{panelCloseSide === "left" && <div className="windowControlCapsule">{closeButton}{refreshButton}</div>}</div>
-        <nav className="topNav">{entries.map(([key, name, count]) => <button key={key} className={tab === key ? "active" : ""} onClick={() => { setReviewFocusId(""); if (key !== "settings") setSettingsPane("root"); setTab(key) }}><strong>{name}</strong>{count > 0 && <b>{count}</b>}</button>)}</nav>
+        <nav className="topNav" ref={topNavRef}>{topNavSlider && <span className="topNavSlider" aria-hidden="true" style={{ width: topNavSlider.width, transform: `translateX(${topNavSlider.left}px)` }} />}{entries.map(([key, name, count]) => <button key={key} data-tab={key} className={tab === key ? "active" : ""} onClick={() => { setReviewFocusId(""); if (key !== "settings") setSettingsPane("root"); setTab(key) }}><strong>{name}</strong>{count > 0 && <b>{count}</b>}</button>)}</nav>
         <div className="topTools topTools-right">{panelCloseSide === "right" && <div className="windowControlCapsule">{refreshButton}{closeButton}</div>}</div>
       </header>
+      {tab === "settings" && settingsPane === "root" && <nav className="settingsCapsule" aria-label="设置分类">
+        <span className="settingsCapsuleSlider" style={{ transform: `translateX(${["answer", "mistakes", "personal", "about"].indexOf(settingsSection) * 100}%)` }} />
+        {[["answer", "答案配置"], ["mistakes", "错题管理"], ["personal", "个性设置"], ["about", "关于插件"]].map(([key, label]) =>
+          <button type="button" key={key} className={settingsSection === key ? "active" : ""} aria-current={settingsSection === key ? "page" : undefined} onClick={() => setSettingsSection(key)}>{label}</button>)}
+      </nav>}
       {locateHint && <div className="locateHintBanner" role="alert">{locateHint}</div>}
       {pendingNotice && <div className="pendingNotice" role="status"><i /><span>{pendingNotice}</span></div>}
       <div className="pageHeading"><h1>{tab === "overview" ? "错题总览" : tab === "mistakes" ? "错题浏览" : tab === "review" ? "到期复习" : tab === "export" ? "导出错题" : settingsPane === "ai" ? "AI 错题分析（开发中…）" : "设置"}</h1><p>{tab === "overview" ? "掌握情况、到期复习和最近错题概览" : tab === "mistakes" ? "全部错题保留在原脑图中，可添加标签、核对答案并定位原题" : tab === "export" ? "从当前错题记录生成可另存的 PDF 或 Markdown 文件" : settingsPane === "ai" ? "科目、模型与数据范围" : "跨脑图答案与错题工作台"}</p></div>
@@ -812,6 +889,7 @@ function App() {
       />}
 
       {tab === "mistakes" && <MistakeBrowser
+        listDisplay={data?.matching?.mistakeListDisplay || "always"}
         records={records}
         allRecords={data?.mistakes?.records || []}
         categories={data?.mistakes?.categories || []}
@@ -835,6 +913,7 @@ function App() {
       />}
 
       {tab === "review" && <DueReviewList
+        toolbarHost={mainRef.current}
         onRecordChanged={record => setData(current => patchReviewedMistake(current, record))}
         focusRecordId={reviewFocusId}
         records={(data?.mistakes?.records || []).filter(item => item.noteAvailable)}
@@ -842,6 +921,7 @@ function App() {
         action={action}
         manualTodayIds={data?.manualTodayIds || []}
         showLocateHint={showLocateHint}
+        commentExpandCount={data?.matching?.reviewExpandedCommentCount ?? 2}
       />}
 
       {tab === "export" && <MistakeExport
@@ -852,56 +932,65 @@ function App() {
       />}
 
       {tab === "settings" && settingsPane === "ai" && <AIErrorBoundary onBack={() => setSettingsPane("root")}><AISettingsPage onBack={() => setSettingsPane("root")} onEnabledChanged={() => load(true)} /></AIErrorBoundary>}
-      {tab === "settings" && settingsPane === "root" && <section className="settingsPage">
-        <div className="settingsColumns"><div className="settingsGroups settingsPrimary">
-          <SettingsGroup title="答案匹配" tone="accent" items={[
-          ["bind", "多题目脑图独立绑定", data?.matching?.scopedBinding
-            ? "已开启：每个题目脑图分别保存自己的答案脑图，互不覆盖"
-            : "已关闭：同一题目学习集共用答案学习集", () => action("setScopedBinding", { enabled: !data?.matching?.scopedBinding }), <SvgSwitch checked={!!data?.matching?.scopedBinding} label="多题目脑图独立绑定" key="switch" />],
-          ["notebook", "绑定或更换答案脑图", data?.matching?.scopedBinding ? "为当前题目脑图选择具体答案脑图" : "为当前题目学习集选择答案学习集", () => action("bindAnswerNotebook")],
-          ["sliders", "设置答案匹配方式", data?.matching?.mode === "parent-order"
-            ? `章节顺序配对：${data.matching.matchedGroups} 个父节点，${data.matching.pairs} 张卡片`
-            : data?.matching?.mode === "regex"
-              ? "独立正则规则匹配（不会回退到其他查找方式）"
-              : "完整标题匹配、章节顺序配对或独立正则规则匹配", () => action("configureAnswerMatching")],
-          ["refresh", "刷新答案索引", "仅在答案脑图内容变化后手动刷新", () => action("refreshAnswerIndex")],
-          ["unlink", "解除答案绑定", "解除当前题目脑图的答案关联", () => action("unbindAnswerNotebook")]
+      {tab === "settings" && settingsPane === "root" && <section className="settingsPage settingsPaged">
+        {settingsSection === "answer" && <div className="settingsGroups">
+          <SettingsGroup title="当前脑图" tone="accent" items={[
+            ["link", "为当前脑图绑定答案", "选择答案脑图或直接子卡片", () => action("chooseCurrentAnswerBinding")],
+            ["refresh", "刷新答案索引", "重建当前绑定的答案脑图索引", () => action("refreshAnswerIndex")],
+            ["unlink", "解除答案绑定", "解除当前脑图的答案关联", () => action("unbindAnswerNotebook")]
           ]} />
-          {data?.matching?.mode === "regex" &&
-            <RegexMatchingSettings matching={data.matching} action={action} />}
+          <SettingsGroup title="匹配规则" tone="accent" items={[
+            ["sliders", "答案脑图匹配规则", data?.matching?.label || "完整标题匹配", () => action("configureAnswerMatching")],
+            ["bind", "多题目脑图独立绑定", data?.matching?.scopedBinding ? "已开启" : "已关闭", () => action("setScopedBinding", { enabled: !data?.matching?.scopedBinding }), <SvgSwitch checked={!!data?.matching?.scopedBinding} label="多题目脑图独立绑定" key="scoped" />]
+          ]} />
+          {data?.matching?.mode === "regex" && <RegexMatchingSettings matching={data.matching} action={action} />}
+          <AnswerBindingsManager rows={data?.answerBindings || []} action={action} />
+          <SettingsGroup title="摘题" tone="accent" items={[
+            ["tools", "打开摘题模式", "快捷摘录题目与答案", () => action("openClipperMode", null, false)],
+            ["sliders", "摘题设置", clipSettingsOpen ? "收起设置" : "工具绑定、答案位置与标题摘录", () => setClipSettingsOpen(value => !value)]
+          ]}>{clipSettingsOpen && <ClipperSettings clipper={data?.clipper} action={action} />}</SettingsGroup>
+        </div>}
+        {settingsSection === "mistakes" && <div className="settingsGroups">
           <SettingsGroup title="错题管理" tone="amber" items={[
-          ["sliders", "AI 错题分析（开发中…）", "科目、模型与定期总结", openAISettings],
-          ["flag", "标记所选卡片错题", "支持脑图多选，统一选择错题等级", () => action("markMistake")],
-          ["locate", "定位当前错题原题", "跳转到当前错题记录的原脑图位置", () => action("openCurrentMistakeSource", null, false)],
-          ["focusMode", "定位原题方式", `当前：${data?.matching?.sourceLocateMode === "focus" ? "定位并聚焦" : "仅定位"} · 点击选择`, () => action("chooseSourceLocateMode", null, false)],
-
-          ["refresh", "刷新错题分类索引", "重新读取脑图标题、父节点路径和答案绑定", () => action("repairMistakes")],
-          ["download", "导出错题", "以 PDF 或 Markdown 格式预览导出", openExport]
+            ["flag", "批量标记所选错题", "将当前选中的脑图卡片标记为错题", () => action("markMistake")],
+            ["refresh", "刷新错题索引", "重新读取错题分类及来源路径", () => action("repairMistakes")],
+            ["download", "导出错题", "预览并导出 PDF 或 Markdown", openExport]
           ]} />
-          <SettingsGroup title="插件" tone="green" items={[
-          ["toggle", "卡片侧边按钮", data?.matching?.pluginEnabled === false
-            ? "已关闭：不显示卡片旁的查找答案、标记错题按钮"
-            : "已开启：选择卡片时显示侧边的查找答案、标记错题按钮", () => action("setPluginEnabled", { enabled: data?.matching?.pluginEnabled === false }), <SvgSwitch checked={data?.matching?.pluginEnabled !== false} label="卡片侧边按钮" key="plugin-enabled" />],
-          ["info", "当前版本", `v${data?.version || "…"} · frank`, handleVersionTap],
-          ["guide", "插件使用说明", "在浏览器中打开插件说明网页", () => action("openPluginGuide", null, false)],
-          ["arrowsLR", "插件窗口关闭按钮", panelCloseSide === "right"
-            ? "当前位于右上角，点击切换到左上角"
-            : "当前位于左上角，点击切换到右上角", () => action("setPanelCloseButtonSide", { side: panelCloseSide === "right" ? "left" : "right" }), <SvgSwitch checked={panelCloseSide === "right"} label="关闭按钮位于右侧" key="close-position" />],
-          ["reset", "重置窗口位置与大小", "将工作台窗口恢复到默认尺寸", () => action("resetPanelFrame", null, false)],
-          ["update", "检查插件更新", "检查新版本并保存安装。", () => action("checkUpdates", null, false)]
-
+          <MistakeLevelGuide reviewCurves={data?.mistakes?.reviewCurves} action={action} />
+          <SettingsGroup title="其他错题工具" tone="amber" items={[
+            ["sliders", "AI 错题分析（开发中…）", "科目、模型与定期总结", openAISettings]
+          ]} />
+        </div>}
+        {settingsSection === "personal" && <div className="settingsGroups">
+          <SettingsGroup title="答题体验" tone="purple" items={[
+            ["book", "子卡片答案展示", data?.matching?.subcardAnswerDisplay === "reveal" ? "解除当前题目子卡遮盖" : "弹出答案窗口", () => action("setPersonalSetting", { key: "subcardAnswerDisplay", value: data?.matching?.subcardAnswerDisplay === "reveal" ? "window" : "reveal" })],
+            ["sliders", "答案遮盖设置", data?.matching?.maskImageConfigured ? "自定义图片" : "颜色遮盖", () => setMaskSettingsOpen(value => !value)]
+          ]}>{maskSettingsOpen && <div className="answerMaskSettings"><strong>遮盖颜色</strong><div>{[["#141922", "深色"], ["#d9e4f2", "浅蓝"], ["#f6e7a5", "浅黄"], ["#d8f0d2", "浅绿"], ["#9c7cbb", "紫色"], ["#ce786f", "红色"]].map(([color, label]) => <button type="button" key={color} className={data?.matching?.answerMaskColor === color && !data?.matching?.maskImageConfigured ? "selected" : ""} onClick={() => action("setPersonalSetting", { key: "answerMaskColor", value: color })}><i style={{ background: color }} />{label}</button>)}</div><label className="answerMaskUpload">选择自定义图片<input type="file" accept="image/*" onChange={uploadMaskImage} /></label>{data?.matching?.maskImageConfigured && <button type="button" onClick={() => action("setPersonalSetting", { key: "answerMaskImage", value: "" })}>移除图片</button>}</div>}</SettingsGroup>
+          <SettingsGroup title="操作与窗口" tone="purple" items={[
+            ["book", "卡片绑定手写显示", data?.matching?.boundHandwritingDisplay === "always" ? "始终显示" : "双击显示", () => action("setPersonalSetting", { key: "boundHandwritingDisplay", value: data?.matching?.boundHandwritingDisplay === "always" ? "doubleTap" : "always" })],
+            ["sliders", "错题本列表显示方式", data?.matching?.mistakeListDisplay === "autoHide" ? "自动隐藏" : "始终显示", () => action("setPersonalSetting", { key: "mistakeListDisplay", value: data?.matching?.mistakeListDisplay === "autoHide" ? "always" : "autoHide" })],
+            ["focusMode", "定位原题方式", data?.matching?.sourceLocateMode === "focus" ? "定位并聚焦" : "仅定位", () => action("chooseSourceLocateMode", null, false)],
+            ["toggle", "卡片侧边按钮", data?.matching?.pluginEnabled === false ? "已关闭" : "已开启", () => action("setPluginEnabled", { enabled: data?.matching?.pluginEnabled === false }), <SvgSwitch checked={data?.matching?.pluginEnabled !== false} label="卡片侧边按钮" key="side-button" />],
+            ["arrowsLR", "插件窗口关闭按钮", panelCloseSide === "right" ? "右上角" : "左上角", () => action("setPanelCloseButtonSide", { side: panelCloseSide === "right" ? "left" : "right" }), <SvgSwitch checked={panelCloseSide === "right"} label="关闭按钮位于右侧" key="close-position" />]
+          ]} />
+          <SettingsGroup title="待复习设置" tone="purple" items={[
+            ["toggle", "卡片评论自动折叠", `题目预览默认展开前 ${data?.matching?.reviewExpandedCommentCount ?? 2} 条`, () => action("chooseReviewCommentCount", null, false)]
+          ]} />
+        </div>}
+        {settingsSection === "about" && <div className="settingsGroups">
+          <SettingsGroup title="关于插件" tone="green" items={[
+            ["info", "当前版本", `v${data?.version || "…"} · frank`, handleVersionTap],
+            ["reset", "重置窗口位置", "恢复插件窗口默认位置与大小", () => action("resetPanelFrame", null, false)],
+            ["guide", "插件使用说明", "查看 CardLink 使用说明", () => action("openPluginGuide", null, false)],
+            ["update", "检查插件更新", "检查可用的新版本", () => action("checkUpdates", null, false)]
           ]} />
           {connectivityResult && <ConnectivityResult result={connectivityResult} />}
-          {debugModeEnabled && <>
-            <SettingsGroup title="调试功能" tone="red" items={[
-              ["fileText", "导出运行日志", "仅记录并导出调试模式开启期间的运行事件", exportRuntimeLog],
-              ["wifi", "联通测试", "测试两个上报通道是否可达（仅发送测试标记，不含笔记内容）", runConnectivityTest],
-              ["close", "退出调试模式", "停止日志记录并清空运行日志", () => action("setDebugMode", { enabled: false })]
-            ]} />
-          </>}
-        </div><div className="settingsGroups settingsSecondary">
-          <MistakeLevelGuide reviewCurves={data?.mistakes?.reviewCurves} action={action} />
-        </div></div>
+          {debugModeEnabled && <SettingsGroup title="调试功能" tone="red" items={[
+            ["fileText", "导出运行日志", "导出调试模式期间的运行事件", exportRuntimeLog],
+            ["wifi", "联通测试", "检查上报通道", runConnectivityTest],
+            ["close", "退出调试模式", "停止并清空运行日志", () => action("setDebugMode", { enabled: false })]
+          ]} />}
+        </div>}
       </section>}
     </main>
     {data?.mistakeRefreshConsentRequired === true && createPortal(<MistakeRefreshConsent key={consentAttempt}
@@ -1006,7 +1095,7 @@ function MistakeBrowser(props) {
   }
 
   return <section className="mistakeWorkspace">
-    <div className="browserGrid mistakeSplitView">
+    <MistakeLayout autoHide={props.listDisplay === "autoHide"}>
       <aside className="mistakeSidebar">
         <div className={`filterBar mistakeListHeader ${filtersOpen ? "" : "filtersClosed"} ${selecting ? "selectionOpen" : ""}`}>
           <div className="listToolbar">
@@ -1034,7 +1123,7 @@ function MistakeBrowser(props) {
         <div className="mistakeList mistakeListBody">{records.map(item => <MistakeListItem key={item.recordId} item={item} selected={selectedId === item.recordId} selectable={selecting} checked={selectedSet.has(item.recordId)} onPreview={() => openDetail(item.recordId)} onToggle={() => toggleRecord(item.recordId)} />)}{!records.length && <Empty title="没有符合条件的错题" text="清空搜索或筛选条件后重试。" />}</div>
       </aside>
       <div className={`detailPane mistakeDetailSurface ${selecting ? "batchSelectionPane" : ""}`}>{detail ? <MistakeDetail key={detail.record.recordId} detail={detail} customCategories={props.customCategories} action={action} reloadDetail={reloadDetail} onRemoved={onRemoved} onReview={props.onReview} showLocateHint={props.showLocateHint} /> : <Empty title="选择一道错题" text="右侧将显示题目、答案、分类和定位操作。" />}</div>
-    </div>
+    </MistakeLayout>
   </section>
 }
 
@@ -1433,6 +1522,7 @@ function QuestionPreparationWorkspace({ studySets, ocrEngine, includeHandwriting
     try {
       const doc = event.currentTarget.contentDocument
       if (!doc?.body) throw new Error("题目卡片渲染窗口不可用")
+      const html2canvas = await ensureHtml2Canvas()
       await doc.fonts?.ready
       await Promise.all(Array.from(doc.images || []).map(image => image.complete ? Promise.resolve() : new Promise(resolve => {
         const finish = () => resolve()
@@ -1790,7 +1880,7 @@ function retainReviewDetail(current, recordId, detail) {
   return next
 }
 
-function DueReviewList({ records, reviewCurves, action, manualTodayIds, showLocateHint, focusRecordId, onRecordChanged }) {
+function DueReviewList({ records, reviewCurves, action, manualTodayIds, showLocateHint, focusRecordId, onRecordChanged, commentExpandCount = 2, toolbarHost }) {
   const [answerDetail, setAnswerDetail] = useState(null)
   const [answerLoadingId, setAnswerLoadingId] = useState("")
   const [activeFilter, setActiveFilter] = useState("today")
@@ -1798,6 +1888,8 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, showLoca
   const [feedbackById, setFeedbackById] = useState({})
   const [levelFilter, setLevelFilter] = useState("all")
   const [categoryFilter, setCategoryFilter] = useState("all")
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
   const [queueNotice, setQueueNotice] = useState("")
   const [detailsById, setDetailsById] = useState({})
   const [questionsById, setQuestionsById] = useState({})
@@ -2038,21 +2130,22 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, showLoca
     setQueueNotice(`已从逾期池加入 ${result.addedCount} 道题到今日队列。`)
   }
 
-  const summary = [
-    ["今日待复测", counts.today, "按计划进入今日队列"],
-    ["已经逾期", counts.overdue, "可随机补入今日任务"],
-    ["未来计划", counts.upcoming, "允许提前复测"],
-    ["已结束", counts.completed, "掌握并结束自动提醒"]
-  ]
-
-  return <section className="reviewPage" ref={reviewPageRef}>
-    <div className="reviewSummary" aria-label="复习计划概览">{summary.map(([label, count, note], index) => <article className={index === 3 ? "completed" : ""} key={label}><span>{label}</span><strong>{count}</strong><small>{note}</small></article>)}</div>
-    <div className="reviewToolbar"><nav aria-label="计划到期状态">{[
+  const toolbar = <div className="settingsCapsule reviewToolbar">
+      <nav aria-label="计划到期状态"><span className="settingsCapsuleSlider" aria-hidden="true" style={{ transform: `translateX(${["today", "overdue", "upcoming", "completed"].indexOf(activeFilter) * 100}%)` }} />{[
       ["today", "今日到期"], ["overdue", "已逾期"], ["upcoming", "未到期"], ["completed", "已结束"]
-    ].map(([key, label]) => <button aria-pressed={activeFilter === key} className={activeFilter === key ? "active" : ""} key={key} onClick={() => setActiveFilter(key)}>{label}<b>{counts[key]}</b></button>)}</nav><div><select aria-label="题目分类" value={categoryFilter} onChange={event => setCategoryFilter(event.target.value)}><option value="all">全部分类</option>{categories.map(category => <option key={category}>{category}</option>)}</select><select aria-label="掌握等级" value={levelFilter} onChange={event => setLevelFilter(event.target.value)}><option value="all">全部等级</option>{levelNames.map((name, level) => <option value={level} key={name}>{name}</option>)}</select></div></div>
+    ].map(([key, label]) => <button type="button" aria-pressed={activeFilter === key} className={activeFilter === key ? "active" : ""} key={key} onClick={() => setActiveFilter(key)}>{label}<b>{counts[key]}</b></button>)}</nav>
+      <div className="reviewActionCapsule">
+      <button type="button" className={`reviewFilterToggle ${filtersOpen ? "active" : ""}`} aria-label={filtersOpen ? "收起筛选" : "展开筛选"} aria-expanded={filtersOpen} aria-controls="reviewFilterPanel" onClick={() => setFiltersOpen(value => !value)}><Icon name="filter" /></button>
+      <button type="button" className={`reviewMenuToggle ${menuOpen ? "active" : ""}`} aria-label={menuOpen ? "收起复习菜单" : "展开复习菜单"} aria-expanded={menuOpen} aria-controls="reviewSecondaryMenu" onClick={() => { setMenuOpen(value => !value); setFiltersOpen(false) }}><Icon name="menu" /></button>
+      <div className="reviewQueueTools"><button type="button" disabled={!visibleRecords.length} onClick={toggleAllQuestions}><MorphIcon from="collapse" to="expand" active={!allQuestionsOpen} />{allQuestionsOpen ? "收起全部题目" : "展开全部题目"}</button><button type="button" className="startReviewMode" disabled={!visibleRecords.length} onClick={beginReviewMode}>复习模式</button><b>共 {visibleRecords.length} 道题</b></div>
+      <div id="reviewFilterPanel" className={`reviewFilterPanel ${filtersOpen ? "open" : ""}`} aria-hidden={!filtersOpen}><select aria-label="题目分类" tabIndex={filtersOpen ? 0 : -1} value={categoryFilter} onChange={event => setCategoryFilter(event.target.value)}><option value="all">全部分类</option>{categories.map(category => <option key={category}>{category}</option>)}</select><select aria-label="掌握等级" tabIndex={filtersOpen ? 0 : -1} value={levelFilter} onChange={event => setLevelFilter(event.target.value)}><option value="all">全部等级</option>{levelNames.map((name, level) => <option value={level} key={name}>{name}</option>)}</select></div>
+      <div id="reviewSecondaryMenu" className={`reviewSecondaryMenu ${menuOpen ? "open" : ""}`} aria-hidden={!menuOpen}>
+        <div className="reviewSecondaryActions"><select aria-label="题目分类" value={categoryFilter} onChange={event => setCategoryFilter(event.target.value)}><option value="all">全部分类</option>{categories.map(category => <option key={category}>{category}</option>)}</select><select aria-label="掌握等级" value={levelFilter} onChange={event => setLevelFilter(event.target.value)}><option value="all">全部等级</option>{levelNames.map((name, level) => <option value={level} key={name}>{name}</option>)}</select><button type="button" disabled={!visibleRecords.length} onClick={toggleAllQuestions}><MorphIcon from="collapse" to="expand" active={!allQuestionsOpen} />{allQuestionsOpen ? "收起全部" : "展开全部"}</button><button type="button" disabled={!visibleRecords.length} onClick={() => { setMenuOpen(false); void beginReviewMode() }}>复习模式</button></div>
+      </div></div></div>
+  return <section className={`reviewPage ${filtersOpen ? "reviewFiltersOpen" : ""} ${menuOpen ? "reviewMenuOpen" : ""}`} ref={reviewPageRef}>
+    {toolbarHost ? createPortal(toolbar, toolbarHost) : toolbar}
     {activeFilter === "today" && <div className="reviewOverdueTools"><span><strong>今日任务量不够？</strong> 从逾期池随机补充：</span>{[1, 3, 5].map(count => <button type="button" key={count} onClick={() => addOverdue(count)}>+{count} 题</button>)}</div>}
     {queueNotice && <div className="reviewQueueNotice" role="status">{queueNotice}</div>}
-    <div className="reviewQueueHeading"><span><strong>{{ today: "今日队列", overdue: "逾期计划", upcoming: "未来计划", completed: "已结束" }[activeFilter]}</strong><small>完成评价后立即显示下次复习日期</small></span><div className="reviewQueueTools"><button type="button" disabled={!visibleRecords.length} onClick={toggleAllQuestions}><MorphIcon from="collapse" to="expand" active={!allQuestionsOpen} />{allQuestionsOpen ? "收起全部题目" : "展开全部题目"}</button><button type="button" className="startReviewMode" disabled={!visibleRecords.length} onClick={beginReviewMode}>复习模式</button><b>共 {visibleRecords.length} 道题</b></div></div>
     <div className="reviewList">
     {!visibleRecords.length ? <Empty title="当前队列没有题目" text="可以切换其他复习状态或掌握等级查看。" icon={false} /> : visibleRecords.map(item => {
       const expanded = answerDetail?.record?.recordId === item.recordId
@@ -2073,7 +2166,7 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, showLoca
           <span className="reviewCardTopActions"><small className={`reviewSchedule ${statusOf(item) === "overdue" ? "overdue" : ""}`}>{schedule}</small><button type="button" className="questionFoldButton" aria-label={questionOpen ? `收起 ${item.sourceTitle} 的题目预览` : `展开 ${item.sourceTitle} 的题目预览`} aria-expanded={questionOpen} onClick={() => toggleQuestion(item.recordId)}><MorphIcon from="collapse" to="expand" active={!questionOpen} /></button></span>
         </div>
         {feedbackById[item.recordId] && <div className="reviewCardFeedback" role="status">{feedbackById[item.recordId]}</div>}
-        {questionOpen && <section className="reviewQuestion" aria-label="完整原题"><span>完整原题</span>{questionDetail ? <CardPreview title={`${item.sourceTitle}完整原题`} html={questionDetail.questionHtml} initialAutoHeight /> : questionError ? <div className="reviewQuestionLoading reviewQuestionError">读取完整原题失败。<button type="button" onClick={() => retryQuestion(item.recordId)}>重试</button></div> : <div className="reviewQuestionLoading">正在读取完整原题…</div>}</section>}
+        {questionOpen && <section className="reviewQuestion" aria-label="完整原题"><span>完整原题</span>{questionDetail ? <CardPreview title={`${item.sourceTitle}完整原题`} html={questionDetail.questionHtml} initialAutoHeight defaultExpandedComments={commentExpandCount} /> : questionError ? <div className="reviewQuestionLoading reviewQuestionError">读取完整原题失败。<button type="button" onClick={() => retryQuestion(item.recordId)}>重试</button></div> : <div className="reviewQuestionLoading">正在读取完整原题…</div>}</section>}
         <div className="dueReviewActions">
           <LocateButton className="reviewLocateAction" locateKey={`mistake:${item.recordId}`} onWaiting={() => showLocateHint("正在切换学习集并定位原题，请稍候…")} onLocate={async () => {
             const located = await action("openSource", { recordId: item.recordId }, false)
@@ -2231,11 +2324,16 @@ function MistakeDetail({ detail, customCategories, action, reloadDetail, onRemov
         <button aria-label="答案" className={view === "answer" ? "active" : ""} onClick={() => { setView("answer"); setTagPickerOpen(false) }}><DetailMorphIcon icon={FileCheck} active={view === "answer"} /><span className="barText" data-dock-label="answer" data-hidden={bar.hiddenLabels.includes("answer") || undefined}>答案{detail.answers?.length > 1 ? ` (${detail.answers.length})` : ""}</span></button>
         {view === "answer" && detail.answers?.length > 1 && <label className="answerVariantControl"><span aria-hidden="true">{answerIndex + 1}</span><select aria-label="选择答案候选" className="answerVariantSelect" value={answerIndex} onChange={event => setAnswerIndex(Number(event.target.value))}>{detail.answers.map((item, index) => <option key={item.id} value={index}>{item.title} · {item.path}</option>)}</select></label>}
         <FavoriteButton favorite={detail.record.favorite === true} busy={favoriteBusy} onToggle={toggleFavorite} />
-        <LocateButton locateKey={`mistake:${detail.record.recordId}`} className="preview-locate-button" onWaiting={() => showLocateHint("正在切换学习集并定位原题，请稍候…")} onLocate={async () => {
+        {view === "question" ? <LocateButton locateKey={`mistake:${detail.record.recordId}`} className="preview-locate-button" onWaiting={() => showLocateHint("正在切换学习集并定位原题，请稍候…")} onLocate={async () => {
               const located = await action("openSource", { recordId: detail.record.recordId }, false)
               if (located?.locateHint) showLocateHint(located.locateHint)
               return located
             }} settingsIcon ariaLabel="定位原题"><span className="barText" data-dock-label="locate" data-hidden={bar.hiddenLabels.includes("locate") || undefined}>定位</span></LocateButton>
+          : <LocateButton locateKey={`mistake-answer:${answer?.id || detail.record.recordId}`} className="preview-locate-button" onWaiting={() => showLocateHint("正在浮窗中定位答案卡片，请稍候…")} onLocate={async () => {
+              const located = await action("openMistakeAnswer", { answerNoteId: answer?.id }, false)
+              if (located?.locateHint) showLocateHint(located.locateHint)
+              return located
+            }} settingsIcon ariaLabel="定位答案"><span className="barText" data-dock-label="locate" data-hidden={bar.hiddenLabels.includes("locate") || undefined}>定位</span></LocateButton>}
         <button type="button" className={`detailRemoveMistake ${removeArmed ? "confirming" : ""}`} aria-label={removeArmed ? "再次确认取消错题" : "取消错题"} title={removeArmed ? "再次确认取消错题" : "取消错题"} onClick={remove}><DetailMorphIcon icon={Trash2} active={removeArmed} /><span className="barText" data-dock-label="delete" data-hidden={bar.hiddenLabels.includes("delete") || undefined}>删除</span></button>
         <button type="button" className="detailBarCollapse" aria-label="折叠操作条" onClick={() => bar.setCollapsed(true)}><DetailMorphIcon icon={ChevronUp} target={Wrench} active={bar.collapsed} /></button>
       </div>
@@ -2296,9 +2394,134 @@ function useScrollDismiss(open, onClose, containerRef) {
 
 const POPOVER_ABSOLUTE = pos => ({ position: "absolute", left: pos.left, top: pos.top })
 
-function SettingsGroup({ title, items, tone = "accent" }) {
+function ClipperSettings({ clipper, action }) {
+  const [pendingSlot, setPendingSlot] = useState("")
+  const [saving, setSaving] = useState(false)
+  const toolPrompts = { title: "摘录标题", question: "摘录题目", answer: "摘录答案" }
+  async function bind(slot) {
+    if (saving) return
+    if (pendingSlot !== slot) {
+      setPendingSlot(slot)
+      await action("notify", { message: `请选择“${toolPrompts[slot]}”的工具，再点击“确认”绑定。` }, false)
+      return
+    }
+    setSaving(true)
+    try {
+      const result = await action("recordClipperTool", { slot }, false)
+      if (result?.tools?.[slot]) setPendingSlot("")
+    } finally { setSaving(false) }
+  }
+  return <div className="clipSettings">
+    <div className="clipSettingHeading"><strong>工具绑定</strong><small role="status" aria-live="polite">{pendingSlot ? `请选择“${toolPrompts[pendingSlot]}”的工具，再次点击“确认”绑定。` : "点击对应步骤，选择工具后再次确认绑定。"}</small></div>
+    <div className="clipToolBindings">{[["title", "标题"], ["question", "题目"], ["answer", "答案"]].map(([slot, label]) => <button type="button" key={slot} className={pendingSlot === slot ? "confirming" : clipper?.tools?.[slot] ? "bound" : ""} disabled={saving || clipper?.started || (slot === "title" && clipper?.excerptTitle === false) || (slot === "answer" && clipper?.excerptAnswer === false)} onClick={() => bind(slot)} aria-label={pendingSlot === slot ? `确认绑定${label}工具` : label + "工具：" + (clipper?.toolLabels?.[slot] || "未绑定")}><span>{pendingSlot === slot ? "确认" : label + " | " + (clipper?.toolLabels?.[slot] || "未绑定")}</span></button>)}</div>
+    <button type="button" className="clipSettingRow" onClick={() => action("chooseClipperAnswerPosition", null, false)}><span>答案位置</span><span className="clipPosition">子卡片<Icon name="right" /></span></button>
+    <button type="button" className="clipSettingRow" onClick={() => { setPendingSlot(""); action("setClipperTitle", { enabled: clipper?.excerptTitle === false }, false) }}><span>摘录标题</span><SvgSwitch checked={clipper?.excerptTitle !== false} label="摘录标题" /></button>
+    <button type="button" className="clipSettingRow" onClick={() => { setPendingSlot(""); action("setClipperAnswer", { enabled: clipper?.excerptAnswer === false }, false) }}><span>摘录答案</span><SvgSwitch checked={clipper?.excerptAnswer !== false} label="摘录答案" /></button>
+    <button type="button" className="clipSettingRow" disabled={clipper?.started} onClick={() => action("configureClipperTitleFormat", null, false)}><span>标题格式</span><span className="clipPosition">{{ original: "原始标题", prefix: "统一前缀＋标题", mother: "母卡标题＋标题", number: "母卡内自动题号" }[clipper?.titleMode || "original"]}<Icon name="right" /></span></button>
+    <p className="clipTitleExample">{clipper?.titleMode === "prefix" ? `示例：${clipper.titlePrefix} · 例题 1` : clipper?.titleMode === "mother" ? "示例：第一章 · 例题 1（需绑定母卡）" : clipper?.titleMode === "number" ? "示例：第1题 · 例题标题；未摘标题则为第1题。各母卡独立续号。" : "保留摘录或手动输入的标题。"}</p>
+  </div>
+}
+
+function SettingsGroup({ title, items, tone = "accent", children }) {
   return <div className="settingsGroup"><h2>{title}</h2><div>{items.map(([icon, name, description, onClick, trailing]) =>
-    <button key={name} className={trailing ? "hasTrailing" : ""} onClick={onClick}><i><SFTileIcon name={icon} tone={tone} /></i><span><strong>{name}</strong><small>{description}</small></span>{trailing}</button>)}</div></div>
+    <button key={name} className={trailing ? "hasTrailing" : ""} onClick={onClick}><i><SFTileIcon name={icon} tone={tone} /></i><span><strong>{name}</strong><small>{description}</small></span>{trailing}</button>)}</div>{children}</div>
+}
+
+function AnswerBindingsManager({ rows, action }) {
+  const [open, setOpen] = useState(false)
+  const matchingHelpRef = useRef(null)
+  return <section className="answerBindingsManager">
+    <button type="button" className="answerBindingsHeading" aria-expanded={open} onClick={() => setOpen(value => !value)}>
+      <span><strong>答案绑定管理</strong><small>管理每个题目脑图的答案来源与题目颜色</small></span><b>{rows.length} 组</b><Icon name={open ? "up" : "down"} />
+    </button>
+    {open && <div className="answerBindingsList">
+      {!!rows.length && <div className="answerBindingsColumns"><span>学习集名称</span><span>题目脑图名称</span><span className="answerMatchingLabel">答案匹配方式<button type="button" className="answerMatchingHelp" aria-label="答案匹配方式说明" title="答案匹配方式说明" onClick={() => matchingHelpRef.current?.showModal()}><Icon name="info" /></button></span><span>答案脑图名称</span><span>操作</span></div>}
+      {!rows.length && <p className="answerBindingsEmpty">尚未绑定答案。先在当前脑图选择一张卡片，再使用上方的绑定入口。</p>}
+      {rows.map(row => <AnswerBindingRow key={row.key} row={row} action={action} />)}
+    </div>}
+    <dialog ref={matchingHelpRef} className="answerMatchingDialog" aria-labelledby="answer-matching-help-title">
+      <h2 id="answer-matching-help-title">答案匹配方式说明</h2>
+      <h3>答案脑图</h3>
+      <p>适用于题目和答案分别整理在不同的脑图中的情况。绑定答案脑图后，插件会按照你设置的匹配规则，为题目查找对应答案。</p>
+      <h3>子卡片</h3>
+      <p>题目和答案放在同一张脑图中，直接放在题目下面的子卡片就是答案，无需按标题匹配。需要先添加题目卡片颜色，插件才会识别哪些卡片是题目。</p>
+      <p>这种方式支持做题时遮住子卡片答案，查看答案时可选择揭开遮盖或打开答案窗口。</p>
+      <form method="dialog"><button type="submit" autoFocus>知道了</button></form>
+    </dialog>
+  </section>
+}
+
+function AnswerBindingRow({ row, action }) {
+  const [filterOpen, setFilterOpen] = useState(false)
+  const [addingColor, setAddingColor] = useState(false)
+  const [colorSaving, setColorSaving] = useState(false)
+  const [removeArmed, setRemoveArmed] = useState(false)
+  const [removing, setRemoving] = useState(false)
+  useEffect(() => {
+    if (!removeArmed) return
+    const timer = setTimeout(() => setRemoveArmed(false), 15000)
+    return () => clearTimeout(timer)
+  }, [removeArmed])
+  async function remove() {
+    if (!removeArmed) return setRemoveArmed(true)
+    if (removing) return
+    setRemoving(true)
+    try {
+      const result = await action("deleteManagedAnswerBinding", { key: row.key })
+      if (!result?.deleted) setRemoveArmed(false)
+    } finally { setRemoving(false) }
+  }
+  async function toggleFilter() {
+    setFilterOpen(value => !value)
+  }
+  async function removeColor(color) {
+    if (colorSaving) return
+    setColorSaving(true)
+    try {
+      await action("updateManagedAnswerBinding", { key: row.key, changes: {
+        questionColors: row.questionColors.filter(value => value !== color)
+      } })
+    } finally { setColorSaving(false) }
+  }
+  async function confirmAddColor() {
+    if (colorSaving) return
+    setColorSaving(true)
+    try {
+      const result = await action("addManagedAnswerBindingColor", { key: row.key })
+      if (result) setAddingColor(false)
+    } finally { setColorSaving(false) }
+  }
+  const designated = row.selectionMode === "designated"
+  const mindMapSource = !designated || row.designatedAnswer === "mindmap"
+  return <article className="answerBindingRow">
+    <div className="answerBindingMain">
+      <strong className="answerBindingName" title={row.notebookTitle}>{row.notebookTitle}</strong>
+      <strong className="answerBindingName" title={row.sourceTitle}>{row.sourceTitle}</strong>
+      <div className={`answerBindingSwitch ${designated ? "isDesignated" : ""}`} aria-label="答案匹配方式">
+        <i className="answerBindingMainSlider" aria-hidden="true" />
+        <button type="button" className={!designated ? "active" : ""} aria-pressed={!designated} onClick={() => row.hasAnswerMindMap ? action("updateManagedAnswerBinding", { key: row.key, changes: { selectionMode: "mixed" } }) : action("chooseManagedAnswerMindMap", { key: row.key, activateMixed: true })}>混合</button>
+        <div className="answerBindingDesignated">
+          <button type="button" className="answerBindingDesignatedLabel" aria-pressed={designated} tabIndex={designated ? -1 : 0} onClick={() => action("updateManagedAnswerBinding", { key: row.key, changes: { selectionMode: "designated" } })}>指定</button>
+          <div className="answerBindingSubSwitch" aria-hidden={!designated}>
+            <i className={row.designatedAnswer === "subcard" ? "subcard" : ""} aria-hidden="true" />
+            <button type="button" className={row.designatedAnswer === "mindmap" ? "active" : ""} tabIndex={designated ? 0 : -1} aria-pressed={designated && row.designatedAnswer === "mindmap"} onClick={() => row.hasAnswerMindMap ? action("updateManagedAnswerBinding", { key: row.key, changes: { designatedAnswer: "mindmap" } }) : action("chooseManagedAnswerMindMap", { key: row.key })}>答案脑图</button>
+            <button type="button" className={row.designatedAnswer === "subcard" ? "active" : ""} tabIndex={designated ? 0 : -1} aria-pressed={designated && row.designatedAnswer === "subcard"} onClick={() => action("updateManagedAnswerBinding", { key: row.key, changes: { designatedAnswer: "subcard" } })}>子卡片</button>
+          </div>
+        </div>
+      </div>
+      {mindMapSource ? <button type="button" className="answerBindingTarget" title="点击更换答案脑图" onClick={() => action("chooseManagedAnswerMindMap", { key: row.key, activateMixed: !row.hasAnswerMindMap && !designated })}>{row.hasAnswerMindMap ? row.answerTitle : "选择答案脑图"}</button> : <span className="answerBindingTargetEmpty">—</span>}
+      <span className="answerBindingActions">
+        <button type="button" aria-label={filterOpen ? "收起题目筛选" : "筛选题目"} title={filterOpen ? "收起题目筛选" : "筛选题目"} aria-expanded={filterOpen} onClick={toggleFilter}><DetailMorphIcon icon={ListFilter} target={ChevronUp} active={filterOpen} /></button>
+        <button type="button" aria-label="刷新索引" title="刷新索引" onClick={() => action("refreshManagedAnswerBinding", { key: row.key })}><DetailMorphIcon icon={RefreshCw} /></button>
+        <button type="button" className={`danger ${removeArmed ? "confirming" : ""}`} aria-label={removeArmed ? "再次点击删除绑定" : "删除绑定"} title={removeArmed ? "再次点击删除绑定" : "删除绑定"} disabled={removing} onClick={remove}><DetailMorphIcon icon={Trash2} target={Check} active={removeArmed} /></button>
+      </span>
+    </div>
+    {filterOpen && <div className="answerBindingColors"><header><strong>题目卡片颜色</strong>{addingColor && <span>请在当前脑图选中一张题目卡片，再点击对勾。</span>}</header>
+      <div>{row.questionColors.map(color => <button key={color} type="button" className="selected" aria-label={`删除颜色 ${color + 1}`} title={`删除颜色 ${color + 1}`} disabled={colorSaving} onClick={() => removeColor(color)}><span className="answerBindingColorSwatch" style={{ backgroundColor: cardColorSwatches[color] ?? "#d8dee8" }} aria-hidden="true" /><span>颜色 {color + 1}</span><Icon name="close" /></button>)}
+        <button type="button" className="answerBindingAddColor" aria-label={addingColor ? "确认添加所选卡片颜色" : "添加颜色"} title={addingColor ? "确认添加" : "添加颜色"} onClick={addingColor ? confirmAddColor : () => setAddingColor(true)} disabled={colorSaving}><DetailMorphIcon icon={Plus} target={Check} active={addingColor} /></button>
+        {addingColor && <button type="button" className="answerBindingCancelColor" aria-label="取消添加颜色" title="取消" onClick={() => setAddingColor(false)} disabled={colorSaving}><Icon name="close" /></button>}</div>
+    </div>}
+  </article>
 }
 
 function RegexMatchingSettings({ matching, action }) {

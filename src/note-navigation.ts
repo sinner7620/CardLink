@@ -338,6 +338,14 @@ function focusNoteInMindmapByOfficialApi(noteId: string): void {
   MN.studyController.focusNoteInMindMapById(noteId)
 }
 
+export async function locateNoteInCurrentMindMap(noteId: string): Promise<boolean> {
+  try {
+    focusNoteInMindmapByOfficialApi(noteId)
+    await delay(0.06)
+    return true
+  } catch { return false }
+}
+
 export type MindMapFocusModeResult = "focused" | "unavailable" | "failed"
 
 export async function focusNoteInMindMapFocusMode(noteId: string): Promise<MindMapFocusModeResult> {

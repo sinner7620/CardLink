@@ -1,4 +1,5 @@
 import { MN, isNSNull } from "marginnote"
+import { loadMatcherSettings } from "./settings"
 
 type BoundMindMapHandwritingAsset = { hash: string; base64: string; kind: "drawing" | "image"; mime?: string }
 
@@ -69,7 +70,7 @@ export function appendBoundMindMapHandwriting(questionHtml: string, result: Retu
   const section = `<style>.bound-mindmap-handwriting{margin-top:20px;padding-top:16px;border-top:1px solid #d9dde7}.bound-mindmap-handwriting>h2{margin:0 0 10px;font-size:14px;color:#6b7280}.bound-mindmap-handwriting-item{margin:8px 0}</style><section class="bound-mindmap-handwriting" aria-label="脑图绑定手写"><h2>脑图绑定手写</h2>${items}</section>`
   const message = result.status === "none" ? "该卡片没有绑定手写" : result.status === "unsupported" ? "当前 MarginNote 版本不支持读取绑定手写" : "绑定手写暂时无法读取"
   const content = interactive
-    ? `<style>[data-bound-handwriting][hidden]{display:none!important}</style><div data-bound-handwriting hidden>${result.assets.length ? section : `<p>${message}</p>`}</div>`
+    ? `<style>[data-bound-handwriting][hidden]{display:none!important}</style><div ${loadMatcherSettings().boundHandwritingDisplay === "always" ? 'data-bound-handwriting="always"' : 'data-bound-handwriting hidden'}>${result.assets.length ? section : `<p>${message}</p>`}</div>`
     : section
   if (questionHtml.includes("</article>")) return questionHtml.replace("</article>", `${content}</article>`)
   return questionHtml.replace("</body>", `${content}</body>`)

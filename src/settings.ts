@@ -13,6 +13,14 @@ export interface MatcherSettings {
   debugModeEnabled: boolean
   cardToolbarEnabled: boolean
   sourceLocateMode: "locate" | "focus"
+  subcardAnswerDisplay: "reveal" | "window"
+  boundHandwritingDisplay: "always" | "doubleTap"
+  mistakeListDisplay: "always" | "autoHide"
+  answerMaskStyle: "dark" | "light"
+  answerMaskColor: string
+  answerMaskImage: string
+  autoCollapseComments: boolean
+  reviewExpandedCommentCount: number
 }
 
 export function normalizeMistakeCustomCategories(value: unknown): string[] {
@@ -36,7 +44,15 @@ export function loadMatcherSettings(): MatcherSettings {
     mistakeCustomCategories: normalizeMistakeCustomCategories(value?.mistakeCustomCategories),
     debugModeEnabled: value?.debugModeEnabled === true,
     cardToolbarEnabled: value?.cardToolbarEnabled !== false,
-    sourceLocateMode: value?.sourceLocateMode === "focus" ? "focus" : "locate"
+    sourceLocateMode: value?.sourceLocateMode === "focus" ? "focus" : "locate",
+    subcardAnswerDisplay: value?.subcardAnswerDisplay === "reveal" ? "reveal" : "window",
+    boundHandwritingDisplay: value?.boundHandwritingDisplay === "always" ? "always" : "doubleTap",
+    mistakeListDisplay: value?.mistakeListDisplay === "autoHide" ? "autoHide" : "always",
+    answerMaskStyle: value?.answerMaskStyle === "light" ? "light" : "dark",
+    answerMaskColor: /^#[0-9a-f]{6}$/i.test(value?.answerMaskColor ?? "") ? String(value?.answerMaskColor) : value?.answerMaskStyle === "light" ? "#d9e4f2" : "#141922",
+    answerMaskImage: typeof value?.answerMaskImage === "string" && value.answerMaskImage.startsWith("data:image/") ? value.answerMaskImage : "",
+    autoCollapseComments: value?.autoCollapseComments === true,
+    reviewExpandedCommentCount: Number.isInteger(value?.reviewExpandedCommentCount) ? Math.max(0, Math.min(10, Number(value?.reviewExpandedCommentCount))) : 2
   }
   return settingsCache
 }
@@ -47,9 +63,17 @@ export function saveMatcherSettings(settings: Partial<MatcherSettings>): void {
   const next = {
     ...current,
     ...settings,
+    boundHandwritingDisplay: settings.boundHandwritingDisplay === "always" || settings.boundHandwritingDisplay === "doubleTap" ? settings.boundHandwritingDisplay : current.boundHandwritingDisplay,
+    mistakeListDisplay: settings.mistakeListDisplay === "always" || settings.mistakeListDisplay === "autoHide" ? settings.mistakeListDisplay : current.mistakeListDisplay,
     mistakeReviewCurves: normalizeMistakeReviewCurves(settings.mistakeReviewCurves ?? current.mistakeReviewCurves),
     mistakeCustomCategories: normalizeMistakeCustomCategories(settings.mistakeCustomCategories ?? current.mistakeCustomCategories),
-    sourceLocateMode: settings.sourceLocateMode === "focus" ? "focus" : settings.sourceLocateMode === "locate" ? "locate" : current.sourceLocateMode
+    sourceLocateMode: settings.sourceLocateMode === "focus" ? "focus" : settings.sourceLocateMode === "locate" ? "locate" : current.sourceLocateMode,
+    subcardAnswerDisplay: settings.subcardAnswerDisplay === "reveal" ? "reveal" : settings.subcardAnswerDisplay === "window" ? "window" : current.subcardAnswerDisplay,
+    answerMaskStyle: settings.answerMaskStyle === "light" ? "light" : settings.answerMaskStyle === "dark" ? "dark" : current.answerMaskStyle,
+    answerMaskColor: /^#[0-9a-f]{6}$/i.test(settings.answerMaskColor ?? "") ? settings.answerMaskColor! : current.answerMaskColor,
+    answerMaskImage: settings.answerMaskImage === undefined ? current.answerMaskImage : settings.answerMaskImage,
+    autoCollapseComments: settings.autoCollapseComments === undefined ? current.autoCollapseComments : settings.autoCollapseComments === true,
+    reviewExpandedCommentCount: Number.isInteger(settings.reviewExpandedCommentCount) ? Math.max(0, Math.min(10, settings.reviewExpandedCommentCount!)) : current.reviewExpandedCommentCount
   }
   setLocalDataByKey(next, SETTINGS_KEY)
   settingsCache = next

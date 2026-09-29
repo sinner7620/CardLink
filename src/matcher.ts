@@ -20,6 +20,7 @@ import { IndexScope as MindMapScope, scopeKey } from "./scope-key"
 import type { RegexMatchingRules } from "./binding"
 import { createRegexKeyExtractor } from "./regex-matching"
 import { appendBoundMindMapHandwriting, readBoundMindMapHandwriting } from "./bound-handwriting"
+import { loadMatcherSettings } from "./settings"
 
 export interface IndexedAnswer extends AnswerLike {
   noteId: string
@@ -47,7 +48,7 @@ function pathTitles(node: NodeNote): string[] {
   }
 }
 
-function toIndexedAnswer(
+export function toIndexedAnswer(
   note: MbBookNote,
   notebookId: string
 ): { answer?: IndexedAnswer; brokenLinks: number } {
@@ -307,7 +308,8 @@ export function answerCardHtml(
       } catch {
         return undefined
       }
-    }
+    },
+    loadMatcherSettings().autoCollapseComments
   )
   return includeBoundHandwriting
     ? appendBoundMindMapHandwriting(

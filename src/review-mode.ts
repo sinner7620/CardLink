@@ -110,13 +110,13 @@ function configureReviewSvgSurface(webView: UIWebView): void {
   bridged.layer.masksToBounds = true
 }
 
-function reviewToolbarSvgView(owner: any, current: ReviewModeState): UIWebView | undefined {
-  let webView = owner?.cardLinkReviewSvgView as UIWebView | undefined
+function reviewToolbarSvgView(owner: any, current: ReviewModeState, cacheKey = "cardLinkReviewSvgView"): UIWebView | undefined {
+  let webView = owner?.[cacheKey] as UIWebView | undefined
   if (!webView) {
     webView = new UIWebView({ x: 0, y: 0, width: BAR_WIDTH, height: BAR_HEIGHT })
     configureReviewSvgSurface(webView)
     ;(webView as any).loadHTMLStringBaseURL(reviewToolbarSvgHtml(current), null)
-    owner.cardLinkReviewSvgView = webView
+    owner[cacheKey] = webView
     return webView
   }
   // 跨题重挂载时重新声明透明合成属性，防止 UIWebView 装载完成后恢复默认白底。
@@ -193,6 +193,36 @@ function makeButton(owner: any, title: string, action: string, width: number): U
   return button
 }
 
+function mountNavigationToolbar(owner: any, current: ReviewModeState, specs: Array<[string, string, number]>, cacheKey: string): { toolbar: UIView; buttons: UIButton[] } | undefined {
+  const studyView = MN.studyController?.view
+  const studyWidth = Number(studyView?.frame?.width)
+  if (!studyView || !Number.isFinite(studyWidth) || studyWidth <= 0) return
+  const x = Math.max(8, (studyWidth - BAR_WIDTH) / 2)
+  const toolbar = new UIView({ x, y: BAR_TOP_INSET, width: BAR_WIDTH, height: BAR_HEIGHT })
+  applyJustGlassStaticShell(toolbar, BAR_WIDTH, BAR_HEIGHT, 22)
+  let left = CONTROL_INSET
+  const buttons = specs.map(([title, action, width], index) => {
+    const button = makeButton(owner, title, action, width)
+    button.frame = { x: left, y: 6, width, height: CONTROL_HEIGHT }
+    button.enabled = !current.navigating && !(index === 1 && current.index === 0) &&
+      !(index === 2 && current.index === current.items.length - 1)
+    ;(button as any).alpha = button.enabled ? 1 : 0.28
+    if (!button.enabled) (button as any).tintColor = UIColor.colorWithHexString(MUTED)
+    if (index === 3 && current.infoVisible) {
+      button.backgroundColor = UIColor.colorWithHexString(ACTIVE)
+      button.setTitleColorForState(UIColor.colorWithHexString(UI_COLORS.accent), 0)
+      ;(button as any).tintColor = UIColor.colorWithHexString(UI_COLORS.accent)
+    }
+    toolbar.addSubview(button)
+    left += width + CONTROL_GAP
+    return button
+  })
+  const svgView = reviewToolbarSvgView(owner, current, cacheKey)
+  if (svgView) toolbar.addSubview(svgView)
+  studyView.addSubview(toolbar)
+  return { toolbar, buttons }
+}
+
 function removeReviewViews(owner: any = self): void {
   try { owner?.cardLinkReviewToolbar?.removeFromSuperview?.() } catch { /* bridge-safe */ }
   try { owner?.cardLinkReviewInfo?.removeFromSuperview?.() } catch { /* bridge-safe */ }
@@ -232,11 +262,6 @@ function mountReviewViews(owner: any = self): void {
   removeReviewViews(owner)
   const studyWidth = Number(studyView.frame?.width)
   if (!Number.isFinite(studyWidth) || studyWidth <= 0) return
-  const x = Math.max(8, (studyWidth - BAR_WIDTH) / 2)
-  // MarginNote 自带顶栏占用脑图区顶部；在原 10pt 留白基础上再避让一个
-  // 完整复习工具条高度，防止原生顶栏覆盖复习控件。
-  const toolbar = new UIView({ x, y: BAR_TOP_INSET, width: BAR_WIDTH, height: BAR_HEIGHT })
-  applyJustGlassStaticShell(toolbar, BAR_WIDTH, BAR_HEIGHT, 22)
   const specs: Array<[string, string, number]> = [
     [`第 ${current.index + 1} 题`, "onReviewModeIndex:", 38],
     ["上一题", "onReviewModePrevious:", 32],
@@ -244,31 +269,11 @@ function mountReviewViews(owner: any = self): void {
     ["错题信息", "onReviewModeInfo:", 32],
     ["退出", "onReviewModeExit:", 32]
   ]
-  let left = CONTROL_INSET
-  specs.forEach(([title, action, width], index) => {
-    const button = makeButton(owner, title, action, width)
-    button.frame = { x: left, y: 6, width, height: CONTROL_HEIGHT }
-    button.enabled = !current.navigating &&
-      !(index === 1 && current.index === 0) &&
-      !(index === 2 && current.index === current.items.length - 1)
-    ;(button as any).alpha = button.enabled ? 1 : 0.28
-    if (!button.enabled) (button as any).tintColor = UIColor.colorWithHexString(MUTED)
-    if (index === 3 && current.infoVisible) {
-      button.backgroundColor = UIColor.colorWithHexString(ACTIVE)
-      button.setTitleColorForState(UIColor.colorWithHexString(UI_COLORS.accent), 0)
-      ;(button as any).tintColor = UIColor.colorWithHexString(UI_COLORS.accent)
-    }
-    toolbar.addSubview(button)
-    if (index === 0) owner.cardLinkReviewIndexButton = button
-    if (index === 3) owner.cardLinkReviewInfoButton = button
-    left += width + CONTROL_GAP
-  })
-  // SVG WebView 只负责矢量绘制并关闭全部交互；它置于按钮上方，触摸仍由下层
-  // 原生 UIButton 接收，因而保留原生 hover/按压/无障碍行为而不需要 WebView bridge。
-  const svgView = reviewToolbarSvgView(owner, current)
-  if (svgView) toolbar.addSubview(svgView)
-  studyView.addSubview(toolbar)
-  owner.cardLinkReviewToolbar = toolbar
+  const mounted = mountNavigationToolbar(owner, current, specs, "cardLinkReviewSvgView")
+  if (!mounted) return
+  owner.cardLinkReviewToolbar = mounted.toolbar
+  owner.cardLinkReviewIndexButton = mounted.buttons[0]
+  owner.cardLinkReviewInfoButton = mounted.buttons[3]
   if (current.infoVisible) {
     const infoX = Math.max(8, (studyWidth - INFO_WIDTH) / 2)
     const infoFrame = { x: infoX, y: BAR_TOP_INSET + BAR_HEIGHT + 5, width: INFO_WIDTH, height: INFO_HEIGHT }

@@ -1,6 +1,7 @@
 import { delay, MN, NodeNote, popup, setTimeInterval, showHUD, UndoManager } from "marginnote"
 import type { MbBookNote } from "marginnote"
 import { renderCardHtml } from "./card-html"
+import { usesOnlySubcardAnswers } from "./binding"
 import { CardLinkError } from "./errors"
 import { appendBoundMindMapHandwriting, readBoundMindMapHandwriting } from "./bound-handwriting"
 import { answerCardHtml, refreshIndex } from "./matcher"
@@ -1223,7 +1224,10 @@ const currentDbNoteResolver: ScopedNoteResolver = (_notebookId, noteId) => MN.db
 function questionHtml(record: MistakeRecord, resolveNote: ScopedNoteResolver = currentDbNoteResolver): string {
   const note = resolveNote(record.sourceNotebookId, record.sourceNoteId)
   if (!note) throw new CardLinkError("sourceNoteUnavailable")
-  return renderCardHtml(note, "错题原题", id => resolveNote(record.sourceNotebookId, id), media, media)
+  const scopeId = record.sourceRootNodeId || MAIN_MINDMAP_SCOPE_ID
+  const target = answerBinding(record.sourceNotebookId, scopeId)
+  const onlySubcardAnswers = usesOnlySubcardAnswers(target, record.sourceNotebookId, scopeId, note.colorIndex)
+  return renderCardHtml(note, "错题原题", id => resolveNote(record.sourceNotebookId, id), media, media, false, !onlySubcardAnswers)
 }
 
 export interface MistakeDetailData {
@@ -1287,7 +1291,7 @@ function answerCandidatesForRecord(record: MistakeRecord, node: NodeNote, resolv
     const answerHtmlStartedAt = Date.now()
     const answers = matches.map(answer => ({ id: answer.noteId, title: answer.titles[0] || "答案卡片",
       path: answer.pathTitles.filter(Boolean).join(" › "), html: answerCardHtml(answer, record.sourceTitle,
-        noteId => resolveNote(answerTarget.notebookId, noteId)) }))
+        noteId => resolveNote(answer.notebookId, noteId)) }))
     const answerStatus: MistakeDetailData["answerStatus"] = answers.length ? "ready" : "not-found"
     return { answers, answerStatus, lookupDurationMs, answerHtmlDurationMs: Date.now() - answerHtmlStartedAt }
   } catch (error) {

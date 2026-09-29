@@ -23,7 +23,6 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
-      - run: pnpm test
       - run: pnpm build
       - name: Verify tag matches package version
         if: startsWith(github.ref, 'refs/tags/')

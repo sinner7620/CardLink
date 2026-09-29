@@ -5,6 +5,28 @@ import test from "node:test"
 import { runInNewContext } from "node:vm"
 import { transpileModule } from "typescript"
 
+test("面板恢复独立刷新摘题状态，错题版本不变或 skipReload 也能解除旧锁定", async () => {
+  const source = readFileSync("web/src/main.jsx", "utf8")
+  const handler = source.match(/window\.__onPanelShow = (async options => \{[\s\S]*?\n    \})\r?\n/)?.[1]
+  assert.ok(handler)
+  for (const skipReload of [false, true]) {
+    const state = { clipper: { started: true }, refreshes: 0, listLoads: 0 }
+    const callback = runInNewContext(`(${handler})`, {
+      setConsentAttempt() {}, touchLocateOnShow() {},
+      refreshBindingSettings: async () => { state.clipper = { started: false }; state.refreshes++ },
+      setError: (message: string) => assert.fail(message),
+      initialLoadCompleteRef: { current: true },
+      dataRef: { current: { mistakes: { revision: "same" } } },
+      MNBridge: { send: async () => ({ revision: "same" }) },
+      load: () => { state.listLoads++ }
+    })
+    await callback(skipReload)
+    assert.equal(state.clipper.started, false)
+    assert.equal(state.refreshes, 1)
+    assert.equal(state.listLoads, 0)
+  }
+})
+
 test("隐藏页面不触发 rAF 时仍装载应用脚本", () => {
   const scripts: any[] = [], timers: (() => void)[] = []
   runInNewContext(readFileSync("web/boot.js", "utf8"), {
@@ -304,7 +326,7 @@ test("整条顶栏除按钮组外可拖动、Tab 居中且顶栏为白色", () =
   assert.doesNotMatch(css, /\.shell > main \{[^}]*height: 100%;/)
   assert.match(css, /html,\s*body,\s*#root\s*\{[^}]*background:\s*transparent;/)
   assert.match(css, /grid-template-columns: minmax\(94px, 1fr\) auto minmax\(94px, 1fr\)/)
-  assert.match(source, /topTools topTools-left[\s\S]*panelCloseSide === "left"[\s\S]*<nav className="topNav">[\s\S]*topTools topTools-right[\s\S]*panelCloseSide === "right"/)
+  assert.match(source, /topTools topTools-left[\s\S]*panelCloseSide === "left"[\s\S]*<nav className="topNav" ref={topNavRef}>[\s\S]*topTools topTools-right[\s\S]*panelCloseSide === "right"/)
   assert.match(redesign, /header\.topBar \{[\s\S]*width: 100%;[\s\S]*max-width: 100vw;[\s\S]*margin: 0;/)
   assert.match(redesign, /grid-template-columns: minmax\(0, 1fr\) auto minmax\(0, 1fr\);/)
   assert.match(redesign, /\.topBar > \.topNav \{[\s\S]*justify-self: center;[\s\S]*width: auto;/)

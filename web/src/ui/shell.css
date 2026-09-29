@@ -339,11 +339,11 @@ body > #root > .shell > main > header.topBar {
 .topNav button.active b {
   border-radius: 999px;
 }
-.topNav button:not(.active):not(:nth-child(3)) b {
+.topNav button:not(.active):not([data-tab="review"]) b {
   border-radius: 999px;
 }
-.topNav button:nth-child(3) b,
-.topNav button:nth-child(3).active b {
+.topNav button[data-tab="review"] b,
+.topNav button[data-tab="review"].active b {
   text-shadow: 0 0 3px rgba(220, 38, 38, .7),
     0 0 7px rgba(220, 38, 38, .4),
     0 0 12px rgba(220, 38, 38, .22);
@@ -648,7 +648,7 @@ body > #root > .shell > main > section.exportPage {
   color: var(--rd-accent-strong);
   background: rgba(14, 141, 253, .14);
 }
-.topNav button:not(.active):not(:nth-child(3)) b {
+.topNav button:not(.active):not([data-tab="review"]) b {
   background: rgba(120, 120, 128, .16);
   color: var(--rd-muted);
 }
@@ -660,12 +660,29 @@ body > #root > .shell > main > section.exportPage {
   color: inherit;
   background: transparent;
 }
-.topNav button:nth-child(3) b,
-.topNav button:nth-child(3).active b {
+.topNav button[data-tab="review"] b,
+.topNav button[data-tab="review"].active b {
   color: #dc2626;
   background: #fee2e2;
   font-weight: 700;
   filter: none;
+}
+.topBar > .topNav { position: relative; }
+.topNav .topNavSlider {
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  left: 0;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--rd-sel);
+  transition: transform .45s cubic-bezier(.32,.72,0,1), width .45s cubic-bezier(.32,.72,0,1);
+  pointer-events: none;
+}
+.topNav button { position: relative; z-index: 1; }
+.topNav button.active { background: transparent; }
+@media (prefers-reduced-motion: reduce) {
+  .topNav .topNavSlider { transition: none; }
 }
 @media (max-width: 800px) {
 body > #root > .shell > main > header.topBar {

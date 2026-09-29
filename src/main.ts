@@ -1,4 +1,5 @@
 import { getObjCClassDeclar } from "marginnote"
+import { onClipperEnd, onClipperBindMother, onClipperResetQuestion, onClipperEditTitle } from "./mnutils-entrance"
 import {
   handlers,
   lifecycle,
@@ -26,6 +27,15 @@ import {
   onMnutilsEntranceClick,
   onMnutilsEntranceLongPress,
   onMnutilsEntrancePan,
+  onMnutilsQuickMenuDismiss,
+  onMnutilsQuickMenuWindowTap,
+  onMnutilsQuickMenuOpenPanel,
+  onMnutilsQuickMenuFilter,
+  onMnutilsQuickMenuSelectAll,
+  onMnutilsQuickMenuToggleQuestion,
+  onMnutilsQuickMenuToggleBranch,
+  onMnutilsQuickMenuStart,
+  onMnutilsQuickMenuModePress,
   onMistakeLinkToolbarClick,
   onCloseAnswerCard,
   onLocateAnswerCard,
@@ -40,6 +50,7 @@ const Extension = JSB.defineClass(
   {
     ...lifecycle.instanceMethods,
     ...handlers,
+    onClipperEnd, onClipperBindMother, onClipperResetQuestion, onClipperEditTitle,
     queryAddonCommandStatus,
     onAnswerToolbarClick,
     onAnswerToolbarSingleTap,
@@ -70,6 +81,15 @@ const Extension = JSB.defineClass(
     onMnutilsEntranceClick,
     onMnutilsEntranceLongPress,
     onMnutilsEntrancePan,
+    onMnutilsQuickMenuDismiss,
+    onMnutilsQuickMenuWindowTap,
+    onMnutilsQuickMenuOpenPanel,
+    onMnutilsQuickMenuFilter,
+    onMnutilsQuickMenuSelectAll,
+    onMnutilsQuickMenuToggleQuestion,
+    onMnutilsQuickMenuToggleBranch,
+    onMnutilsQuickMenuStart,
+  onMnutilsQuickMenuModePress,
     openMenu
   },
   lifecycle.classMethods

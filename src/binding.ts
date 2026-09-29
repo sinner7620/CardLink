@@ -31,10 +31,21 @@ export interface BindingTarget {
   matchMode?: AnswerMatchMode
   orderedPairing?: OrderedPairing
   regexRules?: RegexMatchingRules
+  selectionMode?: "mixed" | "designated"
+  designatedAnswer?: "mindmap" | "subcard"
+  questionColors?: number[]
 }
 
 export type BindingValue = string | BindingTarget
 export type Bindings = Record<string, BindingValue>
+
+/** A separately bound answer map always preserves the question's child content. */
+export function usesOnlySubcardAnswers(target: BindingTarget | undefined, notebookId: string, rootNodeId: string, colorIndex: number): boolean {
+  const main = "__mn4_main_mindmap__"
+  return !!target && (target.designatedAnswer === "subcard" || target.selectionMode === "mixed") &&
+    target.notebookId === notebookId && (target.rootNodeId || main) === (rootNodeId || main) &&
+    target.questionColors?.includes(colorIndex) === true
+}
 
 const ROOT_SEPARATOR = "::root::"
 
@@ -49,6 +60,9 @@ export function normalizeBinding(value: unknown): BindingTarget | undefined {
   if (typeof target.notebookId !== "string" || !target.notebookId) return undefined
   const orderedPairing = normalizeOrderedPairing(target.orderedPairing)
   const regexRules = normalizeRegexMatchingRules(target.regexRules)
+  const questionColors = Array.isArray(target.questionColors)
+    ? [...new Set(target.questionColors.filter(value => Number.isInteger(value) && value >= 0))]
+    : undefined
   return {
     notebookId: target.notebookId,
     ...(typeof target.rootNodeId === "string" && target.rootNodeId
@@ -60,7 +74,12 @@ export function normalizeBinding(value: unknown): BindingTarget | undefined {
     ...(target.matchMode === "parent-order" ? { matchMode: "parent-order" as const } : {}),
     ...(target.matchMode === "regex" ? { matchMode: "regex" as const } : {}),
     ...(orderedPairing ? { orderedPairing } : {}),
-    ...(regexRules ? { regexRules } : {})
+    ...(regexRules ? { regexRules } : {}),
+    ...(target.selectionMode === "mixed" || target.selectionMode === "designated"
+      ? { selectionMode: target.selectionMode } : {}),
+    ...(target.designatedAnswer === "mindmap" || target.designatedAnswer === "subcard"
+      ? { designatedAnswer: target.designatedAnswer } : {}),
+    ...(questionColors ? { questionColors } : {})
   }
 }
 
@@ -143,7 +162,7 @@ export function getBindingForMode(
 }
 
 export function targetForMode(target: BindingTarget, scoped: boolean): BindingTarget {
-  if (scoped) return target
+  if (scoped || target.designatedAnswer === "subcard" || target.selectionMode === "mixed") return target
   return {
     notebookId: target.notebookId,
     ...(target.matchMode === "regex"
@@ -191,6 +210,7 @@ export function answerOnlyBindingScopes(bindings: Bindings): Set<string> {
   for (const value of Object.values(bindings)) {
     const target = normalizeBinding(value)
     if (!target) continue
+    if (target.designatedAnswer === "subcard" && target.selectionMode !== "mixed") continue
     if (target.rootNodeId) answerScopes.add(bindingKey(target.notebookId, target.rootNodeId))
     else if (!sourceNotebookIds.has(target.notebookId)) answerScopes.add(target.notebookId)
   }
@@ -202,7 +222,9 @@ export function bindingAnswerTargets(bindings: Bindings): BindingTarget[] {
   const targets = new Map<string, BindingTarget>()
   for (const value of Object.values(bindings)) {
     const target = normalizeBinding(value)
-    if (target) targets.set(bindingKey(target.notebookId, target.rootNodeId), target)
+    if (target && (target.designatedAnswer !== "subcard" || target.selectionMode === "mixed")) {
+      targets.set(bindingKey(target.notebookId, target.rootNodeId), target)
+    }
   }
   return [...targets.values()]
 }

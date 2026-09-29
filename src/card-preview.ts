@@ -62,7 +62,7 @@ export function mountCardPreview(win: any, wirePinch: any): any {
     if (point) win.scrollTo(Math.max(0, offsetX + focusX * scale - point.x), Math.max(0, offsetY + focusY * scale - point.y))
   }
   function remember(point: any) { focusX = (win.scrollX + point.x - offsetX) / scale; focusY = (win.scrollY + point.y - offsetY) / scale }
-  const handwriting = doc.querySelector("[data-bound-handwriting]")
+  const handwriting = doc.querySelector('[data-bound-handwriting]:not([data-bound-handwriting="always"])')
   let tapStart: any = null, lastTap: any = null, lastToggle = 0
   function toggleHandwriting() {
     if (!handwriting) return

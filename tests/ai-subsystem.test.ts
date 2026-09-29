@@ -248,7 +248,7 @@ test("分析题干统一经 analysisQuestionText 取值，纯文字题不依赖 
 })
 
 test("题目准备把整张卡片送 OCR，并将文本独立落盘", () => {
-  assert.match(web, /import html2canvas from "html2canvas"/)
+  assert.match(web, /await ensureHtml2Canvas\(\)/)
   assert.match(web, /html2canvas\(doc\.body/)
   assert.match(web, /aiSubmitPreparationImage/)
   assert.match(web, /当前上传的题目卡片/)

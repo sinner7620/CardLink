@@ -5,8 +5,14 @@ const levelCurves = [[1, 3, 7], [2, 5, 10], [14]]
 let customCategories = ["计算题", "概念辨析", "需要重做"]
 let debugModeEnabled = false
 let pluginEnabled = true
+let previewClipper = { mode: false, running: false, started: false, excerptTitle: true, toolLabels: {} }
 let sourceLocateMode = "locate"
+let previewPersonalSettings = { boundHandwritingDisplay: "doubleTap", mistakeListDisplay: "always", subcardAnswerDisplay: "window", answerMaskStyle: "dark", answerMaskColor: "#141922", maskImageConfigured: false, autoCollapseComments: false, reviewExpandedCommentCount: 2 }
 let manualTodayIds = []
+let previewBindings = [
+  { key: "questions::root::main", notebookId: "questions", notebookTitle: "多元微分", sourceRootNodeId: "main", sourceTitle: "考研真题", answerTitle: "多元微分答案 › 标准答案", hasAnswerMindMap: true, selectionMode: "mixed", designatedAnswer: "mindmap", questionColors: [1], availableColors: [0, 1, 2, 3] },
+  { key: "practice::root::main", notebookId: "practice", notebookTitle: "强化练习", sourceRootNodeId: "main", sourceTitle: "方向导数", answerTitle: "—", hasAnswerMindMap: false, selectionMode: "designated", designatedAnswer: "subcard", questionColors: [2], availableColors: [0, 2, 4] }
+]
 
 function endOfTodayTs(now = new Date()) {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime()
@@ -262,6 +268,7 @@ export async function previewSend(command, payload = null) {
   if (command === "aiPreviewAnalysis") return { subjectId: payload?.subjectId, recordCount: 3, analyzableCount: 3, preparedCount: 2, needsPreparation: 1, withHistory: 2, withoutAnswerBinding: 1 }
   if (command === "aiRunDueSchedules" || command === "aiGetJob") return { accepted: true, status: "missing" }
   if (command === "dashboard") return {
+    clipper: previewClipper,
     version: "2.4.0 · 完整界面预览",
     mistakes: workbenchPage(),
     manualTodayIds,
@@ -274,9 +281,42 @@ export async function previewSend(command, payload = null) {
       regexRules: { questionPattern: "", answerPattern: "" },
       debugModeEnabled,
       pluginEnabled,
-      sourceLocateMode
-    }
+      sourceLocateMode,
+      ...previewPersonalSettings
+    },
+    answerBindings: previewBindings
   }
+  if (command === "bindingSettingsSnapshot") {
+    const dashboard = await previewSend("dashboard")
+    return { matching: dashboard.matching, answerBindings: previewBindings, clipper: previewClipper }
+  }
+  if (command === "setClipperTitle") { previewClipper = { ...previewClipper, excerptTitle: payload?.enabled === true }; return previewClipper }
+  if (command === "setClipperAnswer") { previewClipper = { ...previewClipper, excerptAnswer: payload?.enabled === true }; return previewClipper }
+  if (command === "recordClipperTool") throw new Error("请在 MarginNote 中选择并记录摘录工具")
+  if (command === "openClipperMode") throw new Error("请在 MarginNote 中打开文档后使用摘题快捷区")
+  if (command === "chooseClipperAnswerPosition") throw new Error("请在 MarginNote 中选择答案位置（目前支持子卡片）")
+  if (command === "configureClipperTitleFormat") throw new Error("请在 MarginNote 中设置标题格式：原始标题、统一前缀、母卡标题前缀或母卡内自动题号")
+  if (command === "setPersonalSetting") {
+    if (payload?.key === "answerMaskImage") previewPersonalSettings.maskImageConfigured = Boolean(payload.value)
+    else if (payload?.key === "answerMaskColor") { previewPersonalSettings.answerMaskColor = payload.value; previewPersonalSettings.maskImageConfigured = false }
+    else previewPersonalSettings[payload?.key] = payload?.value
+    return (await previewSend("dashboard")).matching
+  }
+  if (command === "chooseReviewCommentCount") return (await previewSend("dashboard")).matching
+  if (command === "updateManagedAnswerBinding") {
+    previewBindings = previewBindings.map(row => row.key === payload?.key ? { ...row, ...payload?.changes } : row)
+    return { updated: true }
+  }
+  if (command === "deleteManagedAnswerBinding") {
+    previewBindings = previewBindings.filter(row => row.key !== payload?.key)
+    return { deleted: true }
+  }
+  if (command === "addManagedAnswerBindingColor") {
+    const color = 3
+    previewBindings = previewBindings.map(row => row.key === payload?.key ? { ...row, questionColors: [...new Set([...row.questionColors, color])] } : row)
+    return { color }
+  }
+  if (command === "refreshManagedAnswerBinding" || command === "chooseManagedAnswerMindMap") return { preview: true }
   if (command === "mistakes") return workbenchPage()
   if (command === "mistakesPage") return workbenchPage(payload?.offset, String(payload?.transferId || "preview-workbench"))
   if (command === "addManualTodayOverdue") {

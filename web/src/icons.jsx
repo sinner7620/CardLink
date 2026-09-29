@@ -12,6 +12,8 @@ const paths = {
   mastered: '<circle cx="12" cy="12" r="9"/><path d="m8 12 2.7 2.7L16.5 9"/>',
   added: '<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>',
   search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 4 4"/>',
+  filter: '<path d="M4 7h16M7 12h10M10 17h4"/>',
+  menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
   down: '<path d="m7 10 5 5 5-5"/>',
   up: '<path d="m7 14 5-5 5 5"/>',
   right: '<path d="m9 6 6 6-6 6"/>',

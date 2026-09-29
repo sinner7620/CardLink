@@ -374,7 +374,7 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
       resetPanelFrame: resetFrame,
       panelCloseButtonSide: panelCloseButtonSide,
       setPanelCloseButtonSide: setCloseButtonSide,
-      pluginEnabled: function () { return __MN_ANSWER_CORE_GLOBAL__.cardToolbar.isEnabled(); }
+      pluginEnabled: function () { return __MN_ANSWER_CORE_GLOBAL__.cardToolbar.isEnabled(controller.addon); }
     };
     try {
       var result = __MNAM_WEB_BRIDGE_GLOBAL__.dispatch(context, message.command, message.payload);

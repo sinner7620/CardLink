@@ -43,7 +43,7 @@ test("web 端发送的每个桥命令都有原生处理", () => {
 })
 
 test("原生处理的命令与 web 侧差异仅限已知保留项", () => {
-    const nativeOnly = ["answer", "mistakes", "findCurrentAnswer", "legacyMenu", "reviewMistakes", "runtimeLog"]
+  const nativeOnly = ["answer", "mistakes", "findCurrentAnswer", "legacyMenu", "reviewMistakes", "runtimeLog", "bindAnswerNotebook", "openCurrentMistakeSource"]
   const extra = [...handled].filter(command => !sent.has(command) && !nativeOnly.includes(command))
   assert.deepEqual(extra, [], "出现新的仅原生命令：请确认拼写并更新本白名单")
 })
