@@ -658,7 +658,7 @@
 }
 .mistakeItemFooter .mistakeItemTags > em {
   flex: 0 1 auto;
-  max-width: 76px;
+  max-width: 100%;
 }
 .mistakeReviewState {
   color: #687386;
@@ -1590,4 +1590,21 @@
 .mistakeWorkspace .mistakeDetailSurface::before { z-index: 2; }
 
 
+}
+
+/* Extend the list scroll surface behind the translucent navigation bar. */
+body > #root > .shell > main > section.mistakeWorkspace {
+  padding-top: 0;
+}
+.mistakeWorkspace .mistakeSidebar {
+  box-sizing: border-box;
+  padding-top: 0;
+}
+.mistakeWorkspace .mistakeListHeader {
+  top: calc(var(--mn-topbar-height) + 8px);
+  margin-top: calc(var(--mn-topbar-height) + 8px);
+}
+.mistakeWorkspace .mistakeDetailSurface {
+  box-sizing: border-box;
+  padding-top: var(--mn-topbar-height);
 }

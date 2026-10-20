@@ -1,8 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react"
-import "./ui/mistake-drawer.css"
 
 /** The list keeps its scroll/filter state when moved out of view. */
-export function MistakeLayout({ autoHide, children }) {
+export function MistakeLayout({ autoHide, hasDetail = false, children }) {
   const [open, setOpen] = useState(true)
   const [dragging, setDragging] = useState(false)
   const panel = useRef(null), edge = useRef(null), root = useRef(null), gesture = useRef(null)
@@ -55,18 +54,13 @@ export function MistakeLayout({ autoHide, children }) {
   }, [autoHide])
   useEffect(() => {
     if (!autoHide || !open) return
-    const outside = event => {
-      // Portaled filter menus belong to the list; only close for workspace or app chrome.
-      if (root.current?.contains(event.target) || event.target.closest(".datePopover,.categoryPopover,[role=dialog]")) return
-      if (event.target.closest("#root")) close()
-    }
+    const previewClick = () => { if (hasDetail) close() }
     const escape = event => { if (event.key === "Escape") { close(); event.preventDefault() } }
     const stage = root.current?.querySelector(".mistakeDetailStage")
-    stage?.addEventListener("cardlink-preview-click", close)
-    document.addEventListener("pointerdown", outside)
+    stage?.addEventListener("cardlink-preview-click", previewClick)
     document.addEventListener("keydown", escape)
-    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape); stage?.removeEventListener("cardlink-preview-click", close) }
-  }, [autoHide, open])
+    return () => { document.removeEventListener("keydown", escape); stage?.removeEventListener("cardlink-preview-click", previewClick) }
+  }, [autoHide, open, hasDetail])
   function begin(event) {
     if (!autoHide || !event.isPrimary || event.button !== 0 || event.target.closest("input,select,textarea")) return
     suppressClick.current = false
@@ -118,13 +112,16 @@ export function MistakeLayout({ autoHide, children }) {
   }
   // Capture can move from a touched child to its parent during a drag; only
   // pointercancel (not lostpointercapture) means that the gesture was cancelled.
-  const gestures = { onPointerDown: begin, onPointerMove: move, onPointerUp: event => end(event), onPointerCancel: event => end(event, true) }
+  // The scene host owns the floating window's edge drags. Do not install a
+  // competing horizontal recognizer there; the drawer remains button-operated.
+  const scene = window.__MN_SCENE_ENABLED__ === true
+  const gestures = scene ? {} : { onPointerDown: begin, onPointerMove: move, onPointerUp: event => end(event), onPointerCancel: event => end(event, true) }
   const [sidebar, detail] = React.Children.toArray(children)
   if (!autoHide) return <div className="browserGrid mistakeSplitView">{children}</div>
   return <div ref={root} className={`browserGrid mistakeSplitView ${autoHide ? "mistakeAutoHide" : ""} ${open ? "drawerOpen" : ""} ${dragging ? "drawerDragging" : ""}`}
     onClickCapture={event => { if (suppressClick.current) { suppressClick.current = false; event.preventDefault(); event.stopPropagation() } }}>
-    <div className="mistakeDetailStage" onClickCapture={() => { if (open) close() }}>{detail}</div>
+    <div className="mistakeDetailStage" onClickCapture={() => { if (open && hasDetail) close() }}>{detail}</div>
     {React.cloneElement(sidebar, { ref: panel, ...gestures, id: "mistake-drawer", inert: autoHide && !open && !dragging ? true : undefined })}
-    {autoHide && <button ref={edge} type="button" className="mistakeDrawerEdge" aria-label={open ? "收起错题列表" : "展开错题列表"} aria-controls="mistake-drawer" aria-expanded={open} {...gestures} onClick={() => open ? close() : setOpen(true)}><span /></button>}
+    {autoHide && <button ref={edge} type="button" className={`mistakeDrawerEdge${scene ? " sceneDrawerToggle" : ""}`} title={scene ? "点击展开或收起列表" : undefined} aria-label={open ? "收起错题列表" : "展开错题列表"} aria-controls="mistake-drawer" aria-expanded={open} {...gestures} onClick={() => open ? close() : setOpen(true)}><span /></button>}
   </div>
 }

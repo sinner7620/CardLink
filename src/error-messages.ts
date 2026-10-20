@@ -9,7 +9,7 @@ import { ErrorCode, ErrorParams, errorParams, errorCode } from "./errors"
 
 type ErrorMessageKey = `error.${ErrorCode}`
 const ERROR_TEXTS: Record<ErrorMessageKey, string | ((params: ErrorParams) => string)> = {
-  "error.indexNotReady": "答案索引尚未建立，请在插件菜单点击“刷新答案索引”",
+  "error.indexNotReady": "答案索引尚未建立或暂时无法读取",
   "error.bindingNotebookMissing": "找不到已绑定的答案脑图，可能已被删除",
   "error.answerNoteMissing": "答案卡片已不存在，请刷新答案索引",
   "error.bindingMissing": "请先绑定答案脑图",
@@ -48,7 +48,7 @@ export function t(key: ErrorMessageKey, params: ErrorParams = {}): string | unde
 
 /** 未码化历史错误的关键字兼容层（码化全量覆盖后可整体移除）。 */
 const KEYWORD_ERROR_TEXTS: Array<[RegExp, string]> = [
-  [/索引/, "答案索引尚未建立或已过期，请先在设置中刷新答案索引"],
+  [/索引/, "答案索引尚未建立或暂时无法读取"],
   [/不存在|已被删除|not found/i, "目标内容不存在或已被删除，请刷新后重试"],
   [/noteId|卡片/, "所选卡片无效，请重新选择"],
   [/超时|timeout/i, "操作超时，请稍后重试"],

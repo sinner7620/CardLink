@@ -26,6 +26,16 @@ function cleanNoteId(value: unknown): string {
   return typeof value === "string" ? value.trim() : ""
 }
 
+/** 单卡归属先读取 notebookId；旧运行时不提供该字段时才枚举学习集。 */
+export function notebookContainsNote(notebook: unknown, note: unknown): boolean {
+  if (!notebook || !note) return false
+  const notebookId = cleanNoteId((notebook as { topicId?: unknown }).topicId)
+  const ownerId = cleanNoteId((note as { notebookId?: unknown }).notebookId)
+  if (notebookId && ownerId) return notebookId === ownerId
+  const id = noteKey(note)
+  return Boolean(id) && notebookNotes(notebook).some(candidate => noteKey(candidate) === id)
+}
+
 function noteKey(note: unknown): string {
   return cleanNoteId((note as { noteId?: unknown } | null | undefined)?.noteId)
 }

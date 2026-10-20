@@ -7,6 +7,7 @@ var __MNAM_WEB_ADDON_GLOBAL__ = (function () {
 
   function createAddon(mainPath) {
     var core = __MN_ANSWER_CORE_GLOBAL__;
+    core.configureUpdatePath(mainPath);
     var methods = {};
     Object.assign(methods, core.lifecycle.instanceMethods, core.handlers, core.instanceMethods);
 
@@ -52,6 +53,7 @@ var __MNAM_WEB_ADDON_GLOBAL__ = (function () {
     };
 
     methods.sceneDidDisconnect = function () {
+      __MNAM_SCENE_WORKBENCH_GLOBAL__.dispose(self);
       __MNAM_WEB_PANEL_GLOBAL__.destroyPanel(self.webController);
       self.webController = null;
       call(core.lifecycle.instanceMethods, "sceneDidDisconnect", arguments);

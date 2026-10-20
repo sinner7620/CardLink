@@ -1,11 +1,11 @@
 {
   "name": "cardlink",
-  "version": "2.4.4",
+  "version": "2.4.5",
   "mnChannel": "stable",
   "private": true,
   "description": "MarginNote 4 跨脑图答案匹配插件",
   "author": "frank",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
     "url": "https://github.com/sinner7620/CardLink.git"
@@ -24,7 +24,8 @@
     "lucide": "1.39.0",
     "marginnote": "0.9.30",
     "marked": "18.0.11",
-    "morphicons": "1.7.1"
+    "morphicons": "1.7.1",
+    "ts-fsrs": "5.4.2"
   },
   "devDependencies": {
     "@playwright/test": "1.62.1",

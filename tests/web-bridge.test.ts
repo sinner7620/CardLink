@@ -31,7 +31,7 @@ test("隐藏页面不触发 rAF 时仍装载应用脚本", () => {
   const scripts: any[] = [], timers: (() => void)[] = []
   runInNewContext(readFileSync("web/boot.js", "utf8"), {
     window: { addEventListener() {} },
-    document: { createElement: () => ({}), body: { appendChild: (node: any) => scripts.push(node) } },
+    document: { getElementById: () => null, createElement: () => ({}), body: { appendChild: (node: any) => scripts.push(node) } },
     requestAnimationFrame() { throw new Error("隐藏 WebView 不应依赖 rAF") },
     setTimeout: (callback: () => void) => timers.push(callback)
   })
@@ -240,7 +240,7 @@ test("冷启动先绘制外壳且首次面板显示不会重复请求 dashboard"
   assert.match(source, /DASHBOARD_SHELL_CACHE_KEY/)
   assert.match(source, /useState\(startupSnapshotRef\.current\)/)
   assert.match(source, /await load\(Boolean\(startupSnapshotRef\.current\)\)/)
-  assert.match(source, /const initialTimer = window\.setTimeout\([\s\S]*?await load\(\)/)
+  assert.match(source, /const initialTimer = window\.setTimeout\([\s\S]*?await load\(Boolean\(startupSnapshotRef\.current\)\)/)
   assert.match(panel, /controller\.view\.hidden = true;[\s\S]*?return controller/)
   assert.match(panel, /boot\.appRendered/)
   assert.match(source, /window\.__onPanelShow = async options => \{[\s\S]*MNBridge\.send\("mistakesRevision"\)[\s\S]*status\?\.revision !== dataRef\.current\?\.mistakes\?\.revision/)
@@ -259,8 +259,8 @@ test("设置页可切换插件窗口关闭按钮位置", () => {
   assert.match(panel, /function setCloseButtonSide/)
   assert.match(source, /action\("closePanel", null, false\)/)
   assert.match(source, /<Icon name="close" \/>/)
-  assert.ok(source.includes('panelCloseSide === "left" && <div className="windowControlCapsule">{closeButton}{refreshButton}</div>'))
-  assert.ok(source.includes('panelCloseSide === "right" && <div className="windowControlCapsule">{refreshButton}{closeButton}</div>'))
+  assert.ok(source.includes('panelCloseSide === "left" && <div className="windowControlCapsule">{closeButton}{resetButton}{refreshButton}</div>'))
+  assert.ok(source.includes('panelCloseSide === "right" && <div className="windowControlCapsule">{refreshButton}{resetButton}{closeButton}</div>'))
   assert.doesNotMatch(panel, /UIButton\.buttonWithType|controller\.closeButton/)
   assert.match(panel, /mn4-answer-matcher\.rails\.close-side\.v1/)
 })
@@ -313,7 +313,7 @@ test("整条顶栏除按钮组外可拖动、Tab 居中且顶栏为白色", () =
   assert.match(source, /const refreshButton = <button className="iconButton"/)
   assert.match(source, /const closeButton = <button className="iconButton"/)
   assert.match(source, /className="windowControlCapsule"/)
-  assert.match(css, /\.windowControlCapsule \{[\s\S]*width: 72px;[\s\S]*height: 32px;/)
+  assert.match(css, /\.windowControlCapsule \{[\s\S]*width: 108px;[\s\S]*height: 32px;/)
   assert.match(css, /@keyframes windowControlJelly/)
   assert.match(css, /prefers-reduced-motion: reduce/)
   assert.match(css, /\.topBar \{[\s\S]*background: #fff/)
@@ -456,7 +456,7 @@ test("待复习队列包含真实原题、双重筛选和与预览一致的控�
   assert.match(previewComponent, /controller\.setScale\(zoom \/ 100\)/)
   assert.match(previewCss, /\.reviewAnswerViewport \{[\s\S]*height: clamp\(340px, 48vh, 520px\)/)
   assert.match(previewCss, /\.reviewAnswerViewport iframe \{[\s\S]*height: 100%;[\s\S]*max-height: none;/)
-  assert.match(source, /await MNBridge\.send\("mistakeDetail", \{ recordId \}\)/)
+  assert.match(source, /await MNBridge\.send\("mistakeDetail", \{ recordId, content: "question" \}\)/)
   assert.match(source, /data-level=\{level\}/)
   assert.match(previewCss, /\.reviewHistory ol[\s\S]*overflow: visible/)
   assert.match(previewCss, /\.reviewHistory ol[\s\S]*touch-action: pan-y/)
@@ -512,7 +512,10 @@ test("收藏 Morphicons 使用 vanilla lucide IconNode，刷新与进度条遵�
   assert.match(source, /createMorph\(pathRef\.current, Star/)
   assert.match(source, /morph\?\.morphTo\(favorite \? X : Check/)
   assert.doesNotMatch(source, /favoriteStarPath|favoriteCheckPath|favoriteXPath/)
-  assert.match(source, /async function refreshPanel\(\)[\s\S]*resetPanelFrame[\s\S]*await load\(\)/)
+  const refreshBody = source.match(/async function refreshPanel\(\)[\s\S]*?\n  \}/)?.[0] || ""
+  assert.match(refreshBody, /action\("refreshMistakeList"\)/)
+  assert.doesNotMatch(refreshBody, /resetPanelFrame/)
+  assert.match(source, /const resetButton =[\s\S]*?action\("resetPanelFrame", null, false\)/)
   assert.match(source, /filter\(item => item\.count > 0\)/)
   assert.match(source, /from="checkbox" to="checkboxChecked"/)
   assert.match(source, /className="reviewDaySummary"/)

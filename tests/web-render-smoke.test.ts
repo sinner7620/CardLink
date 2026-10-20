@@ -148,6 +148,7 @@ test("到期复习页签渲染队列与复测按钮", () => {
   }))
   assert.doesNotMatch(html, /今日队列|完成评价后立即显示下次复习日期/)
   assert.match(html, /计划到期状态/)
+  assert.match(html, /class="reviewHandwriteAction" aria-label="书写 第 1 题"/)
   assert.match(html, /展开筛选/)
   assert.match(html, /reviewFilterPanel/)
   assert.match(html, /reviewToolbar[\s\S]*reviewActionCapsule/)
@@ -180,6 +181,20 @@ test("错题详情侧栏渲染题目视图与等级选择", () => {
   assert.match(html, /第 1 题/)
   assert.match(html, /定位原题/)
   assert.match(html, /不会/)
+})
+
+test("场景错题详情使用包内交互预览页，不嵌入srcDoc和data图片", () => {
+  const runtime = globalThis as any
+  runtime.window.__MN_SCENE_ENABLED__ = true
+  try {
+    const value = detailFor(record())
+    value.questionHtml = '<html><body><img src="data:image/png;base64,blocked"></body></html>'
+    const html = renderToString(React.createElement(ui.MistakeDetail, {
+      detail: value, customCategories: [], action: actionStub, reloadDetail: asyncNoop, onRemoved: noop
+    }))
+    assert.match(html, /<iframe[^>]+src="\/pkg\/web-dist\/preview.html"/)
+    assert.doesNotMatch(html, /srcDoc|srcdoc|data:image/)
+  } finally { delete runtime.window.__MN_SCENE_ENABLED__ }
 })
 
 test("导出页签渲染题目筛选与页面设置", () => {

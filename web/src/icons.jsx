@@ -1,6 +1,8 @@
 import React from "react"
 
 const paths = {
+  handwrite: '<path d="m16 3 5 5-11 11-6 1 1-6zM14 5l5 5M4 22h16"/>',
+  window: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/>',
   overview: '<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><path d="M14 17.5h7M17.5 14v7"/>',
   mistakes: '<path d="M6.5 4.5h9l3 3v12H6.5z"/><path d="M15.5 4.5v3h3"/><path d="m9.5 13 2 2 4-4"/>',
   review: '<path d="M4.8 8.2A8 8 0 1 1 4 14"/><path d="M4.8 4.5v3.7H1.2"/><path d="M12 7.5v5l3.2 1.8"/>',

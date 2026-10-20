@@ -1,5 +1,5 @@
 import { MN, NodeNote } from "marginnote"
-import { BindingTarget } from "./binding"
+import { BindingTarget, usesSubcardAnswers } from "./binding"
 import {
   findAnswerByReference,
   findAnswers,
@@ -15,10 +15,9 @@ export function findAnswersForQuestion(
   titles: string[],
   path: string[]
 ): IndexedAnswer[] {
-  const useSubcards = target.selectionMode === "mixed" || target.designatedAnswer === "subcard"
   const useMindMap = target.selectionMode === "mixed" || target.designatedAnswer !== "subcard"
   const questionColor = question.note?.colorIndex
-  const subcards = useSubcards && typeof questionColor === "number" && target.questionColors?.includes(questionColor)
+  const subcards = usesSubcardAnswers(target, questionColor)
     ? Array.from(question.childNodes ?? []).flatMap(child => {
         try {
           const note = child.note

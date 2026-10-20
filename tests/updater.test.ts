@@ -20,13 +20,6 @@ test("正式自动检查仍按 12h 节流执行，且不存在强制调试检查
   assert.match(source, /scheduleAutomaticUpdateCheck[\s\S]*checkForUpdates\(false\)/)
 })
 
-test("更新菜单只保留下载并手动安装", () => {
-  const source = readFileSync("src/updater.ts", "utf8")
-  assert.match(source, /buttons: \["下载并手动安装"\]/)
-  assert.doesNotMatch(source, /"稍后"|"下载并安装"|下载并保存（手动安装）/)
-  assert.doesNotMatch(source, /downloadAndInstall/)
-})
-
 test("交互与自动更新提示都显示插件名称", () => {
   const source = readFileSync("src/updater.ts", "utf8")
   assert.match(source, /title: `CardLink：发现/)

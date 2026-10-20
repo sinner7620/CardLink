@@ -47,3 +47,14 @@ test("单条复习详情失败会释放并发槽位供后续请求继续", async
   assert.deepEqual(results.map(result => result.status), ["rejected", "fulfilled", "fulfilled"])
   assert.deepEqual(started.sort(), ["a", "b", "c"])
 })
+
+test("取消索引处理留下的缺失状态不缓存，下次打开可重新弹窗和读取答案", async () => {
+  let calls = 0
+  const cache = createReviewDetailCache(async () => ({ questionHtml: "原题", answers: [], answerStatus: ++calls === 1 ? "index-missing" : "ready" }))
+  assert.equal((await cache.get("a", "1")).answerStatus, "index-missing")
+  assert.equal(cache.size, 0)
+  assert.equal((await cache.get("a", "1")).answerStatus, "ready")
+  assert.equal(cache.size, 1)
+  await cache.get("a", "1")
+  assert.equal(calls, 2)
+})

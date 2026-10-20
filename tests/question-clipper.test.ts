@@ -8,7 +8,7 @@ import { clipperProgressHtml } from "../src/clipper-quick-menu"
 import { UI_COLORS } from "../src/ui-tokens"
 
 function harness() {
-  const notes = new Map<string, any>(), timers: Array<() => void> = [], stored: Record<string, any> = {}
+  const notes = new Map<string, any>(), timers: Array<() => void> = [], stored: Record<string, any> = { "cardlink.question-clipper.v1": { tools: { title: "ToolTextExcerpt", question: "ToolRectCut", answer: "ToolRectCut" } } }
   const owner: any = { window: {} }, toolbar: boolean[] = [], checked = new Set(["ToolTextExcerpt"])
   const notices: string[] = []
   const choice = { index: 0 }
@@ -55,7 +55,7 @@ test("摘录标题、题目、答案依次挂载；重复通知不重复创建�
   assert.equal(answer.noteTitle, "第 1 题答案")
   assert.equal(api.clipperSnapshot().completed, 1); assert.equal(api.clipperSnapshot().stage, "title")
   assert.deepEqual(h.notices, ["已摘录标题，接下来请摘录题目", "已摘录题目，接下来请摘录答案", "已摘录答案，本题完成；接下来请摘录标题"])
-  api.exitClipperMode(); assert.equal(api.clipperModeActive(), false); assert.deepEqual(h.toolbar, [false, true])
+  api.exitClipperMode(); assert.equal(api.clipperModeActive(), false); assert.deepEqual(h.toolbar, [false])
 })
 
 test("不摘标题直接进入题目；暂停和退出使延迟摘录失效，恢复保留当前步骤", () => {
@@ -68,6 +68,27 @@ test("不摘标题直接进入题目；暂停和退出使延迟摘录失效，�
   assert.equal(api.clipperSnapshot().stage, "answer"); assert.equal(q.noteTitle, undefined)
   h.note("a"); h.excerpt("a"); api.exitClipperMode(); h.flush()
   assert.equal(q.childNotes.length, 0)
+})
+
+test("摘题准备与开始失败不隐藏侧边标签，实际开始和恢复才隐藏", () => {
+  const h = harness()
+  h.api.enterClipperMode(() => {})
+  assert.deepEqual(h.toolbar, [])
+  const settings = h.stored["cardlink.question-clipper.v1"]
+  h.stored["cardlink.question-clipper.v1"] = { tools: {} }
+  h.api.toggleClipperRunning()
+  assert.equal(h.api.clipperSnapshot().running, false)
+  assert.deepEqual(h.toolbar, [])
+  h.stored["cardlink.question-clipper.v1"] = settings
+  h.api.toggleClipperRunning()
+  assert.deepEqual(h.toolbar, [false])
+  h.api.toggleClipperRunning()
+  assert.equal(h.api.clipperSnapshot().running, false)
+  assert.deepEqual(h.toolbar, [false])
+  h.api.toggleClipperRunning()
+  assert.deepEqual(h.toolbar, [false, false])
+  h.api.exitClipperMode()
+  assert.deepEqual(h.toolbar, [false, false])
 })
 
 test("结束摘题通知设置页解除绑定锁定，暂停保持锁定，开关往返保留绑定", () => {
@@ -105,7 +126,7 @@ test("工具学习优先唯一自定义预设，保留标题文本回退并持�
 
 test("标题开关兼容原生数值布尔值；运行中关闭保留题目并从下题跳过标题", () => {
   const h = harness(), { api } = h
-  h.stored["cardlink.question-clipper.v1"] = { excerptTitle: 0, tools: {} }
+  h.stored["cardlink.question-clipper.v1"] = { excerptTitle: 0, tools: { title: "ToolTextExcerpt", question: "ToolRectCut", answer: "ToolRectCut" } }
   assert.equal(api.clipperSettings().excerptTitle, false)
   api.saveClipperSetting(true); api.enterClipperMode(() => {}); api.toggleClipperRunning(); h.flush()
   api.saveClipperSetting(false); h.flush()
@@ -138,11 +159,13 @@ test("点击编辑标题预填原值，保存同步题目和答案命名，过�
   assert.equal(api.clipperSnapshot().title, "")
 })
 
-test("摘录的原标题传给输入框默认值；前缀仅在创建题目时应用一次", async () => {
+test("标题摘录后立即写入前缀并展示，题目和答案不重复追加", async () => {
   const h = harness(), { api } = h
   api.saveClipperTitleFormat("prefix", "第一章"); api.enterClipperMode(() => {}); api.toggleClipperRunning(); h.flush()
   h.note("t", "例题 1"); h.excerpt("t"); h.flush()
-  h.sandbox.MNUtil = { input: async (...args: any[]) => { assert.equal(args[3].default, "例题 1"); return { button: 0, input: "" } } }
+  assert.equal(h.notes.get('t').noteTitle, '第一章 · 例题 1')
+  assert.equal(api.clipperSnapshot().title, '第一章 · 例题 1')
+  h.sandbox.MNUtil = { input: async (...args: any[]) => { assert.equal(args[3].default, "第一章 · 例题 1"); return { button: 0, input: "" } } }
   await api.editClipperQuestionTitle()
   const q = h.note("q"); h.excerpt("q"); h.flush()
   assert.equal(q.noteTitle, "第一章 · 例题 1")
@@ -172,6 +195,22 @@ test("母卡前缀取当前名称；各母卡题号持久续增，重置前不�
   const q3 = h.note("q3"); h.excerpt("q3"); h.flush()
   assert.equal(q3.noteTitle, "第3题")
   assert.equal(motherA.childNotes.length, 4)
+})
+
+test("母卡前缀在标题阶段写入，重置后新标题重新格式化", () => {
+  const h = harness(), { api } = h
+  const mother = h.note('m', '第一章')
+  api.saveClipperTitleFormat('mother', '')
+  api.enterClipperMode(() => {}); h.select(mother); api.bindClipperMother(); api.toggleClipperRunning(); h.flush()
+  const t = h.note('t', '例1'); h.excerpt('t'); h.flush()
+  assert.equal(t.noteTitle, '第一章 · 例1')
+  assert.equal(api.clipperSnapshot().stage, 'question')
+  api.resetClipperQuestion(); h.flush()
+  mother.noteTitle = '第二章'
+  const t2 = h.note('t2', '例2'); h.excerpt('t2'); h.flush()
+  assert.equal(t2.noteTitle, '第二章 · 例2')
+  const q = h.note('q'); h.excerpt('q'); h.flush()
+  assert.equal(q.noteTitle, '第二章 · 例2')
 })
 
 test("关闭标题摘录后进度只保留题目答案，重新开启恢复三步", () => {
@@ -240,7 +279,7 @@ test("设置桥接的 self 为网页控制器时，快捷区仍绑定插件实�
   const h = harness(), { sandbox, owner, api } = h
   class View {
     frame: any; bounds: any; layer: any = {}; children: any[] = []; superview: any; titleLabel: any = {}
-    target: any; selector = ""; hidden = false; userInteractionEnabled = true
+    target: any; selector = ""; hidden = false; userInteractionEnabled = true; alpha = 1
     constructor(frame: any = {}) { this.frame = frame; this.bounds = frame }
     addSubview(v: any) { this.children.push(v); v.superview = this }
     bringSubviewToFront() {}
@@ -272,6 +311,7 @@ test("设置桥接的 self 为网页控制器时，快捷区仍绑定插件实�
   })
   const originalRequire = sandbox.require
   sandbox.require = (name: string) => name === "./question-clipper" ? api
+      : name === "./note-navigation" ? { recordRuntimeState() {} }
       : name === "./clipper-quick-menu" ? { clipperProgressHtml }
       : name === "./quick-menu-geometry" ? { quickMenuGeometry }
         : name === "./ui-tokens" ? { UI_COLORS }
@@ -322,7 +362,7 @@ test("设置桥接的 self 为网页控制器时，快捷区仍绑定插件实�
   sandbox.self = webController; h.flush()
   sandbox.self = owner; menuApi.onClipperEnd()
   assert.equal(api.clipperModeActive(owner), false)
-  assert.deepEqual(h.toolbar, [false, true])
+  assert.deepEqual(h.toolbar, [false])
   menuApi.openClipperQuickMenu(owner)
   await menuApi.onMnutilsQuickMenuStart()
   menuApi.onMnutilsQuickMenuDismiss()
@@ -364,19 +404,41 @@ test("设置桥接的 self 为网页控制器时，快捷区仍绑定插件实�
   menuApi.openClipperQuickMenu(owner)
   const animatedMenu = owner.mnutilsQuickMenu
   assert.equal(animatedMenu.content.frame.width, 44)
+  const assertReveal = () => {
+    assert.equal(animatedMenu.content.alpha, 1)
+    assert.equal(animatedMenu.content.frame.x + animatedMenu.controls.frame.x, animatedMenu.expandedFrame.x)
+    assert.equal(animatedMenu.content.frame.y + animatedMenu.controls.frame.y, animatedMenu.expandedFrame.y)
+  }
+  assertReveal()
   h.flush()
   assert.equal(animatedMenu.content.frame.width, 44)
+  assert.equal(animatedMenu.content.backgroundColor.hex, "clear")
+  const ballOpening = animations.shift()!
+  assert.equal(ballOpening.seconds, .08)
+  ballOpening.update(); ballOpening.resolve()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(animatedMenu.content.frame.width, 44)
+  assert.equal(animatedMenu.content.backgroundColor.hex, UI_COLORS.surface)
   const opening = animations.shift()!
-  assert.equal(opening.seconds, .38)
+  assert.equal(opening.seconds, .24)
   opening.update(); opening.resolve()
-  await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
+  await new Promise(resolve => setImmediate(resolve))
   assert.equal(animatedMenu.content.frame.width, 272)
+  assertReveal()
   menuApi.onMnutilsQuickMenuDismiss()
   const closing = animations.shift()!
   assert.equal(closing.seconds, opening.seconds)
   closing.update(); closing.resolve()
-  await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
+  await new Promise(resolve => setImmediate(resolve))
   assert.equal(animatedMenu.content.frame.width, 44)
+  assertReveal()
+  assert.equal(owner.mnutilsQuickMenu, animatedMenu)
+  const ballClosing = animations.shift()!
+  assert.equal(ballClosing.seconds, ballOpening.seconds)
+  ballClosing.update(); ballClosing.resolve()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(animatedMenu.content.backgroundColor.hex, "clear")
+  assert.equal(owner.mnutilsQuickMenu, undefined)
   assert.equal(api.clipperModeActive(owner), true)
 })
 
@@ -434,4 +496,23 @@ test("重置本题不删除已有卡片，保留母卡和完成数，废弃旧�
   api.exitClipperMode(); api.saveClipperSetting(false); api.enterClipperMode(() => {})
   api.toggleClipperRunning(); api.resetClipperQuestion(); h.flush()
   assert.equal(api.clipperSnapshot().stage, "question")
+})
+
+
+test("开始前检查当前流程全部工具：未绑定不开始、不调工具；跳过步骤无需绑定", () => {
+  const h = harness()
+  h.stored["cardlink.question-clipper.v1"] = { tools: { question: "ToolRectCut" } }
+  h.api.enterClipperMode(() => {})
+  h.api.toggleClipperRunning()
+  assert.equal(h.api.clipperSnapshot().started, false)
+  assert.equal(h.api.clipperSnapshot().running, false)
+  assert.match(h.notices[h.notices.length - 1], /标题、答案摘录工具/)
+  h.flush()
+  assert.deepEqual([...h.checked], ["ToolTextExcerpt"])
+  h.api.saveClipperSetting(false)
+  h.api.saveClipperAnswerSetting(false)
+  h.api.toggleClipperRunning(); h.flush()
+  assert.equal(h.api.clipperSnapshot().started, true)
+  assert.equal(h.api.clipperSnapshot().running, true)
+  assert.deepEqual([...h.checked], ["ToolRectCut"])
 })

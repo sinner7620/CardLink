@@ -128,6 +128,13 @@ export const REVIEW_CURVES: MistakeReviewCurves = {
   2: [14]
 }
 
+export function reviewResultHint(record: Pick<MistakeRecord, "level" | "reviewCount"> | undefined, level: MistakeLevel, curves: MistakeReviewCurves = REVIEW_CURVES): string {
+  if (level === 2 && record?.level === 2) return "结束"
+  const curve = curves[level]
+  const index = record?.level === level ? Math.min(record.reviewCount + 1, curve.length - 1) : 0
+  return `+${curve[index]}天`
+}
+
 export function isMistakeLevel(value: number): value is MistakeLevel {
   return Number.isInteger(value) && value >= 0 && value <= 2
 }

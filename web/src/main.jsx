@@ -9,18 +9,13 @@ import { REVIEW_CURVES } from "../../src/mistake-domain"
 import { isManagedMistakeTag } from "../../src/mistake-tags"
 import { escapeHtml } from "../../src/html-utils"
 import { installWebUiColors } from "../../src/ui-tokens"
-import "./ui/tokens.css"
-import "./ui/controls.css"
-import "./ui/shell.css"
-import "./ui/overview.css"
-import "./ui/mistakes.css"
-import "./ui/review.css"
-import "./ui/export.css"
-import "./ui/settings.css"
-import "./ui/detail.css"
+import "./ui/b21-baseline.css"
+import "./ui/selection.css"
 import { useDockableBar } from "./detail-dock"
-import "./a11y.css"
 import { CardPreview } from "./CardPreview"
+import { PreviewFrame, ResourceImage } from "./SceneResources"
+import { SceneWindowControls } from "./SceneWindowControls"
+import { publishSceneImage, releaseSceneImages, sceneCaptureOptions } from "./lib/sceneResources"
 import { MistakeLayout } from "./MistakeLayout"
 import { createReviewDetailCache } from "./lib/reviewDetailCache"
 import { createMorph } from "morphicons/dom"
@@ -29,6 +24,8 @@ import { clearLegacyFavoriteTitles, readLegacyFavoriteTitles } from "./preview-f
 import { SFTileIcon, SF_TONE_COLORS } from "./sf"
 
 const levelNames = ["不会", "不熟", "掌握"]
+const FsrsReview = React.lazy(() => import("./FsrsReview"))
+const FsrsSettings = React.lazy(() => import("./FsrsReview").then(module => ({ default: module.FsrsSettings })))
 const cardColorSwatches = [
   "#f8d65c", "#f5a65b", "#ee7970", "#de76a2",
   "#ad83c5", "#7d91cc", "#6baed0", "#6dbeb3",
@@ -463,6 +460,7 @@ function App() {
   const [topNavSlider, setTopNavSlider] = useState(null)
   const [streamLoading, setStreamLoading] = useState(false)
   const selectedIdRef = useRef("")
+  const detailSeqRef = useRef(0)
   const dataRef = useRef(null)
   const loadSeqRef = useRef(0)
   const activeLoadRef = useRef(null)
@@ -527,12 +525,19 @@ function App() {
       }
       const currentSelectedId = selectedIdRef.current
       if (currentSelectedId && !records.some(item => item.recordId === currentSelectedId)) {
+        detailSeqRef.current++
+        selectedIdRef.current = ""
         setSelectedId("")
         setDetail(null)
       }
+      else if (currentSelectedId && records.find(item => item.recordId === currentSelectedId)?.noteAvailable === false) {
+        detailSeqRef.current++
+        setDetail(null)
+      }
       else if (currentSelectedId) {
-        const detail = await MNBridge.send("mistakeDetail", { recordId: currentSelectedId })
-        if (seq !== loadSeqRef.current) return
+        const detailSeq = detailSeqRef.current
+        const detail = await MNBridge.send("mistakeDetail", { recordId: currentSelectedId, content: "question" })
+        if (seq !== loadSeqRef.current || detailSeq !== detailSeqRef.current || selectedIdRef.current !== currentSelectedId) return
         setDetail(detail)
         setData(current => patchReviewedMistake(current, detail.record))
       }
@@ -637,10 +642,18 @@ function App() {
         setData(current => ({ ...current, matching: { ...current?.matching, pluginEnabled: result.enabled } }))
         setBusy(false)
       }
+      else if (command === "setReviewAlgorithm" && result) {
+        setData(current => ({ ...current, reviewAlgorithm: result.algorithm }))
+        setBusy(false)
+      }
       else if (command === "setDebugMode" && result) {
         // 调试开关与 setPluginEnabled 同一数据流：直接以命令结果更新 matching，
         // 不再依赖整页 dashboard 重载，大错题库下开关不再被分页状态卡住。
-        setData(current => ({ ...current, matching: { ...current?.matching, debugModeEnabled: result.enabled === true } }))
+        setData(current => ({ ...current, reviewAlgorithm: result.algorithm || "fixed", matching: { ...current?.matching, debugModeEnabled: result.enabled === true, debugUpdateDownloadsEnabled: result.enabled === true && current?.matching?.debugUpdateDownloadsEnabled === true, debugAutoInstallUpdatesEnabled: result.enabled === true && current?.matching?.debugAutoInstallUpdatesEnabled === true } }))
+        setBusy(false)
+      }
+      else if ((command === "setDebugUpdateDownloads" || command === "setDebugAutoInstallUpdates") && result) {
+        setData(current => ({ ...current, matching: { ...current?.matching, ...result } }))
         setBusy(false)
       }
       else if (command === "chooseSourceLocateMode" && result) {
@@ -649,6 +662,7 @@ function App() {
       }
       else if ((command === "setPersonalSetting" || command === "chooseReviewCommentCount") && result) {
         setData(current => ({ ...current, matching: { ...current?.matching, ...result } }))
+        if (command === "setPersonalSetting" && payload?.key === "sceneWorkbenchEnabled" && payload.value === false) setDetail(current => current ? { ...current, handwritingAvailable: false } : current)
         if (command === "setPersonalSetting" && payload?.key === "boundHandwritingDisplay" && selectedId) await openDetail(selectedId)
       }
       else if (command === "setPanelCloseButtonSide" && result?.side) {
@@ -673,18 +687,24 @@ function App() {
   }
 
   async function openDetail(recordId) {
+    const seq = ++detailSeqRef.current
+    selectedIdRef.current = recordId
     setSelectedId(recordId)
+    setDetail(current => current?.record?.recordId === recordId ? current : null)
     setBusy(true)
     setError("")
     try {
-      const nextDetail = await MNBridge.send("mistakeDetail", { recordId })
+      const nextDetail = await MNBridge.send("mistakeDetail", { recordId, content: "question" })
+      if (seq !== detailSeqRef.current || selectedIdRef.current !== recordId) return
       setDetail(nextDetail)
       setData(current => patchReviewedMistake(current, nextDetail.record))
     } catch (reason) {
+      if (seq !== detailSeqRef.current || selectedIdRef.current !== recordId) return
       setDetail(null)
       setError(reason.message || String(reason))
+      await load(true)
     } finally {
-      setBusy(false)
+      if (seq === detailSeqRef.current) setBusy(false)
     }
   }
 
@@ -723,6 +743,7 @@ function App() {
           })()
         }, 0)
     window.__onPanelShow = async options => {
+      if (dataRef.current?.matching?.debugModeEnabled && dataRef.current?.reviewAlgorithm === "fsrs") window.dispatchEvent(new Event("cardlink-fsrs-refresh"))
       setConsentAttempt(value => value + 1)
       touchLocateOnShow()
       // Clipper lifecycle changes do not change the mistake index revision.
@@ -739,7 +760,10 @@ function App() {
         } catch { /* keep the rendered snapshot when the lightweight probe fails */ }
       }
     }
-    window.__onNativeDataChanged = () => { touchLocateOnShow(); load() }
+    window.__onNativeDataChanged = () => {
+      if (dataRef.current?.matching?.debugModeEnabled && dataRef.current?.reviewAlgorithm === "fsrs") window.dispatchEvent(new Event("cardlink-fsrs-refresh"))
+      touchLocateOnShow(); load()
+    }
     window.__onNativeBindingsChanged = () => { void refreshBindingSettings().catch(reason => setError(reason.message || String(reason))) }
     return () => {
       delete window.__onPanelShow
@@ -784,8 +808,7 @@ function App() {
   }
 
   async function refreshPanel() {
-    await action("resetPanelFrame", null, false)
-    await load()
+    await action("refreshMistakeList")
   }
 
   async function exportRuntimeLog() {
@@ -822,31 +845,39 @@ function App() {
   const entries = [
     ["overview", "总览"],
     ["mistakes", "错题本", data?.mistakes?.totalCount ?? data?.mistakes?.records?.length ?? 0],
-    ["review", "待复习", data?.mistakes?.todayDueCount || 0],
+    ["review", "待复习", debugModeEnabled && data?.reviewAlgorithm === "fsrs" ? 0 : data?.mistakes?.todayDueCount || 0],
     ["settings", "设置"]
   ]
   useLayoutEffect(() => {
     function measure() {
       const nav = topNavRef.current
       const active = nav?.querySelector('[data-tab="' + tab + '"]')
-      if (nav && active) setTopNavSlider({ left: active.offsetLeft, width: active.offsetWidth })
+      if (nav && active) setTopNavSlider(current => current?.left === active.offsetLeft && current?.width === active.offsetWidth ? current : { left: active.offsetLeft, width: active.offsetWidth })
     }
     measure()
+    const nav = topNavRef.current
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null
+    if (nav) { observer?.observe(nav); nav.querySelectorAll("button").forEach(button => observer?.observe(button)) }
     window.addEventListener("resize", measure)
-    return () => window.removeEventListener("resize", measure)
+    return () => { window.removeEventListener("resize", measure); observer?.disconnect() }
   }, [tab, data?.mistakes?.totalCount, data?.mistakes?.todayDueCount])
 
   const panelCloseSide = data?.matching?.panelCloseButtonSide === "right" ? "right" : "left"
-  const refreshButton = <button className="iconButton" aria-label="刷新并复位插件窗口" title="刷新并复位窗口" onClick={refreshPanel} disabled={busy}><Icon name="refresh" /></button>
-  const closeButton = <button className="iconButton" aria-label="关闭插件窗口" onClick={() => action("closePanel", null, false)}><Icon name="close" /></button>
+  const sceneSizeEnabled = window.__MN_SCENE_ENABLED__ === true && data?.matching?.sceneWorkbenchEnabled === true
+  const refreshButton = <button className="iconButton" aria-label="刷新错题列表" title="刷新错题列表" onClick={refreshPanel} disabled={busy}><Icon name="refresh" /></button>
+  const resetButton = <button className="iconButton" aria-label="重置窗口" title={window.__MN_SCENE_ENABLED__ ? "恢复窗口默认大小" : "重置窗口位置与大小"} onClick={() => action("resetPanelFrame", null, false)}><Icon name="window" /></button>
+  const closeButton = <button className="iconButton" aria-label={window.__MN_SCENE_ENABLED__ ? "收起插件窗口" : "关闭插件窗口"} title={window.__MN_SCENE_ENABLED__ ? "收起并保留当前题目，从浮球或插件工具栏恢复" : "关闭插件窗口"} onClick={() => action("closePanel", null, false)}><Icon name="close" /></button>
   async function uploadMaskImage(event) {
     const file = event.target.files?.[0]
     if (!file) return
     try {
-      const url = URL.createObjectURL(file)
+      const dataUri = await new Promise((resolve, reject) => {
+        const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file)
+      })
+      const resource = window.__MN_SCENE_ENABLED__ ? await publishSceneImage(dataUri) : { url: dataUri }
       const image = new Image()
       try {
-        await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = reject; image.src = url })
+        await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = reject; image.src = resource.url })
         const scale = Math.min(1, 512 / Math.max(image.width, image.height))
         const canvas = document.createElement("canvas")
         canvas.width = Math.max(1, Math.round(image.width * scale))
@@ -855,17 +886,18 @@ function App() {
         const value = canvas.toDataURL("image/jpeg", .72)
         if (value.length > 400000) throw new Error("图片过大，请换一张图片")
         await action("setPersonalSetting", { key: "answerMaskImage", value })
-      } finally { URL.revokeObjectURL(url); event.target.value = "" }
+      } finally { if (resource.key) releaseSceneImages([resource.key]); event.target.value = "" }
     } catch (reason) { setError(reason.message || "图片读取失败") }
   }
 
   return <div className={`shell panelClose-${panelCloseSide} tab-${tab}`}>
     <main ref={mainRef}>
       <header className="topBar">
-        <div className="topTools topTools-left">{panelCloseSide === "left" && <div className="windowControlCapsule">{closeButton}{refreshButton}</div>}</div>
+        <div className="topTools topTools-left">{panelCloseSide === "left" && <div className="windowControlCapsule">{closeButton}{resetButton}{refreshButton}</div>}</div>
         <nav className="topNav" ref={topNavRef}>{topNavSlider && <span className="topNavSlider" aria-hidden="true" style={{ width: topNavSlider.width, transform: `translateX(${topNavSlider.left}px)` }} />}{entries.map(([key, name, count]) => <button key={key} data-tab={key} className={tab === key ? "active" : ""} onClick={() => { setReviewFocusId(""); if (key !== "settings") setSettingsPane("root"); setTab(key) }}><strong>{name}</strong>{count > 0 && <b>{count}</b>}</button>)}</nav>
-        <div className="topTools topTools-right">{panelCloseSide === "right" && <div className="windowControlCapsule">{refreshButton}{closeButton}</div>}</div>
+        <div className="topTools topTools-right">{panelCloseSide === "right" && <div className="windowControlCapsule">{refreshButton}{resetButton}{closeButton}</div>}</div>
       </header>
+      {sceneSizeEnabled && <SceneWindowControls side={panelCloseSide} />}
       {tab === "settings" && settingsPane === "root" && <nav className="settingsCapsule" aria-label="设置分类">
         <span className="settingsCapsuleSlider" style={{ transform: `translateX(${["answer", "mistakes", "personal", "about"].indexOf(settingsSection) * 100}%)` }} />
         {[["answer", "答案配置"], ["mistakes", "错题管理"], ["personal", "个性设置"], ["about", "关于插件"]].map(([key, label]) =>
@@ -889,6 +921,7 @@ function App() {
       />}
 
       {tab === "mistakes" && <MistakeBrowser
+        fsrsActive={debugModeEnabled && data?.reviewAlgorithm === "fsrs"}
         listDisplay={data?.matching?.mistakeListDisplay || "always"}
         records={records}
         allRecords={data?.mistakes?.records || []}
@@ -912,7 +945,13 @@ function App() {
         showLocateHint={showLocateHint}
       />}
 
-      {tab === "review" && <DueReviewList
+      {tab === "review" && debugModeEnabled && data?.reviewAlgorithm === "fsrs" && <React.Suspense fallback={<p>正在载入复习记录…</p>}><FsrsReview recordsRevision={data?.mistakes?.revision} sources={data?.mistakes?.records || []}>{({ records, adapter }) => <DueReviewList
+        key="fsrs" records={records} adapter={adapter} action={action} manualTodayIds={adapter.manualTodayIds}
+        handwritingAvailable={data?.features?.handwriting === true} toolbarHost={mainRef.current}
+        focusRecordId={reviewFocusId} showLocateHint={showLocateHint} commentExpandCount={data?.matching?.reviewExpandedCommentCount ?? 2}
+      />}</FsrsReview></React.Suspense>}
+      {tab === "review" && !(debugModeEnabled && data?.reviewAlgorithm === "fsrs") && <DueReviewList
+        handwritingAvailable={data?.features?.handwriting === true}
         toolbarHost={mainRef.current}
         onRecordChanged={record => setData(current => patchReviewedMistake(current, record))}
         focusRecordId={reviewFocusId}
@@ -956,7 +995,7 @@ function App() {
             ["refresh", "刷新错题索引", "重新读取错题分类及来源路径", () => action("repairMistakes")],
             ["download", "导出错题", "预览并导出 PDF 或 Markdown", openExport]
           ]} />
-          <MistakeLevelGuide reviewCurves={data?.mistakes?.reviewCurves} action={action} />
+          {debugModeEnabled && data?.reviewAlgorithm === "fsrs" ? <React.Suspense fallback={<p>正在读取复习设置…</p>}><FsrsSettings Switch={SvgSwitch} /></React.Suspense> : <MistakeLevelGuide reviewCurves={data?.mistakes?.reviewCurves} action={action} />}
           <SettingsGroup title="其他错题工具" tone="amber" items={[
             ["sliders", "AI 错题分析（开发中…）", "科目、模型与定期总结", openAISettings]
           ]} />
@@ -967,6 +1006,7 @@ function App() {
             ["sliders", "答案遮盖设置", data?.matching?.maskImageConfigured ? "自定义图片" : "颜色遮盖", () => setMaskSettingsOpen(value => !value)]
           ]}>{maskSettingsOpen && <div className="answerMaskSettings"><strong>遮盖颜色</strong><div>{[["#141922", "深色"], ["#d9e4f2", "浅蓝"], ["#f6e7a5", "浅黄"], ["#d8f0d2", "浅绿"], ["#9c7cbb", "紫色"], ["#ce786f", "红色"]].map(([color, label]) => <button type="button" key={color} className={data?.matching?.answerMaskColor === color && !data?.matching?.maskImageConfigured ? "selected" : ""} onClick={() => action("setPersonalSetting", { key: "answerMaskColor", value: color })}><i style={{ background: color }} />{label}</button>)}</div><label className="answerMaskUpload">选择自定义图片<input type="file" accept="image/*" onChange={uploadMaskImage} /></label>{data?.matching?.maskImageConfigured && <button type="button" onClick={() => action("setPersonalSetting", { key: "answerMaskImage", value: "" })}>移除图片</button>}</div>}</SettingsGroup>
           <SettingsGroup title="操作与窗口" tone="purple" items={[
+            ["toggle", "悬浮球默认展开模式", data?.matching?.entranceDefaultMode === "clipper" ? "摘题模式" : "做题模式", () => action("setPersonalSetting", { key: "entranceDefaultMode", value: data?.matching?.entranceDefaultMode === "clipper" ? "practice" : "clipper" })],
             ["book", "卡片绑定手写显示", data?.matching?.boundHandwritingDisplay === "always" ? "始终显示" : "双击显示", () => action("setPersonalSetting", { key: "boundHandwritingDisplay", value: data?.matching?.boundHandwritingDisplay === "always" ? "doubleTap" : "always" })],
             ["sliders", "错题本列表显示方式", data?.matching?.mistakeListDisplay === "autoHide" ? "自动隐藏" : "始终显示", () => action("setPersonalSetting", { key: "mistakeListDisplay", value: data?.matching?.mistakeListDisplay === "autoHide" ? "always" : "autoHide" })],
             ["focusMode", "定位原题方式", data?.matching?.sourceLocateMode === "focus" ? "定位并聚焦" : "仅定位", () => action("chooseSourceLocateMode", null, false)],
@@ -978,14 +1018,21 @@ function App() {
           ]} />
         </div>}
         {settingsSection === "about" && <div className="settingsGroups">
+          <SettingsGroup title="场景功能" tone="accent" items={[
+            ["toggle", "场景面板与整卡手写", "默认关闭；需软件4.5.0及以上的场景页面。面板切换在重新打开窗口后生效，关闭后手写立即停用。", () => action("setPersonalSetting", { key: "sceneWorkbenchEnabled", value: data?.matching?.sceneWorkbenchEnabled !== true }), <SvgSwitch checked={data?.matching?.sceneWorkbenchEnabled === true} label="场景面板与整卡手写" />]
+          ]} />
           <SettingsGroup title="关于插件" tone="green" items={[
             ["info", "当前版本", `v${data?.version || "…"} · frank`, handleVersionTap],
-            ["reset", "重置窗口位置", "恢复插件窗口默认位置与大小", () => action("resetPanelFrame", null, false)],
+            ["reset", data?.features?.scenePanel ? "重置窗口大小" : "重置窗口位置", data?.features?.scenePanel ? "恢复插件窗口默认大小" : "恢复插件窗口默认位置与大小", () => action("resetPanelFrame", null, false)],
             ["guide", "插件使用说明", "查看 CardLink 使用说明", () => action("openPluginGuide", null, false)],
             ["update", "检查插件更新", "检查可用的新版本", () => action("checkUpdates", null, false)]
           ]} />
           {connectivityResult && <ConnectivityResult result={connectivityResult} />}
           {debugModeEnabled && <SettingsGroup title="调试功能" tone="red" items={[
+            ["toggle", "FSRS 智能复习", "仅调试模式生效；两套进度独立保存，关闭后返回固定曲线", () => action("setReviewAlgorithm", { algorithm: data?.reviewAlgorithm === "fsrs" ? "fixed" : "fsrs" }), <SvgSwitch checked={data?.reviewAlgorithm === "fsrs"} label="FSRS 智能复习" />],
+            ["toggle", "调试安装包下载", "启用后优先获取调试版本；退出调试模式后关闭", () => action("setDebugUpdateDownloads", { enabled: data?.matching?.debugUpdateDownloadsEnabled !== true }), <SvgSwitch checked={data?.matching?.debugUpdateDownloadsEnabled === true} label="调试安装包下载" />],
+            ["toggle", "自动安装更新", "自动下载并安装，完成后请重启应用；退出调试模式后关闭", () => action("setDebugAutoInstallUpdates", { enabled: data?.matching?.debugAutoInstallUpdatesEnabled !== true }), <SvgSwitch checked={data?.matching?.debugAutoInstallUpdatesEnabled === true} label="自动安装更新" />],
+            ["update", "查看更新状态", "对照当前运行版本与已安装版本", () => action("showUpdateStatus", null, false)],
             ["fileText", "导出运行日志", "导出调试模式期间的运行事件", exportRuntimeLog],
             ["wifi", "联通测试", "检查上报通道", runConnectivityTest],
             ["close", "退出调试模式", "停止并清空运行日志", () => action("setDebugMode", { enabled: false })]
@@ -1095,25 +1142,25 @@ function MistakeBrowser(props) {
   }
 
   return <section className="mistakeWorkspace">
-    <MistakeLayout autoHide={props.listDisplay === "autoHide"}>
+    <MistakeLayout autoHide={props.listDisplay === "autoHide"} hasDetail={Boolean(detail?.record && detail.record.noteAvailable !== false)}>
       <aside className="mistakeSidebar">
         <div className={`filterBar mistakeListHeader ${filtersOpen ? "" : "filtersClosed"} ${selecting ? "selectionOpen" : ""}`}>
           <div className="listToolbar">
             <button className={`batchToggle svgIconButton ${selecting ? "active" : ""}`} aria-label={selecting ? "完成多选" : "进入多选"} title={selecting ? "完成多选" : "多选"} onClick={toggleSelecting}><MorphIcon from="checkbox" to="checkboxChecked" active={selecting} /></button>
-            <span className="filterCount">{selecting ? `${selectedIds.length}/${records.length}` : `共${records.length}道`}</span>
+            <span className="filterCount" title={props.fsrsActive ? "固定曲线档案；FSRS 进度见待复习" : undefined}>{props.fsrsActive && !selecting ? "固定档案 · " : ""}{selecting ? `${selectedIds.length}/${records.length}` : `共${records.length}道`}</span>
           </div>
           <div className="searchRow"><input value={props.query} onChange={event => props.setQuery(event.target.value)} placeholder="搜索题名、脑图、章节或标签" /><button type="button" className="filterCollapseButton" aria-expanded={filtersOpen} aria-label={filtersOpen ? "折叠筛选" : "展开筛选"} title={filtersOpen ? "折叠筛选" : "展开筛选"} onClick={() => setFiltersOpen(value => !value)}><Icon name={filtersOpen ? "up" : "down"} /></button></div>
           {filtersOpen && <div className="filterSelectors">
             <CategoryCascade records={allRecords} path={props.categoryPath} setPath={props.setCategoryPath} favoritesActive={props.favoritesOnly} favoritesCount={allRecords.filter(function (item) { return item.favorite === true }).length} onFavoritesToggle={props.setFavoritesOnly} />
             <span className="filterDivider" aria-hidden="true" />
-            <select className="levelNarrow" aria-label="掌握等级" value={props.level} onChange={function (event) { props.setLevel(event.target.value) }}><option value="all">全部</option>{levelNames.map(function (name, index) { return <option value={String(index)} key={name}>{name}</option> })}</select>
+            <select className="levelNarrow" aria-label={props.fsrsActive ? "固定曲线历史等级" : "掌握等级"} value={props.level} onChange={function (event) { props.setLevel(event.target.value) }}><option value="all">全部</option>{levelNames.map(function (name, index) { return <option value={String(index)} key={name}>{name}</option> })}</select>
             <span className="filterDivider" aria-hidden="true" />
             <DateFilterButton value={props.dateFilter} onChange={props.setDateFilter} />
           </div>}
           {selecting && <div className="batchBar active">
           <button data-select-all-state={allVisibleSelected ? "all" : "none"} onClick={toggleVisible} disabled={!records.length}><MorphIcon from="checkbox" to="checkboxChecked" active={allVisibleSelected} /><span>{allVisibleSelected ? "全不选" : "全选"}</span></button>
           <span className="filterDivider" aria-hidden="true" />
-          <select className="batchLevelSelect" aria-label="修改错题等级" defaultValue="" disabled={!selectedIds.length} onChange={async event => { const value = event.target.value; if (value !== "") await changeSelectedLevel(Number(value)); event.target.value = "" }}><option value="">修改等级</option>{levelNames.map((name, level) => <option key={name} value={level}>{name}</option>)}</select>
+          <select className="batchLevelSelect" title={props.fsrsActive ? "FSRS 反馈请在待复习中逐题提交" : undefined} aria-label="修改错题等级" defaultValue="" disabled={props.fsrsActive || !selectedIds.length} onChange={async event => { const value = event.target.value; if (value !== "") await changeSelectedLevel(Number(value)); event.target.value = "" }}><option value="">{props.fsrsActive ? "固定等级只读" : "修改等级"}</option>{levelNames.map((name, level) => <option key={name} value={level}>{name}</option>)}</select>
           <span className="filterDivider" aria-hidden="true" />
           <button className="batchExport" onClick={() => onExportSelected(selectedIds)} disabled={!selectedIds.length}>导出</button>
           <span className="filterDivider" aria-hidden="true" />
@@ -1122,7 +1169,7 @@ function MistakeBrowser(props) {
         </div>
         <div className="mistakeList mistakeListBody">{records.map(item => <MistakeListItem key={item.recordId} item={item} selected={selectedId === item.recordId} selectable={selecting} checked={selectedSet.has(item.recordId)} onPreview={() => openDetail(item.recordId)} onToggle={() => toggleRecord(item.recordId)} />)}{!records.length && <Empty title="没有符合条件的错题" text="清空搜索或筛选条件后重试。" />}</div>
       </aside>
-      <div className={`detailPane mistakeDetailSurface ${selecting ? "batchSelectionPane" : ""}`}>{detail ? <MistakeDetail key={detail.record.recordId} detail={detail} customCategories={props.customCategories} action={action} reloadDetail={reloadDetail} onRemoved={onRemoved} onReview={props.onReview} showLocateHint={props.showLocateHint} /> : <Empty title="选择一道错题" text="右侧将显示题目、答案、分类和定位操作。" />}</div>
+      <div className={`detailPane mistakeDetailSurface ${selecting ? "batchSelectionPane" : ""}`}>{detail ? <MistakeDetail fsrsActive={props.fsrsActive} key={detail.record.recordId} detail={detail} customCategories={props.customCategories} action={action} reloadDetail={reloadDetail} onRemoved={onRemoved} onReview={props.onReview} showLocateHint={props.showLocateHint} /> : <Empty title="选择一道错题" text="右侧将显示题目、答案、分类和定位操作。" />}</div>
     </MistakeLayout>
   </section>
 }
@@ -1524,12 +1571,19 @@ function QuestionPreparationWorkspace({ studySets, ocrEngine, includeHandwriting
       if (!doc?.body) throw new Error("题目卡片渲染窗口不可用")
       const html2canvas = await ensureHtml2Canvas()
       await doc.fonts?.ready
-      await Promise.all(Array.from(doc.images || []).map(image => image.complete ? Promise.resolve() : new Promise(resolve => {
-        const finish = () => resolve()
-        image.addEventListener("load", finish, { once: true })
-        image.addEventListener("error", finish, { once: true })
-        window.setTimeout(finish, 5000)
-      })))
+      await Promise.all(Array.from(doc.images || []).map(image => image.complete
+        ? image.naturalWidth ? Promise.resolve() : Promise.reject(new Error("题目图片读取失败，已停止截图上传"))
+        : new Promise((resolve, reject) => {
+          const timer = window.setTimeout(() => finish(false), 5000)
+          function finish(ok) {
+            window.clearTimeout(timer); image.removeEventListener("load", loaded); image.removeEventListener("error", broken)
+            if (ok) resolve(); else reject(new Error("题目图片读取失败，已停止截图上传"))
+          }
+          function loaded() { finish(true) }
+          function broken() { finish(false) }
+          image.addEventListener("load", loaded, { once: true })
+          image.addEventListener("error", broken, { once: true })
+        })))
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
       // 先逐个捕获手写内容元素，再隐藏后截整卡：OCR 截图永远不含手写。
       const handwritingDataUris = []
@@ -1544,7 +1598,7 @@ function QuestionPreparationWorkspace({ studySets, ocrEngine, includeHandwriting
         for (const node of handwritingNodes) {
           try {
             const nodeScale = Math.max(.75, Math.min(1.5, 6000 / Math.max(1, node.scrollHeight || 1)))
-            const nodeCanvas = await html2canvas(node, { backgroundColor: "#ffffff", logging: false, useCORS: true, scale: nodeScale })
+            const nodeCanvas = await html2canvas(node, { ...sceneCaptureOptions(doc), backgroundColor: "#ffffff", logging: false, useCORS: true, scale: nodeScale })
             handwritingDataUris.push(nodeCanvas.toDataURL("image/jpeg", .9))
           } catch {}
         }
@@ -1553,7 +1607,7 @@ function QuestionPreparationWorkspace({ studySets, ocrEngine, includeHandwriting
       const width = Math.max(640, doc.documentElement.scrollWidth, doc.body.scrollWidth)
       const height = Math.max(1, doc.documentElement.scrollHeight, doc.body.scrollHeight)
       const scale = Math.max(.5, Math.min(1.5, 12000 / height))
-      const canvas = await html2canvas(doc.body, { backgroundColor: "#ffffff", logging: false, useCORS: true, scale, width, height, windowWidth: width, windowHeight: height })
+      const canvas = await html2canvas(doc.body, { ...sceneCaptureOptions(doc), backgroundColor: "#ffffff", logging: false, useCORS: true, scale, width, height, windowWidth: width, windowHeight: height })
       const imageDataUri = canvas.toDataURL("image/jpeg", .9)
       setPreviewImage(imageDataUri)
       // 原生文字直读题不上传截图；图片题才提交整卡（截图内已隐藏手写）。
@@ -1579,7 +1633,10 @@ function QuestionPreparationWorkspace({ studySets, ocrEngine, includeHandwriting
     </div>
     <div className="aiPreparationMonitor">
       <div className="aiPreparationPreview">
-        {previewImage ? <img src={previewImage} alt={`当前上传的题目卡片：${current?.title || ""}`} /> : questionHtml ? <iframe title="待上传题目卡片" srcDoc={questionHtml} onLoad={renderAndSubmit} /> : <div><Icon name="image" /><span>{job?.status === "done" ? "题目准备已完成" : "当前上传的题目卡片会显示在这里"}</span></div>}
+        {previewImage ? <ResourceImage src={previewImage} alt={`当前上传的题目卡片：${current?.title || ""}`} /> : questionHtml ? <PreviewFrame title="待上传题目卡片" html={questionHtml} onLoad={renderAndSubmit} onError={reason => {
+          onStatus(reason.message)
+          if (job?.id && current?.recordId) void MNBridge.send("aiFailPreparationQuestion", { jobId: job.id, recordId: current.recordId, error: reason.message }).catch(() => {})
+        }} /> : <div><Icon name="image" /><span>{job?.status === "done" ? "题目准备已完成" : "当前上传的题目卡片会显示在这里"}</span></div>}
       </div>
       {job && <div className="aiPreparationProgress">
         <div className="aiPreparationProgressLabel"><span>单题进度 · {OCR_STAGE_LABELS[current?.stage] || (job.status === "done" ? "已完成" : "等待开始")}</span><b>{Math.round(itemProgress)}%</b></div>
@@ -1624,7 +1681,7 @@ function OCRResultBrowser({ items, onStatus }) {
       <small>{selected?.sourceNotebookTitle || "原学习集"} · {selected?.provider === "local" ? "直接读取文字" : selected?.provider === "bigmodel" ? "GLM-OCR" : "MinerU"}{selected?.includedMindMapHandwriting ? ` · 含 ${selected.boundHandwritingCount || 1} 项脑图手写` : ""}</small>
     </header>
     <div className="aiOcrCompare">
-      <figure><figcaption>发送给 OCR 的原题卡片</figcaption>{detail?.imageDataUri ? <img src={detail.imageDataUri} alt={`${selected?.sourceTitle || "题目"} OCR 原图`} /> : <div className="aiOcrMissingImage">{loading ? "正在读取图片…" : detail?.provider === "local" ? "此题直接读取文字，未上传图片" : "历史记录未保存原题图片，请重新 OCR 此题"}</div>}</figure>
+      <figure><figcaption>发送给 OCR 的原题卡片</figcaption>{detail?.imageDataUri ? <ResourceImage src={detail.imageDataUri} alt={`${selected?.sourceTitle || "题目"} OCR 原图`} /> : <div className="aiOcrMissingImage">{loading ? "正在读取图片…" : detail?.provider === "local" ? "此题直接读取文字，未上传图片" : "历史记录未保存原题图片，请重新 OCR 此题"}</div>}</figure>
       <section><h3>OCR 文本渲染</h3>{loading ? <div className="aiOcrRenderedEmpty">正在读取 OCR 文本…</div> : detail?.questionText ? <div className="markdownPreview aiOcrRenderedText" dangerouslySetInnerHTML={{ __html: renderMarkdownPreview(detail.questionText) }} /> : <div className="aiOcrRenderedEmpty">没有可显示的 OCR 文本</div>}</section>
     </div>
     {detail?.processedAt && <footer>识别时间：{new Date(detail.processedAt).toLocaleString()}</footer>}
@@ -1642,7 +1699,7 @@ function ExportHtmlPreview({ html }) {
   }
   return <div className="actualPreviewViewport">
     <div className="actualPreviewScaled" style={{ height: `${Math.round(frameHeight * EXPORT_PREVIEW_SCALE)}px` }}>
-      <iframe title="实际 PDF 导出预览" srcDoc={html} onLoad={onLoad}
+      <PreviewFrame title="实际 PDF 导出预览" html={html} onLoad={onLoad}
         style={{ width: `${EXPORT_PREVIEW_FRAME_WIDTH}px`, height: `${frameHeight}px`, transform: `scale(${EXPORT_PREVIEW_SCALE})`, transformOrigin: "0 0" }} />
     </div>
   </div>
@@ -1856,7 +1913,7 @@ function ReviewTimeline({ history, gapForIndex }) {
     </svg>
     {layout.positions.map(position => {
       const entry = history[position.index]
-      return <li key={`${entry.at}:${position.index}`} style={{ left: `${position.x}px`, top: `${position.y}px` }}><span className="previewTimelineBody"><b className={`level${entry.level}`}>{levelNames[entry.level] || levelNames[0]}</b></span><i className={`previewTimelineDot level${entry.level}`} /><small className="previewTimelineDate">{formatDate(entry.at)}</small></li>
+      return <li key={`${entry.at}:${position.index}`} style={{ left: `${position.x}px`, top: `${position.y}px` }}><span className="previewTimelineBody"><b className={`level${entry.level}`}>{entry.label || levelNames[entry.level] || levelNames[0]}</b></span><i className={`previewTimelineDot level${entry.level}`} /><small className="previewTimelineDate">{formatDate(entry.at)}</small></li>
     })}
   </ol>
 }
@@ -1868,19 +1925,37 @@ function ReviewAnswer({ detail, title }) {
   return <div className="dueAnswer">
     <div className="answerPreviewToolbar"><strong>答案预览</strong><div role="group" aria-label="答案缩放"><button type="button" aria-label="缩小答案" disabled={answerZoom <= 60} onClick={() => setAnswerZoom(value => Math.max(60, value - 10))}>−</button><button type="button" className="answerZoomReset" aria-label="恢复答案原始大小" onClick={() => setAnswerZoom(100)}>{answerZoom}%</button><button type="button" aria-label="放大答案" disabled={answerZoom >= 300} onClick={() => setAnswerZoom(value => Math.min(300, value + 10))}>＋</button></div></div>
     {detail.answers?.length > 1 && <select value={answerIndex} onChange={event => { setAnswerIndex(Number(event.target.value)); setAnswerZoom(100) }}>{detail.answers.map((candidate, index) => <option value={index} key={candidate.id}>{candidate.title} · {candidate.path}</option>)}</select>}
-    {answer ? <div className="reviewAnswerViewport"><CardPreview key={`${answer.id || answerIndex}`} title={`${title}答案`} html={answer.html} zoom={answerZoom} onZoom={setAnswerZoom} /></div> : <Empty title={detail.answerStatus === "unbound" ? "来源脑图尚未绑定答案" : "没有匹配到答案"} text="答案按原题脑图当前绑定实时查询。" />}
+    {answer ? <div className="reviewAnswerViewport"><CardPreview key={`${answer.id || answerIndex}`} title={`${title}答案`} noteId={answer.id} html={answer.html} zoom={answerZoom} onZoom={setAnswerZoom} /></div> : <Empty title={detail.answerStatus === "unbound" ? "来源脑图尚未绑定答案" : "没有匹配到答案"} text="答案按原题脑图当前绑定实时查询。" />}
   </div>
 }
 
 function retainReviewDetail(current, recordId, detail) {
   const next = { ...current }
   delete next[recordId]
+  // 取消索引处理后允许下一次打开答案重新查询，不能永久缓存空答案。
+  if (detail.answerStatus === "index-missing") return next
   next[recordId] = detail
   while (Object.keys(next).length > 6) delete next[Object.keys(next)[0]]
   return next
 }
 
-function DueReviewList({ records, reviewCurves, action, manualTodayIds, showLocateHint, focusRecordId, onRecordChanged, commentExpandCount = 2, toolbarHost }) {
+function DueReviewList({ adapter, records, reviewCurves, action, manualTodayIds, showLocateHint, focusRecordId, onRecordChanged, commentExpandCount = 2, toolbarHost, handwritingAvailable = false }) {
+  const names = adapter?.names || levelNames
+  const contentReader = useRef(adapter?.content)
+  contentReader.current = adapter?.content
+  const [handwritingBusy, setHandwritingBusy] = useState(false)
+  const handwritingPending = useRef(false)
+  async function openQueueHandwriting(recordId) {
+    if (!handwritingAvailable) {
+      showLocateHint?.("当前使用经典面板，整卡手写未启用。请先在设置 → 关于插件开启“场景面板与整卡手写”；需软件4.5.0及以上，并重新打开场景面板。")
+      return
+    }
+    if (handwritingPending.current) return
+    handwritingPending.current = true
+    setHandwritingBusy(true)
+    try { await action("openMistakeHandwriting", { recordId }, false) }
+    finally { handwritingPending.current = false; setHandwritingBusy(false) }
+  }
   const [answerDetail, setAnswerDetail] = useState(null)
   const [answerLoadingId, setAnswerLoadingId] = useState("")
   const [activeFilter, setActiveFilter] = useState("today")
@@ -1898,13 +1973,31 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, showLoca
   const [questionOpenById, setQuestionOpenById] = useState({})
   const [jumpHighlightedId, setJumpHighlightedId] = useState("")
   const detailLoadingRef = useRef(new Set())
-  const detailCache = useMemo(() => createReviewDetailCache(recordId => MNBridge.send("mistakeDetail", { recordId })), [])
-  const questionCache = useMemo(() => createReviewDetailCache(recordId => MNBridge.send("mistakeQuestion", { recordId })), [])
+  const annotationRevisions = useRef({})
+  const detailCache = useMemo(() => createReviewDetailCache(recordId => contentReader.current ? contentReader.current(recordId) : MNBridge.send("mistakeDetail", { recordId })), [])
+  const questionCache = useMemo(() => createReviewDetailCache(recordId => contentReader.current ? contentReader.current(recordId) : MNBridge.send("mistakeQuestion", { recordId })), [])
   const mountedRef = useRef(true)
   const questionOpenRef = useRef(questionOpenById)
   questionOpenRef.current = questionOpenById
   const reviewPageRef = useRef(null)
 
+  useEffect(() => {
+    const saved = event => {
+      const recordId = event.detail?.recordId
+      if (!recordId) return
+      annotationRevisions.current[recordId] = (annotationRevisions.current[recordId] || 0) + 1
+      detailCache.clear()
+      questionCache.clear()
+      const withoutSaved = current => { const next = { ...current }; delete next[recordId]; return next }
+      setDetailsById(withoutSaved)
+      setQuestionsById(withoutSaved)
+      setQuestionErrorsById(withoutSaved)
+      setAnswerDetail(current => current?.record?.recordId === recordId ? null : current)
+      setQuestionLoadRevision(current => current + 1)
+    }
+    window.addEventListener("cardlink:annotation-saved", saved)
+    return () => window.removeEventListener("cardlink:annotation-saved", saved)
+  }, [detailCache, questionCache])
 
   useEffect(() => () => { mountedRef.current = false }, [])
 
@@ -1926,7 +2019,7 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, showLoca
     setActiveFilter(statusOf(item))
     setLevelFilter("all")
     setCategoryFilter("all")
-  }, [focusRecordId])
+  }, [focusRecordId, records.length])
   useLayoutEffect(() => {
     const target = Array.from(reviewPageRef.current?.querySelectorAll("[data-review-id]") || []).find(node => node.dataset.reviewId === focusRecordId)
     if (!target) return undefined
@@ -1953,7 +2046,7 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, showLoca
     })
     const clear = window.setTimeout(() => setJumpHighlightedId(current => current === focusRecordId ? "" : current), 1800)
     return () => { cancelAnimationFrame(timer); cancelAnimationFrame(correction); clearTimeout(clear) }
-  }, [focusRecordId, activeFilter])
+  }, [focusRecordId, activeFilter, records.length])
   const manualTodaySet = new Set(manualTodayIds)
   const statusMatches = item => activeFilter === "today"
     ? statusOf(item) === "today" || (statusOf(item) === "overdue" && manualTodaySet.has(item.recordId))
@@ -1991,6 +2084,7 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, showLoca
 
   async function beginReviewMode() {
     if (!visibleRecords.length) return
+    if (adapter) return adapter.start(visibleRecords)
     await action("startReviewMode", {
       records: visibleRecords.map(item => ({
         recordId: item.recordId,
@@ -2036,7 +2130,9 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, showLoca
     for (const recordId of queue) {
       detailLoadingRef.current.add(recordId)
       const version = records.find(item => item.recordId === recordId)?.updatedAt || ""
+      const annotationRevision = annotationRevisions.current[recordId] || 0
       void questionCache.get(recordId, version).then(question => {
+        if ((annotationRevisions.current[recordId] || 0) !== annotationRevision) return
         if (mountedRef.current && question && questionOpenRef.current[recordId] === true) {
           // 请求协调器的复用缓存有界；当前实际展开的题目必须全部保留，
           // 否则展开超过 6 题时先完成的卡片会被淘汰并退回永久加载态。
@@ -2048,11 +2144,15 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, showLoca
           })
         }
       }).catch(error => {
+        if ((annotationRevisions.current[recordId] || 0) !== annotationRevision) return
         if (mountedRef.current && questionOpenRef.current[recordId] === true) setQuestionErrorsById(current => ({
           ...current,
           [recordId]: String(error?.message || error || "读取失败")
         }))
-      }).finally(() => { detailLoadingRef.current.delete(recordId) })
+      }).finally(() => {
+        detailLoadingRef.current.delete(recordId)
+        if (mountedRef.current && (annotationRevisions.current[recordId] || 0) !== annotationRevision) setQuestionLoadRevision(current => current + 1)
+      })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleSignature, openSignature, questionLoadRevision])
@@ -2065,13 +2165,14 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, showLoca
   }
 
   function nextDays(item, level) {
+    if (adapter) return item.preview?.[level]?.days ?? "—"
     const curve = reviewCurves?.[level] || defaultReviewCurves[level]
     const index = level === item.level ? Math.min(item.reviewCount + 1, curve.length - 1) : 0
     return Number(curve[index]) || defaultReviewCurves[level][0]
   }
 
   function endsReview(item, level) {
-    return level === 2 && item.level === 2
+    return !adapter && level === 2 && item.level === 2
   }
 
   async function toggleAnswer(recordId) {
@@ -2080,9 +2181,11 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, showLoca
       return
     }
     setAnswerLoadingId(recordId)
+    const annotationRevision = annotationRevisions.current[recordId] || 0
     try {
       const record = records.find(item => item.recordId === recordId)
       const detail = detailsById[recordId] || await detailCache.get(recordId, record?.updatedAt || "")
+      if ((annotationRevisions.current[recordId] || 0) !== annotationRevision) return
       if (detail) {
         setDetailsById(current => retainReviewDetail(current, recordId, detail))
         setAnswerDetail(detail)
@@ -2094,6 +2197,7 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, showLoca
   }
 
   async function complete(item, level) {
+    if (adapter) { const result = await adapter.review(item, level); if (result && answerDetail?.record?.recordId === item.recordId) setAnswerDetail(null); return }
     const result = await action("reviewMistake", { recordId: item.recordId, level })
     if (!result) return
     const completed = result.reviewCompleted === true
@@ -2107,7 +2211,7 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, showLoca
   }
 
   async function resume(item) {
-    const result = await action("resumeMistakeReview", { recordId: item.recordId })
+    const result = adapter ? await adapter.resume(item) : await action("resumeMistakeReview", { recordId: item.recordId })
     if (result) setFeedbackById(current => ({ ...current, [item.recordId]: `已恢复复习计划，下次复测时间为 ${formatDate(result.nextReviewAt)}。` }))
   }
 
@@ -2121,7 +2225,7 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, showLoca
   }
 
   async function addOverdue(count) {
-    const result = await action("addManualTodayOverdue", { count }, false)
+    const result = adapter ? adapter.addOverdue(count) : await action("addManualTodayOverdue", { count }, false)
     if (!result) return
     if (!result.addedCount) {
       setQueueNotice("逾期池已经清空。")
@@ -2132,19 +2236,20 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, showLoca
 
   const toolbar = <div className="settingsCapsule reviewToolbar">
       <nav aria-label="计划到期状态"><span className="settingsCapsuleSlider" aria-hidden="true" style={{ transform: `translateX(${["today", "overdue", "upcoming", "completed"].indexOf(activeFilter) * 100}%)` }} />{[
-      ["today", "今日到期"], ["overdue", "已逾期"], ["upcoming", "未到期"], ["completed", "已结束"]
+      ["today", "今日到期"], ["overdue", "已逾期"], ["upcoming", "未到期"], ["completed", adapter ? "已暂停" : "已结束"]
     ].map(([key, label]) => <button type="button" aria-pressed={activeFilter === key} className={activeFilter === key ? "active" : ""} key={key} onClick={() => setActiveFilter(key)}>{label}<b>{counts[key]}</b></button>)}</nav>
       <div className="reviewActionCapsule">
       <button type="button" className={`reviewFilterToggle ${filtersOpen ? "active" : ""}`} aria-label={filtersOpen ? "收起筛选" : "展开筛选"} aria-expanded={filtersOpen} aria-controls="reviewFilterPanel" onClick={() => setFiltersOpen(value => !value)}><Icon name="filter" /></button>
       <button type="button" className={`reviewMenuToggle ${menuOpen ? "active" : ""}`} aria-label={menuOpen ? "收起复习菜单" : "展开复习菜单"} aria-expanded={menuOpen} aria-controls="reviewSecondaryMenu" onClick={() => { setMenuOpen(value => !value); setFiltersOpen(false) }}><Icon name="menu" /></button>
       <div className="reviewQueueTools"><button type="button" disabled={!visibleRecords.length} onClick={toggleAllQuestions}><MorphIcon from="collapse" to="expand" active={!allQuestionsOpen} />{allQuestionsOpen ? "收起全部题目" : "展开全部题目"}</button><button type="button" className="startReviewMode" disabled={!visibleRecords.length} onClick={beginReviewMode}>复习模式</button><b>共 {visibleRecords.length} 道题</b></div>
-      <div id="reviewFilterPanel" className={`reviewFilterPanel ${filtersOpen ? "open" : ""}`} aria-hidden={!filtersOpen}><select aria-label="题目分类" tabIndex={filtersOpen ? 0 : -1} value={categoryFilter} onChange={event => setCategoryFilter(event.target.value)}><option value="all">全部分类</option>{categories.map(category => <option key={category}>{category}</option>)}</select><select aria-label="掌握等级" tabIndex={filtersOpen ? 0 : -1} value={levelFilter} onChange={event => setLevelFilter(event.target.value)}><option value="all">全部等级</option>{levelNames.map((name, level) => <option value={level} key={name}>{name}</option>)}</select></div>
+      <div id="reviewFilterPanel" className={`reviewFilterPanel ${filtersOpen ? "open" : ""}`} aria-hidden={!filtersOpen}><select aria-label="题目分类" tabIndex={filtersOpen ? 0 : -1} value={categoryFilter} onChange={event => setCategoryFilter(event.target.value)}><option value="all">全部分类</option>{categories.map(category => <option key={category}>{category}</option>)}</select><select aria-label={adapter ? "最近反馈" : "掌握等级"} tabIndex={filtersOpen ? 0 : -1} value={levelFilter} onChange={event => setLevelFilter(event.target.value)}><option value="all">{adapter ? "全部反馈" : "全部等级"}</option>{adapter && <option value="-1">尚无反馈</option>}{names.map((name, level) => <option value={level} key={name}>{name}</option>)}</select></div>
       <div id="reviewSecondaryMenu" className={`reviewSecondaryMenu ${menuOpen ? "open" : ""}`} aria-hidden={!menuOpen}>
-        <div className="reviewSecondaryActions"><select aria-label="题目分类" value={categoryFilter} onChange={event => setCategoryFilter(event.target.value)}><option value="all">全部分类</option>{categories.map(category => <option key={category}>{category}</option>)}</select><select aria-label="掌握等级" value={levelFilter} onChange={event => setLevelFilter(event.target.value)}><option value="all">全部等级</option>{levelNames.map((name, level) => <option value={level} key={name}>{name}</option>)}</select><button type="button" disabled={!visibleRecords.length} onClick={toggleAllQuestions}><MorphIcon from="collapse" to="expand" active={!allQuestionsOpen} />{allQuestionsOpen ? "收起全部" : "展开全部"}</button><button type="button" disabled={!visibleRecords.length} onClick={() => { setMenuOpen(false); void beginReviewMode() }}>复习模式</button></div>
+        <div className="reviewSecondaryActions"><select aria-label="题目分类" value={categoryFilter} onChange={event => setCategoryFilter(event.target.value)}><option value="all">全部分类</option>{categories.map(category => <option key={category}>{category}</option>)}</select><select aria-label={adapter ? "最近反馈" : "掌握等级"} value={levelFilter} onChange={event => setLevelFilter(event.target.value)}><option value="all">{adapter ? "全部反馈" : "全部等级"}</option>{adapter && <option value="-1">尚无反馈</option>}{names.map((name, level) => <option value={level} key={name}>{name}</option>)}</select><button type="button" disabled={!visibleRecords.length} onClick={toggleAllQuestions}><MorphIcon from="collapse" to="expand" active={!allQuestionsOpen} />{allQuestionsOpen ? "收起全部" : "展开全部"}</button><button type="button" disabled={!visibleRecords.length} onClick={() => { setMenuOpen(false); void beginReviewMode() }}>复习模式</button></div>
       </div></div></div>
-  return <section className={`reviewPage ${filtersOpen ? "reviewFiltersOpen" : ""} ${menuOpen ? "reviewMenuOpen" : ""}`} ref={reviewPageRef}>
+  return <section data-review-algorithm={adapter ? "fsrs" : undefined} className={`reviewPage ${filtersOpen ? "reviewFiltersOpen" : ""} ${menuOpen ? "reviewMenuOpen" : ""}`} ref={reviewPageRef}>
     {toolbarHost ? createPortal(toolbar, toolbarHost) : toolbar}
     {activeFilter === "today" && <div className="reviewOverdueTools"><span><strong>今日任务量不够？</strong> 从逾期池随机补充：</span>{[1, 3, 5].map(count => <button type="button" key={count} onClick={() => addOverdue(count)}>+{count} 题</button>)}</div>}
+    {adapter?.notice && <div className="reviewQueueNotice" role="status">{adapter.notice}</div>}
     {queueNotice && <div className="reviewQueueNotice" role="status">{queueNotice}</div>}
     <div className="reviewList">
     {!visibleRecords.length ? <Empty title="当前队列没有题目" text="可以切换其他复习状态或掌握等级查看。" icon={false} /> : visibleRecords.map(item => {
@@ -2158,15 +2263,15 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, showLoca
       const dueText = itemStatus === "today" ? "今天到期"
         : itemStatus === "overdue" ? `已逾期 ${Math.max(1, Math.ceil((startToday - new Date(item.nextReviewAt).getTime()) / 86400000))} 天`
           : reviewCountdown(item.nextReviewAt)
-      const schedule = completed ? "掌握 · 连续 2 次确认" : `第 ${item.reviewCount + 1} 次复测 · ${dueText}`
+      const schedule = completed ? (adapter ? "已暂停智能复习" : "掌握 · 连续 2 次确认") : `第 ${item.reviewCount + 1} 次复测 · ${dueText}`
       return <article data-review-id={item.recordId} tabIndex={-1} className={`dueReviewItem ${jumpHighlightedId === item.recordId ? "jumpHighlighted" : ""}`} key={item.recordId}>
         <div className="dueReviewSummary">
-          <span className={`level level${item.level}`}>{levelNames[item.level]}</span>
+          <span className={`level level${Math.min(2, item.level)}`} style={adapter && item.level < 0 ? { color: "#64748b", background: "#f1f5f9" } : undefined}>{names[item.level] || "待反馈"}</span>
           <span><strong>{item.sourceTitle}</strong><small>{item.categoryLabel}</small>{tags.length > 0 && <span className="reviewTags" aria-label="错题标签">{tags.map(tag => <em key={tag}>{tag}</em>)}</span>}</span>
           <span className="reviewCardTopActions"><small className={`reviewSchedule ${statusOf(item) === "overdue" ? "overdue" : ""}`}>{schedule}</small><button type="button" className="questionFoldButton" aria-label={questionOpen ? `收起 ${item.sourceTitle} 的题目预览` : `展开 ${item.sourceTitle} 的题目预览`} aria-expanded={questionOpen} onClick={() => toggleQuestion(item.recordId)}><MorphIcon from="collapse" to="expand" active={!questionOpen} /></button></span>
         </div>
         {feedbackById[item.recordId] && <div className="reviewCardFeedback" role="status">{feedbackById[item.recordId]}</div>}
-        {questionOpen && <section className="reviewQuestion" aria-label="完整原题"><span>完整原题</span>{questionDetail ? <CardPreview title={`${item.sourceTitle}完整原题`} html={questionDetail.questionHtml} initialAutoHeight defaultExpandedComments={commentExpandCount} /> : questionError ? <div className="reviewQuestionLoading reviewQuestionError">读取完整原题失败。<button type="button" onClick={() => retryQuestion(item.recordId)}>重试</button></div> : <div className="reviewQuestionLoading">正在读取完整原题…</div>}</section>}
+        {questionOpen && <section className="reviewQuestion" aria-label="完整原题"><span>完整原题</span>{questionDetail ? <CardPreview title={`${item.sourceTitle}完整原题`} noteId={questionDetail.record.sourceNoteId} html={questionDetail.questionHtml} initialAutoHeight defaultExpandedComments={commentExpandCount} /> : questionError ? <div className="reviewQuestionLoading reviewQuestionError">读取完整原题失败。<button type="button" onClick={() => retryQuestion(item.recordId)}>重试</button></div> : <div className="reviewQuestionLoading">正在读取完整原题…</div>}</section>}
         <div className="dueReviewActions">
           <LocateButton className="reviewLocateAction" locateKey={`mistake:${item.recordId}`} onWaiting={() => showLocateHint("正在切换学习集并定位原题，请稍候…")} onLocate={async () => {
             const located = await action("openSource", { recordId: item.recordId }, false)
@@ -2174,11 +2279,13 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, showLoca
             return located
           }}><span className="reviewActionText reviewLocateText">定位原题</span></LocateButton>
           <button className={`reviewAnswerAction ${expanded ? "active" : ""}`} disabled={answerLoadingId === item.recordId} onClick={() => toggleAnswer(item.recordId)}><MorphIcon from="eye" to="eyeOff" active={expanded} /><span className="reviewActionText reviewAnswerText">{answerLoadingId === item.recordId ? "读取答案…" : expanded ? "收起答案" : "查看答案"}</span></button>
-          <button className={`reviewHistoryAction ${historyOpen[item.recordId] ? "active" : ""}`} onClick={() => setHistoryOpen(current => ({ ...current, [item.recordId]: !current[item.recordId] }))}><MorphIcon from="history" to="collapse" active={!!historyOpen[item.recordId]} /><span className="reviewActionText reviewHistoryText">{historyOpen[item.recordId] ? "收起复测历史" : `复测历史 (${item.history?.length || 0})`}</span></button>
-          {completed ? <><button onClick={() => resume(item)}>恢复复习计划</button><strong className="reviewEnded">✓ 已结束</strong></> : <div className="reviewResults" role="group" aria-label="本次复测结果">{levelNames.map((name, level) => <button data-level={level} key={name} onClick={() => complete(item, level)}>{name}<small>{endsReview(item, level) ? "结束" : `+${nextDays(item, level)} 天`}</small></button>)}</div>}
+          <button className={`reviewHistoryAction ${historyOpen[item.recordId] ? "active" : ""}`} onClick={() => setHistoryOpen(current => ({ ...current, [item.recordId]: !current[item.recordId] }))}><MorphIcon from="history" to="collapse" active={!!historyOpen[item.recordId]} /><span className="reviewActionText reviewHistoryText">{historyOpen[item.recordId] ? "收起复测历史" : `复测历史 (${item.historyCount ?? item.history?.length ?? 0})`}</span></button>
+          <button type="button" className="reviewHandwriteAction" aria-label={`书写 ${item.sourceTitle}`} title={handwritingAvailable ? "直接打开该题的整卡批注面板" : "手写未启用，点击查看原因"} aria-disabled={!handwritingAvailable || handwritingBusy} disabled={handwritingBusy} onClick={() => openQueueHandwriting(item.recordId)}><Icon name="handwrite" /></button>
+          {completed ? <><button onClick={() => resume(item)}>恢复复习计划</button><strong className="reviewEnded">✓ {adapter ? "已暂停" : "已结束"}</strong></> : <div className="reviewResults" role="group" aria-label="本次复测结果">{names.map((name, level) => <button data-level={level} key={name} disabled={adapter?.busy} onClick={() => complete(item, level)}>{name}<small>{endsReview(item, level) ? "结束" : `+${nextDays(item, level)} 天`}</small></button>)}</div>}
         </div>
+        {adapter?.editor(item)}
         {expanded && <ReviewAnswer key={item.recordId} detail={answerDetail} title={item.sourceTitle} />}
-        {historyOpen[item.recordId] && <div className="reviewHistory"><strong>复测历史</strong>{item.history?.length ? <ReviewTimeline history={item.history} gapForIndex={historyGap} /> : <small>暂无复测记录</small>}</div>}
+        {historyOpen[item.recordId] && <div className="reviewHistory"><strong>复测历史</strong>{adapter ? adapter.history(item, history => <ReviewTimeline history={history} gapForIndex={historyGap} />) : item.history?.length ? <ReviewTimeline history={item.history} gapForIndex={historyGap} /> : <small>暂无复测记录</small>}</div>}
       </article>
     })}
     </div>
@@ -2186,8 +2293,25 @@ function DueReviewList({ records, reviewCurves, action, manualTodayIds, showLoca
 }
 
 
-function MistakeDetail({ detail, customCategories, action, reloadDetail, onRemoved, showLocateHint, onReview }) {
+function MistakeDetail({ fsrsActive = false, detail, customCategories, action, reloadDetail, onRemoved, showLocateHint, onReview }) {
   const [view, setView] = useState("question")
+  const [answerResult, setAnswerResult] = useState(null)
+  const [answerRetry, setAnswerRetry] = useState(0)
+  const deferredAnswers = detail.answerStatus === "deferred"
+  const currentAnswerResult = answerResult?.source === detail ? answerResult : null
+  const answerDetail = deferredAnswers ? currentAnswerResult?.data : detail
+  const answerError = currentAnswerResult?.error
+  useEffect(() => {
+    if (view !== "answer" || !deferredAnswers || currentAnswerResult?.data) return undefined
+    let cancelled = false
+    setAnswerResult(null)
+    MNBridge.send("mistakeDetail", { recordId: detail.record.recordId, content: "answers" }).then(data => {
+      if (!cancelled) setAnswerResult({ source: detail, data })
+    }).catch(error => {
+      if (!cancelled) setAnswerResult({ source: detail, error: error.message || String(error) })
+    })
+    return () => { cancelled = true }
+  }, [detail, view, answerRetry])
   const [answerIndex, setAnswerIndex] = useState(0)
   const [tags, setTags] = useState([])
   const [tagPickerOpen, setTagPickerOpen] = useState(false)
@@ -2196,6 +2320,8 @@ function MistakeDetail({ detail, customCategories, action, reloadDetail, onRemov
   const [deleteTagTarget, setDeleteTagTarget] = useState("")
   const [levelNotice, setLevelNotice] = useState("")
   const [favoriteBusy, setFavoriteBusy] = useState(false)
+  const [handwritingBusy, setHandwritingBusy] = useState(false)
+  const handwritingPending = useRef(false)
   const [tagsCrowded, setTagsCrowded] = useState(false)
   const bar = useDockableBar()
   const tagPickerRef = useRef(null)
@@ -2204,6 +2330,11 @@ function MistakeDetail({ detail, customCategories, action, reloadDetail, onRemov
   const tagMenuPos = useAnchoredPopover(tagPickerOpen, tagTriggerRef, 280, "end")
   useScrollDismiss(tagPickerOpen, () => setTagPickerOpen(false), tagMenuRef)
   const detailTagSignature = manualTagsOf(detail.record).join("\u001f")
+  useEffect(() => {
+    const saved = event => { if (event.detail?.recordId === detail.record.recordId) reloadDetail() }
+    window.addEventListener("cardlink:annotation-saved", saved)
+    return () => window.removeEventListener("cardlink:annotation-saved", saved)
+  }, [detail.record.recordId, reloadDetail])
   useEffect(() => {
     setTags(manualTagsOf(detail.record))
   }, [detail.record.recordId, detailTagSignature])
@@ -2237,7 +2368,7 @@ function MistakeDetail({ detail, customCategories, action, reloadDetail, onRemov
     document.addEventListener("pointerdown", close, true)
     return () => document.removeEventListener("pointerdown", close, true)
   }, [tagPickerOpen])
-  const answer = detail.answers?.[Math.min(answerIndex, Math.max(0, detail.answers.length - 1))]
+  const answer = answerDetail?.answers?.[Math.min(answerIndex, Math.max(0, answerDetail.answers.length - 1))]
   const reviewStatus = detail.record.reviewCompleted ? "已结束" : reviewCountdown(detail.record.nextReviewAt).replace(/^下次复习/, "").replace(/剩余\s*/, "").replace(/\s+天/, "天").replace(/今天到期|今日到期/, "已到期")
   // 剩余天数芯片按到期状态取对应的三档色系（与等级控件同一色盘）
   const dueTone = detail.record.reviewCompleted ? "isCompleted"
@@ -2292,18 +2423,29 @@ function MistakeDetail({ detail, customCategories, action, reloadDetail, onRemov
     const result = await action("removeMistake", { recordId: detail.record.recordId })
     if (result?.removed) onRemoved()
   }
+  async function openHandwriting() {
+    if (!detail.handwritingAvailable) {
+      showLocateHint?.("当前使用经典面板，整卡手写未启用。请先在设置 → 关于插件开启“场景面板与整卡手写”；需软件4.5.0及以上，并重新打开场景面板。")
+      return
+    }
+    if (handwritingPending.current) return
+    handwritingPending.current = true
+    setHandwritingBusy(true)
+    try { await action("openMistakeHandwriting", { recordId: detail.record.recordId }, false) }
+    finally { handwritingPending.current = false; setHandwritingBusy(false) }
+  }
   return <div className="detail">
     <div className="detailHeader"><div className={`detailHeadingBlock ${tagsCrowded ? "tagsCrowded" : ""}`}>
       <div className="preview-detail-source-row"><small className="preview-studyset-name">{detail.record.sourceNotebookTitle}</small><span className="preview-detail-source-path">{(detail.record.sourcePathTitles || []).join(" › ") || "脑图根节点"}</span><span className="detailAddedDate" title={`添加于 ${formatDate(detail.record.createdAt)}`}>{formatDate(detail.record.createdAt)}</span></div>
       <div className="preview-detail-title-row"><h2>{detail.record.sourceTitle}</h2>
         {/* 大胶囊：等级 | 剩余天数，竖线分隔、两侧各按各的状态上色；透明 select 覆盖等级半区用于改等级 */}
         <div className="detailStatusCard">
-          <span className={`detailLevelChip level level${detail.record.level}`} title="点击调整等级">
+          <span className={`detailLevelChip level level${detail.record.level}`} title={fsrsActive ? "固定曲线历史等级（只读）；FSRS 反馈见待复习" : "点击调整等级"}>
             {levelNames[detail.record.level]}
-            <select className={`previewLevelSelect preview-level-${detail.record.level}`} value={detail.record.level} onChange={updateLevel} aria-label="修改错题等级">{levelNames.map((name, index) => <option key={name} value={index}>{name}</option>)}</select>
+            <select className={`previewLevelSelect preview-level-${detail.record.level}`} disabled={fsrsActive} value={detail.record.level} onChange={updateLevel} aria-label="修改错题等级">{levelNames.map((name, index) => <option key={name} value={index}>{name}</option>)}</select>
           </span>
           <span className="detailStatusDivider" aria-hidden="true" />
-          <button type="button" className={`detailDueChip ${dueTone}`} onClick={() => onReview?.(detail.record.recordId)} title="查看该题复习记录">{reviewStatus}</button>
+          <button type="button" className={`detailDueChip ${dueTone}`} onClick={() => onReview?.(detail.record.recordId)} title={fsrsActive ? "打开该题的 FSRS 复习记录" : "查看该题复习记录"}>{fsrsActive ? "FSRS 复习" : reviewStatus}</button>
         </div>
     <div ref={tagPickerRef} className={`detailTagPicker detailTagBar ${tagPickerOpen ? "open" : ""}`}>
       <button ref={tagTriggerRef} type="button" className="detailTagBarTrigger" aria-label="编辑自定义标签" onClick={() => setTagPickerOpen(value => !value)} aria-expanded={tagPickerOpen} title={tags.length ? tags.map(tag => `#${tag}`).join(" ") : "添加自定义标签"}>
@@ -2316,14 +2458,15 @@ function MistakeDetail({ detail, customCategories, action, reloadDetail, onRemov
     </div>
     {levelNotice && <div className="levelChangeNotice" role="status" aria-live="polite">{levelNotice}</div>}
     <div className="detailStage" ref={bar.stageRef}>
-      <div className="cardFrame">{view === "question" ? <CardPreview key={`${detail.record.recordId}:question`} title="错题原题" html={detail.questionHtml} onInteract={() => setTagPickerOpen(false)} /> : answer ? <CardPreview key={`${detail.record.recordId}:answer:${answer.id || answerIndex}`} title="错题答案" html={answer.html} onInteract={() => setTagPickerOpen(false)} /> : <Empty title={detail.answerStatus === "unbound" ? "尚未绑定答案脑图" : detail.answerStatus === "index-missing" ? "答案索引尚未建立" : "没有匹配答案"} text="可从经典菜单绑定答案脑图或刷新答案索引。" />}</div>
+      <div className="cardFrame">{view === "question" ? <CardPreview key={`${detail.record.recordId}:question`} title="错题原题" noteId={detail.record.sourceNoteId} html={detail.questionHtml} onInteract={() => setTagPickerOpen(false)} /> : deferredAnswers && !answerDetail ? <div role={answerError ? "alert" : "status"} className="empty"><p>{answerError || "正在读取答案…"}</p>{answerError && <button type="button" onClick={() => setAnswerRetry(value => value + 1)}>重试</button>}</div> : answer ? <CardPreview key={`${detail.record.recordId}:answer:${answer.id || answerIndex}`} title="错题答案" noteId={answer.id} html={answer.html} onInteract={() => setTagPickerOpen(false)} /> : answerDetail?.answerStatus === "index-missing" ? <div className="empty"><p>答案索引暂不可用</p><button type="button" onClick={() => { if (deferredAnswers) { setAnswerResult(null); setAnswerRetry(value => value + 1) } else reloadDetail() }}>处理答案索引</button></div> : <Empty title={answerDetail?.answerStatus === "unbound" ? "尚未绑定答案脑图" : "没有匹配答案"} text="可从经典菜单绑定答案脑图或刷新答案索引。" />}</div>
       {/* 悬浮操作条：停靠预览窗口边缘，可拖动吸附，横竖排布随边切换 */}
       <div ref={bar.controlRef} className={`detailDock ${bar.collapsed ? "isCollapsed" : ""} ${bar.dragging ? "dragging" : ""}`} style={bar.style} {...bar.handlers}>
       <div className={`detailActionBar ${bar.orientation}`} aria-hidden={bar.collapsed} inert={bar.collapsed}>
         <button aria-label="题目" className={view === "question" ? "active" : ""} onClick={() => { setView("question"); setTagPickerOpen(false) }}><DetailMorphIcon icon={FileQuestion} active={view === "question"} /><span className="barText" data-dock-label="question" data-hidden={bar.hiddenLabels.includes("question") || undefined}>题目</span></button>
-        <button aria-label="答案" className={view === "answer" ? "active" : ""} onClick={() => { setView("answer"); setTagPickerOpen(false) }}><DetailMorphIcon icon={FileCheck} active={view === "answer"} /><span className="barText" data-dock-label="answer" data-hidden={bar.hiddenLabels.includes("answer") || undefined}>答案{detail.answers?.length > 1 ? ` (${detail.answers.length})` : ""}</span></button>
-        {view === "answer" && detail.answers?.length > 1 && <label className="answerVariantControl"><span aria-hidden="true">{answerIndex + 1}</span><select aria-label="选择答案候选" className="answerVariantSelect" value={answerIndex} onChange={event => setAnswerIndex(Number(event.target.value))}>{detail.answers.map((item, index) => <option key={item.id} value={index}>{item.title} · {item.path}</option>)}</select></label>}
+        <button aria-label="答案" className={view === "answer" ? "active" : ""} onClick={() => { setView("answer"); setTagPickerOpen(false) }}><DetailMorphIcon icon={FileCheck} active={view === "answer"} /><span className="barText" data-dock-label="answer" data-hidden={bar.hiddenLabels.includes("answer") || undefined}>答案{answerDetail?.answers?.length > 1 ? ` (${answerDetail?.answers.length})` : ""}</span></button>
+        {view === "answer" && answerDetail?.answers?.length > 1 && <label className="answerVariantControl"><span aria-hidden="true">{answerIndex + 1}</span><select aria-label="选择答案候选" className="answerVariantSelect" value={answerIndex} onChange={event => setAnswerIndex(Number(event.target.value))}>{answerDetail?.answers.map((item, index) => <option key={item.id} value={index}>{item.title} · {item.path}</option>)}</select></label>}
         <FavoriteButton favorite={detail.record.favorite === true} busy={favoriteBusy} onToggle={toggleFavorite} />
+        <button type="button" aria-label="手写作答" title={detail.handwritingAvailable ? "直接打开该题的整卡批注面板" : "手写未启用，点击查看原因"} aria-disabled={!detail.handwritingAvailable || handwritingBusy} disabled={handwritingBusy} onClick={openHandwriting}><Icon name="handwrite" /><span className="barText" data-dock-label="handwrite" data-hidden={bar.hiddenLabels.includes("handwrite") || undefined}>手写</span></button>
         {view === "question" ? <LocateButton locateKey={`mistake:${detail.record.recordId}`} className="preview-locate-button" onWaiting={() => showLocateHint("正在切换学习集并定位原题，请稍候…")} onLocate={async () => {
               const located = await action("openSource", { recordId: detail.record.recordId }, false)
               if (located?.locateHint) showLocateHint(located.locateHint)
@@ -2516,6 +2659,7 @@ function AnswerBindingRow({ row, action }) {
         <button type="button" className={`danger ${removeArmed ? "confirming" : ""}`} aria-label={removeArmed ? "再次点击删除绑定" : "删除绑定"} title={removeArmed ? "再次点击删除绑定" : "删除绑定"} disabled={removing} onClick={remove}><DetailMorphIcon icon={Trash2} target={Check} active={removeArmed} /></button>
       </span>
     </div>
+    {(!designated || row.designatedAnswer === "subcard") && !row.questionColors.length && <p className="answerBindingColorHint">子卡片答案匹配需要先绑定题目卡片颜色。<button type="button" onClick={() => { setFilterOpen(true); setAddingColor(true) }}>绑定题目颜色</button></p>}
     {filterOpen && <div className="answerBindingColors"><header><strong>题目卡片颜色</strong>{addingColor && <span>请在当前脑图选中一张题目卡片，再点击对勾。</span>}</header>
       <div>{row.questionColors.map(color => <button key={color} type="button" className="selected" aria-label={`删除颜色 ${color + 1}`} title={`删除颜色 ${color + 1}`} disabled={colorSaving} onClick={() => removeColor(color)}><span className="answerBindingColorSwatch" style={{ backgroundColor: cardColorSwatches[color] ?? "#d8dee8" }} aria-hidden="true" /><span>颜色 {color + 1}</span><Icon name="close" /></button>)}
         <button type="button" className="answerBindingAddColor" aria-label={addingColor ? "确认添加所选卡片颜色" : "添加颜色"} title={addingColor ? "确认添加" : "添加颜色"} onClick={addingColor ? confirmAddColor : () => setAddingColor(true)} disabled={colorSaving}><DetailMorphIcon icon={Plus} target={Check} active={addingColor} /></button>
@@ -2950,7 +3094,7 @@ function MistakeExport({ allRecords, action, onBack, initialRecordIds = [] }) {
         {result && <p className="exportResult" role="status">{result}</p>}
       </div>
 
-      <aside className={`exportPreview ${actualPreview ? "hasPreview" : ""}`}><header><span><strong>导出预览</strong><small>{format === "pdf" ? `A4 · ${pageLabel} · ${include.answer ? answerLabel : "不含答案"}` : "Markdown 文档"}</small></span><b>{actualPreview?.pages ? `${actualPreview.pages} 页` : `${selected.length} 道`}</b></header>{actualPreview?.previewPages?.length ? <div className="actualPreviewViewport actualPreviewPages">{actualPreview.previewPages.map((page, index) => <figure key={`${page}:${index}`}><img src={page} alt={`PDF 第 ${index + 1} 页`} /><figcaption>第 {index + 1} 页</figcaption></figure>)}</div> : actualPreview?.html ? <ExportHtmlPreview html={actualPreview.html} /> : actualPreview?.pdfUrl ? <div className="actualPreviewViewport"><iframe title="实际 PDF 导出预览" src={actualPreview.pdfUrl} /></div> : actualPreview?.markdown ? <div className="actualMarkdownPreview markdownPreview" dangerouslySetInnerHTML={{ __html: renderMarkdownPreview(actualPreview.markdown) }} /> : <div className="actualPreviewEmpty"><span className="exportPreviewGlyph"><Icon name="eye" /></span><strong>预览最终文件</strong><span>快速预览只生成前 3 道题，适合调整布局；完整文件会在导出时生成。</span><button type="button" disabled={!canSubmit || previewLoading || taskActive || exportLoading} onClick={() => runPreview(false)}>{previewLoading ? "正在生成预览…" : "生成快速预览"}</button></div>}</aside>
+      <aside className={`exportPreview ${actualPreview ? "hasPreview" : ""}`}><header><span><strong>导出预览</strong><small>{format === "pdf" ? `A4 · ${pageLabel} · ${include.answer ? answerLabel : "不含答案"}` : "Markdown 文档"}</small></span><b>{actualPreview?.pages ? `${actualPreview.pages} 页` : `${selected.length} 道`}</b></header>{actualPreview?.previewPages?.length ? <div className="actualPreviewViewport actualPreviewPages">{actualPreview.previewPages.map((page, index) => <figure key={`${page}:${index}`}><ResourceImage src={page} alt={`PDF 第 ${index + 1} 页`} /><figcaption>第 {index + 1} 页</figcaption></figure>)}</div> : actualPreview?.html ? <ExportHtmlPreview html={actualPreview.html} /> : actualPreview?.pdfUrl ? <div className="actualPreviewViewport"><iframe title="实际 PDF 导出预览" src={actualPreview.pdfUrl} /></div> : actualPreview?.markdown ? <div className="actualMarkdownPreview markdownPreview" dangerouslySetInnerHTML={{ __html: renderMarkdownPreview(actualPreview.markdown) }} /> : <div className="actualPreviewEmpty"><span className="exportPreviewGlyph"><Icon name="eye" /></span><strong>预览最终文件</strong><span>快速预览只生成前 3 道题，适合调整布局；完整文件会在导出时生成。</span><button type="button" disabled={!canSubmit || previewLoading || taskActive || exportLoading} onClick={() => runPreview(false)}>{previewLoading ? "正在生成预览…" : "生成快速预览"}</button></div>}</aside>
     </div>
   </section>
 }

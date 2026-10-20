@@ -33,7 +33,7 @@ export function useDockableBar() {
       let fullWidth = count * 32 + (count - 1) * 3 + 12 + Object.values(widths).reduce((sum, value) => sum + value, 0)
       const nextHidden = []
       if (orientation === "vertical") nextHidden.push(...Object.keys(widths))
-      else for (const key of ["delete", "locate", "answer", "question"]) {
+      else for (const key of ["delete", "locate", "handwrite", "answer", "question"]) {
         if (fullWidth <= stage.clientWidth - 28) break
         if (!widths[key]) continue
         nextHidden.push(key)

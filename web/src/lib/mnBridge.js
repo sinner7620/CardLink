@@ -1,9 +1,19 @@
 import { previewSend } from "./previewBridge"
+import { createSceneTransport } from "./sceneTransport"
 
 const BRIDGE_URL = "mnaddon://bridge?payload="
 // A pending request that gets no native reply must fail eventually, otherwise
 // the panel busy state spins forever and __MNBridgePending leaks.
 const REQUEST_TIMEOUT_MS = 30000
+
+// 这些请求可能等待用户阅读索引信息并进入换绑选择，沿用有界超时但预留交互时间。
+function requestTimeoutMs(command, payload, defaultMs) {
+  if (command === "checkUpdates") return 5 * 60 * 1000
+  const indexDialog = ["answer", "findCurrentAnswer", "markMistake", "cardMenuCommand"].includes(command) ||
+    (command === "mistakeDetail" && payload?.content !== "question")
+  if (indexDialog) return 5 * 60 * 1000
+  return command === "openMistakeHandwriting" ? 60000 : defaultMs
+}
 // UIWebView silently drops oversized custom-scheme navigations. Parts are
 // sized so even worst-case percent-encoded CJK stays far below the practical
 // URL length limits; the native side reassembles before dispatching.
@@ -12,6 +22,20 @@ const MAX_SINGLE_REQUEST_ENCODED = 24000
 
 const isBrowserPreview = window.__MN_FULL_UI_PREVIEW__ === true ||
   ["127.0.0.1", "localhost", "::1"].includes(window.location.hostname)
+
+let sceneTransport
+function scene() {
+  if (!window.__MN_SCENE_ENABLED__ || !window.mn) return null
+  if (!sceneTransport) {
+    const fetchApi = async (path, options = {}) => {
+      const opts = { ...options }
+      if (opts.body) { opts.headers = { "Content-Type": "application/json" }; opts.body = JSON.stringify(opts.body) }
+      return (await fetch("/bridge/v1" + path, opts)).json()
+    }
+    sceneTransport = createSceneTransport(window.mn, window, fetch, window.CardLinkHostPolicy, window.createCardLinkAnnotationClient({ api: fetchApi }), "scene-", (command, payload) => requestTimeoutMs(command, payload, 60000))
+  }
+  return sceneTransport
+}
 
 function pendingMap() {
   window.__MNBridgePending = window.__MNBridgePending || {}
@@ -88,6 +112,10 @@ function dispatchRequest(requestId, command, payload) {
 // 前端诊断日志通道：经桥写入原生侧运行日志环形缓冲（失败静默，绝不影响主流程）
 function logNative(event, detail) {
   if (isBrowserPreview || event === "bridge.client.log") return
+  if (window.__MN_SCENE_ENABLED__ && window.mn) {
+    scene().send("runtimeLog", { event, detail: String(detail || "").slice(0, 400) }).catch(() => {})
+    return
+  }
   try {
     const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`
     // 诊断请求丢失不能永久占住 busy 状态，也不再为诊断超时递归写诊断。
@@ -99,15 +127,19 @@ function logNative(event, detail) {
 }
 
 function send(command, payload = null) {
+  const currentScene = scene()
+  if (currentScene) return currentScene.send(command, payload)
   if (isBrowserPreview) return previewSend(command, payload)
   receive()
   const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  // Host rendering for the card editor can itself take 30 seconds.
+  const timeoutMs = requestTimeoutMs(command, payload, REQUEST_TIMEOUT_MS)
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       delete pendingMap()[requestId]
-      logNative("bridge.client.timeout", `cmd=${command} waitMs=${REQUEST_TIMEOUT_MS}`)
-      reject(new Error("面板请求超时，请重试或缩小操作范围"))
-    }, REQUEST_TIMEOUT_MS)
+      logNative("bridge.client.timeout", `cmd=${command} waitMs=${timeoutMs}`)
+      reject(new Error(command === "openMistakeHandwriting" ? "书写请求超时，请先检查是否已有书写窗口" : "面板请求超时，请重试或缩小操作范围"))
+    }, timeoutMs)
     pendingMap()[requestId] = {
       resolve: value => {
         clearTimeout(timer)
@@ -125,7 +157,7 @@ function send(command, payload = null) {
 }
 
 export function isBridgeBusy() {
-  return Object.keys(pendingMap()).length > 0
+  return !!sceneTransport?.busy() || Object.keys(pendingMap()).length > 0
 }
 
 export default { send }

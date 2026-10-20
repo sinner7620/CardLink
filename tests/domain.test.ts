@@ -60,6 +60,26 @@ import { readSafeNote } from "../src/safe-note"
 import { describeError, presentError } from "../src/error-messages"
 import { CardLinkError } from "../src/errors"
 import { renderCardHtml } from "../src/card-html"
+
+test("评论中的 Markdown 标题保留正文，仅隐藏纯标签评论", () => {
+  const note = { comments: [
+    { type: "TextNote", text: "# 个人详解\n稳定、因果、非线性、时变。" },
+    { type: "TextNote", text: "## 二级标题\n补充说明" },
+    { type: "TextNote", text: "#重点 #复习" },
+    { type: "TextNote", text: "#重点\n这行仍是正文" },
+    { type: "HtmlNote", text: "# HTML 内容", html: "<p># HTML 内容</p>" }
+  ] }
+  const html = renderCardHtml(note, "问题", () => undefined, () => undefined)
+  assert.match(html, /<h1>个人详解<\/h1>/)
+  assert.match(html, /稳定、因果、非线性、时变/)
+  assert.match(html, /<h2>二级标题<\/h2>/)
+  assert.match(html, /这行仍是正文/)
+  assert.match(html, /<p># HTML 内容<\/p>/)
+  assert.doesNotMatch(html, /#复习/)
+  const safe = readSafeNote(note, () => undefined)
+  assert.deepEqual(safe.tags, ["重点", "复习"])
+  assert.equal(safe.comments.length, 4)
+})
 import { compareVersions } from "../src/version"
 import { freePositionFrame, isFrameFullyOutside } from "../src/answer-card-layout"
 import { answerControlBarLayout } from "../src/window-controls"
@@ -879,7 +899,7 @@ test("索引快照存 cachePath 文件并带旧存储迁移", () => {
 
 
 test("describeError 优先按稳定错误码呈现，并为未码化错误保留正则兼容层", () => {
-  assert.equal(describeError(new CardLinkError("indexNotReady")), "答案索引尚未建立，请在插件菜单点击“刷新答案索引”")
+  assert.equal(describeError(new CardLinkError("indexNotReady")), "答案索引尚未建立或暂时无法读取")
   assert.equal(
     describeError(new CardLinkError("mistakeTagWriteFailed", { action: "复习" })),
     "复习失败：未能写入原题标签，请打开原题所在学习集后重试"

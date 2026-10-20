@@ -26,7 +26,7 @@ export function wireFramePinchZoom(target: any, options: any): () => void {
   }
 
   listen("touchstart", (event: any) => {
-    if (event.touches.length !== 2) return
+    if (gestureActive || event.touches.length !== 2) return
     const point = reanchor(event.touches)
     if (options.onPinchStart) options.onPinchStart(point)
   }, { passive: true })
@@ -49,6 +49,7 @@ export function wireFramePinchZoom(target: any, options: any): () => void {
   }, { passive: false })
 
   listen("touchend", (event: any) => {
+    if (gestureActive) return
     if (event.touches.length === 2) reanchor(event.touches)
     else if (event.touches.length < 2) {
       if (startDistance) options.onPinchEnd?.()
@@ -63,17 +64,24 @@ export function wireFramePinchZoom(target: any, options: any): () => void {
       y: Number(event.clientY || (options.clientHeight ? options.clientHeight() : 0))
     })
     listen("gesturestart", (event: any) => {
+      event.preventDefault()
+      // 一次手势由最先启动的输入管线持有；Safari 的另一套事件只阻止默认行为。
+      // 不能在已经 touch 缩放后重设基准，再乘一次累计 gesture.scale。
+      if (startDistance || gestureActive) return
       gestureActive = true
       startScale = getScale()
       startDistance = 0
       if (options.onGestureStart) options.onGestureStart(gesturePoint(event))
-      event.preventDefault()
     }, { passive: false })
     listen("gesturechange", (event: any) => {
       event.preventDefault()
+      if (!gestureActive) return
       applyScale(startScale * Number(event.scale || 1), gesturePoint(event))
     }, { passive: false })
-    listen("gestureend", () => { gestureActive = false; options.onPinchEnd?.() }, { passive: true })
+    listen("gestureend", () => {
+      if (!gestureActive) return
+      gestureActive = false; options.onPinchEnd?.()
+    }, { passive: true })
   }
   return () => cleanups.forEach(cleanup => cleanup())
 }

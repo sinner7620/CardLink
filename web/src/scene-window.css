@@ -1,0 +1,37 @@
+.sceneSizePopover { position: fixed; right: 16px; bottom: 60px; z-index: 245; padding: 0; width: min(256px, calc(100vw - 32px)); overflow: hidden; box-sizing: border-box; color: #293343; border: 1px solid #dce2eb; border-radius: 12px; box-shadow: 0 5px 24px #0002; font-size: 12px; }
+.sceneSizeFormSurface { position: relative; background-color: #edf1f6; }
+.sceneSizeBackdrop { position: absolute; inset: 0; display: block; width: 100%; height: 100%; pointer-events: none; }
+.sceneSizeForm { position: relative; display: grid; gap: 8px; padding: 12px; max-height: calc(100vh - 116px); overflow: auto; box-sizing: border-box; overscroll-behavior: contain; }
+.sceneSizeForm button { padding: 3px 8px; min-width: 0; min-height: 24px; border: 1px solid #dce2eb; border-radius: 6px; background: #f5f7fa; box-shadow: none; color: #293343; font: 12px system-ui; line-height: 18px; cursor: pointer; }
+.sceneSizeForm button:hover { background: #e9eef6; }
+.sceneSizeRow { display: grid; grid-template-columns: 32px 24px minmax(0, 1fr) 24px; gap: 6px; align-items: center; }
+.sceneSizeRow button { padding-inline: 0; height: 28px; }
+.sceneSizeRow input { box-sizing: border-box; min-width: 0; width: 100%; height: 28px; padding: 2px 6px; border: 1px solid #dce2eb; border-radius: 6px; background: #fff; color: #293343; font: 12px system-ui; text-align: center; }
+.scenePresetHeading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.scenePresetChips { display: flex; flex-wrap: wrap; gap: 4px; }
+.scenePresetChip { display: inline-flex; align-items: stretch; }
+.sceneSizeForm .scenePresetChip > button { padding: 2px 7px; }
+.scenePresetChip:has(.scenePresetRemove) > button:first-child { border-radius: 6px 0 0 6px; }
+.sceneSizeForm .scenePresetRemove { border-left: 0; border-radius: 0 6px 6px 0; padding-inline: 4px; }
+.sceneSizeFooter { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.sceneSizeNotice { margin: 0; font-size: 11px; line-height: 16px; }
+.sceneSizeForm .sceneGlassFooterAction { height: 36px; min-height: 0; padding: 0; border: 0; border-radius: 999px; background: transparent; touch-action: none; }
+.sceneSizeForm .sceneGlassFooterAction:hover { background: transparent; }
+.sceneSizeForm button:focus-visible, .sceneSizeForm input:focus-visible { outline: 2px solid #147bdb; outline-offset: 1px; }
+.sceneResizeGrip { position: fixed; right: 2px; bottom: 2px; z-index: 240; width: 44px; height: 44px; min-width: 0; min-height: 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; cursor: nwse-resize; touch-action: none; user-select: none; -webkit-user-select: none; }
+.sceneResizeGrip svg { display: block; width: 44px; height: 44px; fill: none; stroke: #17191e; stroke-width: 4.5; stroke-linecap: round; pointer-events: none; }
+.sceneResizeGrip:focus-visible { outline: 2px solid #087cdd; outline-offset: -5px; }
+
+/* Restore the opaque workbench; scene mode has no decorative outer frame. */
+html[data-host="scene"], html[data-host="scene"] body, html[data-host="scene"] #root,
+html[data-host="scene"] #root > .shell { background: var(--rd-bg, #f5f6fa); }
+html[data-host="scene"] body::before { content: none; }
+html[data-host="scene"] #root { border: 0; border-radius: 0; box-shadow: none; }
+html[data-host="scene"] #root > .shell.tab-mistakes { background: #fff; }
+
+html[data-cardlink-collapsed="true"] .sceneResizeGrip, html[data-cardlink-collapsed="true"] .sceneSizePopover { display: none; }
+
+html[data-host="scene"][data-cardlink-collapsed="true"],
+html[data-host="scene"][data-cardlink-collapsed="true"] body { background: transparent; }
+
+html[data-cardlink-collapsed="true"] #root, html[data-cardlink-collapsed="true"] #root * { visibility: hidden !important; }

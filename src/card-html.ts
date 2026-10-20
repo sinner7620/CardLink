@@ -1,6 +1,6 @@
 import { pkDrawingRendererScript } from "./pkdrawing-renderer"
 import { hasUnsupportedMarginNoteUrl, renderMarkdown } from "./markdown"
-import { noteLinkTarget } from "./safe-note"
+import { isTagComment, noteLinkTarget } from "./safe-note"
 import { imageMimeFromBase64 } from "./base64"
 import { escapeHtml } from "./html-utils"
 import { UI_COLORS } from "./ui-tokens"
@@ -101,10 +101,10 @@ function noteBody(
         resolveDrawing
       )
       if (content) blocks.push(content)
-    } else if (type === "HtmlNote" && !text.startsWith("#")) {
+    } else if (type === "HtmlNote") {
       const html = textOf(comment?.html)
       if (html || text) blocks.push(`<div class="html-block">${html || escapeHtml(text)}</div>`)
-    } else if (type === "TextNote" && text && !text.startsWith("#")) {
+    } else if (type === "TextNote" && text && !isTagComment(text)) {
       const linkedId = noteLinkTarget(text)
       if (linkedId) {
         // MN4 note links are plain TextNote comments; render the linked note's

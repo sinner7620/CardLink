@@ -35,6 +35,11 @@ function commentsOf(note: any): any[] {
   return arrayOf(note?.comments)
 }
 
+/** Only a list of hashtag tokens is a tag comment; Markdown headings are content. */
+export function isTagComment(text: string): boolean {
+  return /^#[^\s#]+(?:[ \t]+#[^\s#]+)*$/.test(text.trim())
+}
+
 function directContent(
   note: any,
   resolveNote: (noteId: string) => any
@@ -51,7 +56,7 @@ function directContent(
   for (const comment of rawComments) {
     const type = String(comment?.type ?? "")
     const text = textOf(comment?.text)
-    if (type === "TextNote" && text.startsWith("#")) {
+    if (type === "TextNote" && isTagComment(text)) {
       tags.push(...text.split(/\s+/).filter(tag => tag.startsWith("#")).map(tag => tag.slice(1)))
     } else if ((type === "TextNote" || type === "HtmlNote") && text) {
       const linkedId = type === "TextNote" ? noteLinkTarget(text) : ""

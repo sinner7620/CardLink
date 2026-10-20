@@ -1,12 +1,15 @@
 import { showHUD } from "marginnote"
 import { resetAnswerCardPosition } from "./answer-card-view"
 import { UI_COLORS } from "./ui-tokens"
+import { loadMatcherSettings } from "./settings"
+import { recordRuntimeState } from "./note-navigation"
 import { collectQuestionTree, questionIdsInTree, type QuestionTreeNode } from "./quick-menu-selection"
 import { MN, NodeNote } from "marginnote"
 import { MAIN_MINDMAP_SCOPE_ID, mindMapScopeIdForNote } from "./mindmap-candidate"
 import { navigateSameMapPractice, sameMapPracticeActive, sameMapPracticeQuestionIds, startSameMapPractice, stopSameMapPractice } from "./same-map-practice"
 import { quickMenuGeometry, type QuickMenuGeometry } from "./quick-menu-geometry"
-import { bindingKey, loadBindings, normalizeBinding } from "./store"
+import { loadBindings } from "./store"
+import { getBindingForMode, usesSubcardAnswers } from "./binding"
 import { bindClipperMother, clipperModeActive, clipperSnapshot, enterClipperMode, exitClipperMode, toggleClipperRunning, resetClipperQuestion, editClipperQuestionTitle } from "./question-clipper"
 
 import { clipperProgressHtml } from "./clipper-quick-menu"
@@ -22,6 +25,9 @@ const QUICK_MENU_INSET = 12
 const QUICK_MENU_LIST_TOP = 122
 const QUICK_MENU_LIST_CHROME = QUICK_MENU_LIST_TOP + QUICK_MENU_INSET
 const QUICK_MENU_TRANSITION_SECONDS = 0.38
+// MNUtil.animate uses UIKit's default ease-in-out curve.
+const QUICK_MENU_SHELL_TRANSITION_SECONDS = 0.24
+const QUICK_MENU_BALL_TRANSITION_SECONDS = 0.08
 
 type ViewFrame = { x: number; y: number; width: number; height: number }
 
@@ -48,6 +54,7 @@ interface QuickMenu {
   scroll?: UIScrollView
   mode: "filter" | "all" | "queue"
   questionColorIndex?: number
+  maskAnswers?: boolean
   collapsedFrame: ViewFrame
   expandedFrame: ViewFrame
   geometry: QuickMenuGeometry
@@ -260,12 +267,11 @@ function createQuickMenu(ball: any, window: any, collapsedFrame: ViewFrame, geom
   dismissTap.cancelsTouchesInView = false
   window.addGestureRecognizer(dismissTap)
   const content = new UIView(collapsedFrame)
-  content.backgroundColor = UIColor.colorWithHexString(UI_COLORS.surface).colorWithAlphaComponent(0.94)
+  content.backgroundColor = UIColor.clearColor()
   content.layer.cornerRadius = ENTRANCE_SIZE / 2
   content.layer.masksToBounds = true
-  ;(content as any).alpha = 0
   ;(content as any).userInteractionEnabled = false
-  const controls = new UIView({ x: 0, y: 0, width: expandedFrame.width, height: expandedFrame.height })
+  const controls = new UIView({ x: expandedFrame.x - collapsedFrame.x, y: expandedFrame.y - collapsedFrame.y, width: expandedFrame.width, height: expandedFrame.height })
   controls.backgroundColor = UIColor.clearColor()
   ;(controls as any).userInteractionEnabled = false
   content.addSubview(controls)
@@ -358,23 +364,27 @@ function readQuickMenuQuestions(menu: QuickMenu): boolean {
   if (!sameMapPracticeActive()) practiceQueueSnapshot = undefined
   const context = activeMindMapNotes()
   if (!context) {
+    recordRuntimeState("悬浮菜单", "questions.unavailable", "没有可读取的当前脑图")
     showHUD("请先打开脑图", 2)
     return false
   }
   const bindings = loadBindings()
-  const binding = normalizeBinding(bindings[bindingKey(context.notebookId, context.scopeId)] ?? bindings[context.notebookId])
+  const binding = getBindingForMode(bindings, context.notebookId, context.scopeId, loadMatcherSettings().allowSameStudySetMindMap)
   const colors = binding?.questionColors ?? []
   if (!colors.length && !sameMapPracticeActive()) {
+    recordRuntimeState("悬浮菜单", "questions.unavailable", `scope=${context.scopeId} reason=no-question-colors`)
     showHUD("请先在答案配置中筛选题目卡片颜色", 3)
     return false
   }
   menu.questionColorIndex = colors[0]
+  menu.maskAnswers = usesSubcardAnswers(binding, colors[0])
   const inCurrentMap = new Set(context.notes.map(note => String(note.noteId ?? "").trim()))
   menu.tree = collectQuestionTree(context.notes, sameMapPracticeActive() ? undefined : colors, note => inCurrentMap.has(String(note.noteId ?? "").trim()))
   const available = new Set(questionIdsInTree(menu.tree))
   menu.selectedIds = sameMapPracticeActive()
     ? new Set(sameMapPracticeQuestionIds().filter(id => available.has(id)))
     : menu.mode === "all" ? available : new Set([...menu.selectedIds].filter(id => available.has(id)))
+  recordRuntimeState("悬浮菜单", "questions.ready", `scope=${context.scopeId} colors=${colors.join(",")} visible=${context.notes.length} available=${available.size} selected=${menu.selectedIds.size}`)
   updateStartTitle(menu)
   return true
 }
@@ -411,7 +421,7 @@ function layoutQuickMenu(menu: QuickMenu, geometry: QuickMenuGeometry, resizeShe
   const listY = geometry.expandUp ? QUICK_MENU_INSET : QUICK_MENU_LIST_TOP
   const headerY = geometry.expandUp ? frame.height - 56 : QUICK_MENU_INSET
   if (resizeShell) setQuickMenuShell(menu, frame, 18)
-  menu.controls.frame = { x: 0, y: 0, width: frame.width, height: frame.height }
+  menu.controls.frame = { x: frame.x - menu.content.frame.x, y: frame.y - menu.content.frame.y, width: frame.width, height: frame.height }
   menu.startButton.frame = { x: 64, y: headerY, width: Math.max(0, frame.width - 128), height: 44 }
   menu.closeButton.frame = { x: geometry.expandLeft ? QUICK_MENU_INSET : frame.width - 56, y: headerY, width: 44, height: 44 }
   menu.segment.frame = { x: QUICK_MENU_INSET, y: geometry.expandUp ? frame.height - 110 : 68, width, height: 42 }
@@ -633,6 +643,12 @@ function renderQuestionTree(menu: QuickMenu): void {
 function setQuickMenuShell(menu: QuickMenu, frame: ViewFrame, cornerRadius: number): void {
   menu.content.frame = frame
   menu.content.layer.cornerRadius = cornerRadius
+  // Keep the controls fixed in window space while the shell reveals them
+  // outward from the ball, or clips them back into it on close.
+  menu.controls.frame = {
+    x: menu.expandedFrame.x - frame.x, y: menu.expandedFrame.y - frame.y,
+    width: menu.expandedFrame.width, height: menu.expandedFrame.height
+  }
 }
 
 function animateQuickMenuUpdate(update: () => void, seconds: number): Promise<void> {
@@ -651,10 +667,11 @@ function finishQuickMenu(menu: QuickMenu): void {
 }
 
 function settleQuickMenu(menu: QuickMenu): void {
+  menu.content.backgroundColor = UIColor.colorWithHexString(UI_COLORS.surface).colorWithAlphaComponent(0.94)
   setQuickMenuShell(menu, menu.expandedFrame, 18)
-  ;(menu.content as any).alpha = 1
   ;(menu.content as any).userInteractionEnabled = true
   ;(menu.controls as any).userInteractionEnabled = true
+  recordRuntimeState("悬浮菜单", "ready", `frame=${JSON.stringify(menu.content.frame)}`)
 }
 
 async function animateQuickMenu(menu: QuickMenu, opening: boolean): Promise<void> {
@@ -667,10 +684,14 @@ async function animateQuickMenu(menu: QuickMenu, opening: boolean): Promise<void
     return
   }
   if (opening) {
+    // Fade only the ball-sized backing before revealing the full panel.
+    await animateQuickMenuUpdate(() => {
+      menu.content.backgroundColor = UIColor.colorWithHexString(UI_COLORS.surface).colorWithAlphaComponent(0.94)
+    }, QUICK_MENU_BALL_TRANSITION_SECONDS)
+    if (menu.generation !== generation || !menu.open) return
     await animateQuickMenuUpdate(() => {
       setQuickMenuShell(menu, menu.expandedFrame, 18)
-      ;(menu.content as any).alpha = 1
-    }, QUICK_MENU_TRANSITION_SECONDS)
+    }, QUICK_MENU_SHELL_TRANSITION_SECONDS)
     if (menu.generation === generation && menu.open) settleQuickMenu(menu)
     return
   }
@@ -678,14 +699,19 @@ async function animateQuickMenu(menu: QuickMenu, opening: boolean): Promise<void
   ;(menu.controls as any).userInteractionEnabled = false
   await animateQuickMenuUpdate(() => {
     setQuickMenuShell(menu, menu.collapsedFrame, ENTRANCE_SIZE / 2)
-    ;(menu.content as any).alpha = 0
-  }, QUICK_MENU_TRANSITION_SECONDS)
+  }, QUICK_MENU_SHELL_TRANSITION_SECONDS)
+  if (menu.generation !== generation || menu.open) return
+  // At this point the shell is back under the ball; remove its backing smoothly.
+  await animateQuickMenuUpdate(() => {
+    menu.content.backgroundColor = UIColor.clearColor()
+  }, QUICK_MENU_BALL_TRANSITION_SECONDS)
   if (menu.generation === generation && !menu.open) finishQuickMenu(menu)
 }
 
-function closeQuickMenu(animated = true, owner: any = self): void {
+function closeQuickMenu(animated = true, owner: any = self, reason = "lifecycle"): void {
   const menu = owner.mnutilsQuickMenu as QuickMenu | undefined
   if (!menu) return
+  recordRuntimeState("悬浮菜单", "close", `reason=${reason} mode=${menu.mode} selected=${menu.selectedIds.size}`)
   dismissModePicker(menu)
   menu.open = false
   if (animated) void animateQuickMenu(menu, false)
@@ -711,6 +737,7 @@ function openQuickMenu(button: any, window: any, owner: any = self): void {
   const menu = createQuickMenu(button, window, collapsedFrame, geometry, owner)
   owner.mnutilsQuickMenu = menu
   menu.open = true
+  recordRuntimeState("悬浮菜单", "open", `frame=${JSON.stringify(menu.expandedFrame)}`)
   menu.desiredWidth = desiredWidth; menu.desiredHeight = desiredHeight
   if (clipperModeActive(owner)) prepareClipperMenu(menu)
   else if (sameMapPracticeActive() && readQuickMenuQuestions(menu)) {
@@ -813,30 +840,42 @@ export function onMnutilsEntranceClick(_sender: any): void {
     else {
       const button = self.mnutilsEntranceBall
       const window = button?.button?.superview ?? button?.window
-      if (button && window) openQuickMenu(button, window)
+      if (button && window) {
+        if (!clipperModeActive() && !sameMapPracticeActive() && loadMatcherSettings().entranceDefaultMode === "clipper") openClipperQuickMenu()
+        else openQuickMenu(button, window)
+      }
     }
   } catch (error) {
     try { console.log("MNButton 快捷功能区切换失败:", String(error)) } catch { /* optional */ }
+    showHUD(String((error as Error)?.message || error), 3)
   }
 }
 
 export function onMnutilsQuickMenuDismiss(): void {
-  closeQuickMenu()
+  closeQuickMenu(true, self, "close-button")
 }
 
 export function onMnutilsQuickMenuWindowTap(sender: any): void {
   if (clipperModeActive()) return
   const menu = self.mnutilsQuickMenu as QuickMenu | undefined
   if (!menu?.open || menu.modePicker || Date.now() - (self.quickMenuModePressAt || 0) < 400 || Number(sender?.state) !== 3) return
-  const point = sender.locationInView?.(menu.window)
-  if (!point) return
-  const frame = menu.expandedFrame
-  if (Number(point.x) < frame.x || Number(point.x) > frame.x + frame.width ||
-    Number(point.y) < frame.y || Number(point.y) > frame.y + frame.height) closeQuickMenu()
+  // Use UIKit's conversion into the actual menu view, rather than comparing
+  // a window point against cached target geometry during layout/animation.
+  const point = sender.locationInView?.(menu.content)
+  const bounds = (menu.content as any).bounds
+  if (!point || !bounds) return
+  const x = Number(point.x), y = Number(point.y)
+  const left = Number(bounds.x), top = Number(bounds.y)
+  const width = Number(bounds.width), height = Number(bounds.height)
+  if (![x, y, left, top, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return
+  const inside = x >= left && x <= left + width && y >= top && y <= top + height
+  recordRuntimeState("悬浮菜单", "windowTap", `inside=${inside} point=${x},${y} bounds=${left},${top},${width},${height} interactive=${(menu.content as any).userInteractionEnabled}/${(menu.controls as any).userInteractionEnabled}`)
+  if (!inside) closeQuickMenu(true, self, "outside-tap")
 }
 
 export function onMnutilsQuickMenuFilter(): void {
   const menu = self.mnutilsQuickMenu as QuickMenu | undefined
+  recordRuntimeState("悬浮菜单", "filter.tap", `open=${!!menu?.open}`)
   if (!menu?.open) return
   if (sameMapPracticeActive()) return
   if (menu.mode === "all" && !sameMapPracticeActive()) menu.selectedIds.clear()
@@ -849,6 +888,7 @@ export function onMnutilsQuickMenuFilter(): void {
 
 export function onMnutilsQuickMenuSelectAll(): void {
   const menu = self.mnutilsQuickMenu as QuickMenu | undefined
+  recordRuntimeState("悬浮菜单", "selectAll.tap", `open=${!!menu?.open}`)
   if (sameMapPracticeActive()) return
   if (!menu?.open || !readQuickMenuQuestions(menu)) return
   menu.selectedIds = new Set(questionIdsInTree(menu.tree))
@@ -946,6 +986,7 @@ export function onMnutilsQuickMenuModePress(sender: any): void {
 }
 
 export async function onMnutilsQuickMenuStart(): Promise<void> {
+  recordRuntimeState("悬浮菜单", "start.tap", `open=${!!self.mnutilsQuickMenu?.open} pressAgeMs=${Date.now() - (self.quickMenuModePressAt || 0)}`)
   if (Date.now() - (self.quickMenuModePressAt || 0) < 400) return
   const menu = self.mnutilsQuickMenu as QuickMenu | undefined
   if (!menu?.open) return
@@ -964,12 +1005,22 @@ export async function onMnutilsQuickMenuStart(): Promise<void> {
   if (!readQuickMenuQuestions(menu)) return
   const notebookId = String(MN.currnetNotebookId ?? "").trim()
   const queue = questionIdsInTree(menu.tree).filter(id => menu.selectedIds.has(id))
-  const result = await startSameMapPractice(notebookId, queue)
+  recordRuntimeState("悬浮菜单", "start.queue", `count=${queue.length}`)
+  let result: Awaited<ReturnType<typeof startSameMapPractice>>
+  try {
+    result = await startSameMapPractice(notebookId, queue, { maskAnswers: menu.maskAnswers === true })
+  } catch (error) {
+    const message = String((error as Error)?.message || error)
+    recordRuntimeState("悬浮菜单", "start.error", message)
+    showHUD(`无法开始做题：${message}`, 3)
+    return
+  }
+  recordRuntimeState("悬浮菜单", "start.result", `started=${result.started} answerCount=${result.answerCount ?? 0} reason=${result.reason ?? ""}`)
   if (!result.started) {
     showHUD(result.reason ?? "无法开始做题", 3)
     return
   }
-  showHUD(`已开始做题，遮盖 ${result.answerCount ?? 0} 张答案卡片`, 2)
+  showHUD(result.maskAnswers === false ? "已开始做题，按队列定位聚焦" : `已开始做题，遮盖 ${result.answerCount ?? 0} 张答案卡片`, 2)
   practiceQueueSnapshot = { tree: menu.tree, questionIds: queue }
   menu.mode = "queue"
   if (readQuickMenuQuestions(menu)) {
@@ -980,7 +1031,7 @@ export async function onMnutilsQuickMenuStart(): Promise<void> {
 }
 
 export function onMnutilsQuickMenuOpenPanel(): void {
-  closeQuickMenu()
+  closeQuickMenu(true, self, "open-panel")
   try {
     const panel = __MNAM_WEB_PANEL_GLOBAL__
     const controller = self.webController
@@ -1026,7 +1077,7 @@ export function onMnutilsEntranceLongPress(sender: any): void {
     // 与 MNButton 官方示例一致，只响应 UIGestureRecognizerState.began。
     if (!sender || sender.state !== 1) return
     self.mnutilsEntranceSuppressClick = Date.now()
-    closeQuickMenu()
+    closeQuickMenu(true, self, "entrance-long-press")
     performEntranceReset()
   } catch (error) {
     try { console.log("MNButton 第二入口长按复位失败:", String(error)) } catch { /* optional */ }

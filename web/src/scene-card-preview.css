@@ -1,0 +1,7 @@
+.sceneCardPreview { position: relative; width: 100%; height: 100%; min-height: 0; overflow: auto; background: #fff; touch-action: pan-x pan-y; }
+.sceneCardPreview.autoHeight { height: auto; min-height: 300px; max-height: 520px; }
+.scenePreviewImageWidth { max-width: none; }
+.scenePreviewImageWidth > img { display: block; width: 100%; max-width: none; height: auto; }
+.scenePreviewImageWidth > img[hidden] { display: none; }
+.scenePreviewStatus { margin: 0; padding: 18px; font: 13px system-ui; color: #697386; }
+.scenePreviewStatus button { margin-left: 8px; color: #0e8dfd; border: 0; background: transparent; cursor: pointer; }

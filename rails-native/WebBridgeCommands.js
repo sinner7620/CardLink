@@ -488,6 +488,7 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
   }
 
   return {
+    decodeMediaBase64: decodePdfBase64,
     dispatch: dispatch,
     completePdfExport: completePdfExport,
     pdfRenderReady: pdfRenderReady,

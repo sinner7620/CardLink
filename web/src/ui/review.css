@@ -829,3 +829,23 @@ body > #root > .shell > main > section.reviewPage.reviewFiltersOpen {
   .reviewToolbar, .reviewToolbar nav, .reviewToolbar > .reviewActionCapsule, .reviewToolbar nav button, .reviewToolbar nav b, .reviewActionCapsule > .reviewFilterPanel, .reviewActionCapsule > .reviewSecondaryMenu { transition: none; }
 }
 }
+
+/* Keep the four queue tools aligned, including in the handwriting window. */
+.dueReviewActions > .reviewHandwriteAction {
+  width: 31px;
+  flex: 0 0 31px;
+  padding-inline: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+@container review-card (max-width: 480px) {
+  .dueReviewActions { flex-wrap: wrap; }
+  .dueReviewActions .reviewResults {
+    flex: 0 0 100%;
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}

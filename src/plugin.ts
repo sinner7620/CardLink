@@ -11,7 +11,9 @@ import {
   select,
   showHUD
 } from "marginnote"
-import { distinctAnswers, excludeAnswerNoteId, filterSelectionToAnchorGroup } from "./domain"
+import { distinctAnswers, excludeAnswerNoteId } from "./domain"
+import { notifyWorkbenchDataChanged } from "./workbench-notification"
+import { filterMistakeAnswerCards } from "./mistake-selection"
 import { preferredAnswer, rememberAnswer } from "./answer-preference"
 import { onProcessNewExcerpt } from "./question-clipper"
 import { findAnswersForQuestion } from "./answer-lookup"
@@ -48,6 +50,7 @@ import {
   setBinding,
   targetForMode
 } from "./store"
+import { subcardColorHint } from "./binding"
 import { validateRegexMatchingRules } from "./regex-matching"
 import { loadMatcherSettings, saveMatcherSettings } from "./settings"
 import { isCardToolbarEnabled } from "./card-toolbar-state"
@@ -59,6 +62,7 @@ import { selectReusableAnswerParent } from "./answer-card-creation"
 import {
   closeAnswerCard,
   syncAnswerCandidatesControl,
+  onAnswerReviewOutsideTap,
   onAnswerCardPan,
   onAnswerCardResize,
   onAnswerControlPress,
@@ -67,12 +71,13 @@ import {
   showAnswerCard,
   syncAnswerCardWindowControlSide
 } from "./answer-card-view"
-import { checkForUpdates, scheduleAutomaticUpdateCheck } from "./updater"
+import { checkForUpdates, installUpdateFromLink, showUpdateStatus, scheduleAutomaticUpdateCheck } from "./updater"
 import { scheduleTelemetryReport } from "./telemetry"
-import { isMindMapNotebook, notebookNotes } from "./note-tree"
+import { isMindMapNotebook, notebookContainsNote, notebookNotes } from "./note-tree"
 import { chooseNotebook, closeNotebookPicker, onNotebookPickerAction } from "./notebook-picker"
 import { completePendingNoteNavigation, focusNoteInFloatMindMap, recordRuntimeState , captureDiagnosticError , maskText } from "./note-navigation"
 import { describeError } from "./error-messages"
+import { isAnswerIndexError, promptAnswerIndexRecovery, AnswerIndexRecoveryResult } from "./answer-index-recovery"
 import { revealSameMapQuestion } from "./same-map-practice"
 import { CardLinkError } from "./errors"
 import {
@@ -101,12 +106,14 @@ import {
   discardReviewMode,
   onReviewModeExit,
   onReviewModeIndex,
-  onReviewModeInfo,
   onReviewModeNext,
   onReviewModePrevious,
   onReviewModeControlPress,
   onReviewModeControlRelease,
   onReviewModeControlHover,
+  onReviewModePan,
+  onReviewModeResult,
+  onReviewModeExpand, onReviewModeBranch, onReviewModeQueuePick, onReviewModeToolbarResult,
   restoreReviewModeToolbar,
   startReviewMode
 } from "./review-mode"
@@ -134,6 +141,7 @@ declare const PopupMenu: {
     targetWinRect?: { x: number; y: number; width: number; height: number }
   } | undefined
 }
+import { runCardMenuCommand, type CardMenuCommandId, type CardMenuTarget } from "./card-menu"
 
 const events = ["PopupMenuOnNote", "ClosePopupMenuOnNote", "ProcessNewExcerpt"] as const
 export const eventObservers = eventObserverController([...events])
@@ -183,47 +191,6 @@ function selectedQuestions(): NodeNote[] {
 
 function selectedQuestion(): NodeNote | undefined {
   return selectedQuestions()[0]
-}
-
-function selectedMistakeQuestions(notebookId: string): NodeNote[] {
-  const selected = selectedQuestions()
-  if (!selected.length) return selected
-
-  // MarginNote can retain selections in two mind maps shown in the same study
-  // set. The side button belongs to one card, so that card is the selection
-  // anchor; cards still selected in the bound answer map must not become
-  // mistakes as a side effect.
-  const anchorNoteId = String(
-    self.answerToolbarNoteId ?? self.lastClickedNote?.noteId ?? MN.notebookController?.focusNote?.noteId ?? ""
-  ).trim()
-  const anchor = selected.find(node => String(node.note?.noteId ?? "").trim() === anchorNoteId) ?? selected[0]
-  const anchorRootId = nodeIdentifier(mindMapRoot(anchor))
-  const answerOnlyScopes = answerOnlyBindingScopes(loadBindings())
-  if (answerOnlyScopes.has(notebookId) || answerOnlyScopes.has(bindingKey(notebookId, anchorRootId))) {
-    return []
-  }
-  const sameMindMap = filterSelectionToAnchorGroup(
-    selected,
-    anchor,
-    node => nodeIdentifier(mindMapRoot(node))
-  )
-
-  const sourceRootNodeId = sourceMindMapId(notebookId, anchor)
-  const storedTarget = bindingForSource(notebookId, sourceRootNodeId)
-  const answerTarget = storedTarget && effectiveAnswerTarget(storedTarget)
-  if (!answerTarget || answerTarget.notebookId !== notebookId) return sameMindMap
-
-  return sameMindMap.filter(node => {
-    if (node === anchor) return true
-    try {
-      const noteId = String(node.note?.noteId ?? "").trim()
-      return !findAnswerByReference(answerTarget, noteId, nodeIdentifier(node))
-    } catch {
-      // A missing/stale answer index must not block legitimate mistake marking;
-      // the mind-map boundary above still prevents the reported cross-map leak.
-      return true
-    }
-  })
 }
 
 function parsePopupWinRect(value: unknown): { x: number; y: number; width: number; height: number } | undefined {
@@ -288,7 +255,7 @@ function sourceMindMap(
   question = selectedQuestion()
 ): { notebookId: string; rootNodeId: string; title: string } | undefined {
   if (!notebookId || !question) return undefined
-  const rootNodeId = mindMapScopeIdForNote(question.note, childMapIdsForNotebook(notebookId))
+  const rootNodeId = mindMapScopeIdForNote(question.note, () => childMapIdsForNotebook(notebookId))
   if (rootNodeId === MAIN_MINDMAP_SCOPE_ID) return { notebookId, rootNodeId, title: "主脑图" }
   const rootNote = MN.db.getNoteById(rootNodeId)
   if (rootNote) {
@@ -505,7 +472,8 @@ export async function bindCurrentSubcards(targetQuestionNotebookId?: string, tar
   }
   saveBindings(bindings)
   notifyBindingSettingsChanged()
-  showHUD("已将当前脑图的直接子卡片设为答案", 3)
+  showHUD(existing?.questionColors?.length ? "已将当前脑图的直接子卡片设为答案" :
+    "已绑定子卡片答案；请先在设置 → 答案配置 → 题目筛选中绑定题目卡片颜色", 5)
 }
 
 export async function chooseCurrentAnswerBinding(targetQuestionNotebookId?: string, targetQuestion?: NodeNote): Promise<void> {
@@ -579,11 +547,14 @@ export interface AnswerMatchingSettingsData {
   pairs: number
   matchedGroups: number
   regexRules: RegexMatchingRules
+  sceneWorkbenchEnabled: boolean
   debugModeEnabled: boolean
+  debugUpdateDownloadsEnabled: boolean
   sourceLocateMode: "locate" | "focus"
   subcardAnswerDisplay: "reveal" | "window"
   boundHandwritingDisplay: "always" | "doubleTap"
   mistakeListDisplay: "always" | "autoHide"
+  entranceDefaultMode: "practice" | "clipper"
   answerMaskStyle: "dark" | "light"
   answerMaskColor: string
   maskImageConfigured: boolean
@@ -616,11 +587,14 @@ export function answerMatchingSettingsData(): AnswerMatchingSettingsData {
       questionPattern: "",
       answerPattern: ""
     },
+    sceneWorkbenchEnabled: settings.sceneWorkbenchEnabled,
     debugModeEnabled: settings.debugModeEnabled,
+    debugUpdateDownloadsEnabled: settings.debugUpdateDownloadsEnabled,
     sourceLocateMode: settings.sourceLocateMode,
     subcardAnswerDisplay: settings.subcardAnswerDisplay,
     boundHandwritingDisplay: settings.boundHandwritingDisplay,
     mistakeListDisplay: settings.mistakeListDisplay,
+    entranceDefaultMode: settings.entranceDefaultMode,
     answerMaskStyle: settings.answerMaskStyle,
     answerMaskColor: settings.answerMaskColor,
     maskImageConfigured: Boolean(settings.answerMaskImage),
@@ -1039,13 +1013,15 @@ function recordAnswerCardDiagnostics(questionTitle: string, answer: IndexedAnswe
 
 let answerQuestion: { notebookId: string; noteId: string } | undefined
 
-async function showAnswer(questionTitle: string, answer: IndexedAnswer, candidates: IndexedAnswer[] = [], question?: { notebookId: string; noteId: string }): Promise<void> {
+async function showAnswer(questionTitle: string, answer: IndexedAnswer, candidates: IndexedAnswer[] = [], question?: { notebookId: string; noteId: string }, owner: any = self): Promise<void> {
   recordAnswerCardDiagnostics(questionTitle, answer)
   // 候选清单与题名存到 addon 上：点击长条后由 MarginNote 原生 select 弹窗选择。
-  self.answerCardCandidates = candidates
-  self.answerCardQuestionTitle = questionTitle
-  self.answerCardAnswerNoteId = answer.noteId
-  showAnswerCard(answerCardHtml(answer, questionTitle, undefined, true))
+  owner.answerCardCandidates = candidates
+  owner.answerCardQuestionTitle = questionTitle
+  owner.answerCardAnswerNoteId = answer.noteId
+  owner.answerCardQuestionNoteId = question?.noteId
+  owner.answerCardQuestionNotebookId = question?.notebookId
+  showAnswerCard(answerCardHtml(answer, questionTitle, undefined, true), owner)
   answerQuestion = question
   if (question && candidates.length > 1) rememberAnswer(question.notebookId, question.noteId, answer)
   syncAnswerCandidatesControl(
@@ -1054,7 +1030,7 @@ async function showAnswer(questionTitle: string, answer: IndexedAnswer, candidat
       title: candidate.titles[0] || "未命名卡片",
       standard: candidate.tags.some(tag => tag === "标准答案")
     })),
-    candidates.findIndex(candidate => candidate.id === answer.id)
+    candidates.findIndex(candidate => candidate.id === answer.id), owner
   )
 }
 
@@ -1143,7 +1119,7 @@ export function onPanelCloseButtonSideChanged(side: unknown): void {
   syncAnswerCardWindowControlSide(side)
 }
 
-export { onAnswerCardPan, onAnswerCardResize, onAnswerControlPress, onAnswerControlRelease }
+export { onAnswerReviewOutsideTap, onAnswerCardPan, onAnswerCardResize, onAnswerControlPress, onAnswerControlRelease }
 export { onNotebookPickerAction }
 export { onMistakeLevelPickerAction }
 
@@ -1225,8 +1201,9 @@ function noteCandidatesForAnswerTarget(answerTarget: BindingTarget): Array<{
 }> {
   const notebook = MN.db.getNotebookById(answerTarget.notebookId)
   if (!notebook) return []
-  const childMapIds = collectChildMindMapNoteIds(notebookNotes(notebook))
-  return notebookNotes(notebook).flatMap(note => {
+  const notes = notebookNotes(notebook)
+  const childMapIds = collectChildMindMapNoteIds(notes)
+  return notes.flatMap(note => {
     try {
       const node = new NodeNote(note, answerTarget.notebookId)
       if (!isInMindMap(node, answerTarget.rootNodeId, childMapIds)) return []
@@ -1321,9 +1298,8 @@ function verifyAnswerPlacement(noteId: string, answerTarget: BindingTarget): any
   if (!created || String(created.notebookId ?? "") !== answerTarget.notebookId) {
     throw new CardLinkError("answerCardCreationFailed", { detail: "新卡片未写入绑定的答案学习集" })
   }
-  const childMapIds = childMapIdsForNotebook(answerTarget.notebookId)
   const node = new NodeNote(created, answerTarget.notebookId)
-  if (!isInMindMap(node, answerTarget.rootNodeId, childMapIds)) {
+  if (!isInMindMap(node, answerTarget.rootNodeId, () => childMapIdsForNotebook(answerTarget.notebookId))) {
     throw new CardLinkError("answerCardCreationFailed", { detail: "新卡片未落入绑定的答案脑图" })
   }
   return created
@@ -1389,10 +1365,44 @@ async function createAnswerCardFromQuestion(
   }
 }
 
+/** 恢复操作始终锚定触发错误的原题，不随弹窗期间的当前选卡漂移。 */
+export async function recoverAnswerIndexError(
+  error: unknown,
+  source?: { notebookId: string; question: NodeNote; target?: BindingTarget }
+): Promise<AnswerIndexRecoveryResult | undefined> {
+  if (!isAnswerIndexError(error)) return undefined
+  if (!source) {
+    const resolved = resolveAnswerLookupContext()
+    if (resolved.error !== undefined) return undefined
+    source = { notebookId: resolved.sourceNotebookId, question: resolved.lookupQuestion, target: resolved.answerTarget }
+  }
+  const { notebookId, question } = source
+  const rootNodeId = sourceMindMapId(notebookId, question)
+  const stored = bindingForSource(notebookId, rootNodeId)
+  const target = stored ? effectiveAnswerTarget(stored) : source.target
+  if (!target) return undefined
+  const root = target.rootNodeId && target.rootNodeId !== MAIN_MINDMAP_SCOPE_ID
+    ? MN.db.getNoteById(target.rootNodeId) : undefined
+  const rootTitle = root ? new NodeNote(root, target.notebookId).title?.trim() : undefined
+  const bindingName = target.rootNodeId
+    ? `${notebookTitle(target.notebookId)} › ${target.rootNodeId === MAIN_MINDMAP_SCOPE_ID ? "主脑图" : rootTitle || target.rootTitle || "未命名子脑图"}`
+    : notebookTitle(target.notebookId)
+  return promptAnswerIndexRecovery({ bindingName, updatedAt: answerIndexUpdatedAt(target) }, {
+    choose: popup,
+    refresh: async () => {
+      HUDController.show("正在刷新答案索引…")
+      try { await refreshIndex(target) } finally { HUDController.hidden() }
+      notifyWorkbenchDataChanged()
+    },
+    rebind: () => chooseCurrentAnswerBinding(notebookId, question)
+  })
+}
+
 export async function findCurrentAnswer(
   allowIndexRetry = true,
   questionOverride?: NodeNote,
-  openInEditor = false
+  openInEditor = false,
+  owner: any = self
 ): Promise<void> {
   const resolved = resolveAnswerLookupContext(questionOverride)
   if (resolved.error !== undefined) return showHUD(resolved.error)
@@ -1425,12 +1435,20 @@ export async function findCurrentAnswer(
     return
   }
 
-  const rawMatches = findAnswersForQuestion(
-    answerTarget,
-    lookupQuestion,
-    resolved.titles,
-    resolved.path
-  )
+  let rawMatches: IndexedAnswer[]
+  try {
+    rawMatches = findAnswersForQuestion(answerTarget, lookupQuestion, resolved.titles, resolved.path)
+  } catch (error) {
+    const recovery = await recoverAnswerIndexError(error, {
+      notebookId: bindingSourceNotebookId, question: lookupQuestion, target: answerTarget
+    })
+    if (recovery === undefined) throw error
+    if (recovery === "refreshed") {
+      if (currentNotebookId() !== resolved.questionNotebookId) return showHUD("索引已刷新，学习集已切换，请回到原题重新查找", 4)
+      return findCurrentAnswer(false, resolved.question, openInEditor, owner)
+    }
+    return
+  }
   const questionNoteId = String(lookupQuestion.note?.noteId ?? "").trim()
   const matches = distinctAnswers(excludeAnswerNoteId(rawMatches, questionNoteId))
   recordRuntimeState(
@@ -1442,6 +1460,8 @@ export async function findCurrentAnswer(
       ` matches=${matches.slice(0, 12).map(item => `${item.noteId}:${item.titles[0] || "未命名"}`).join("|") || "(无)"}`
   )
   if (!matches.length) {
+    const colorHint = subcardColorHint(answerTarget, lookupQuestion.note?.colorIndex)
+    if (colorHint) return showHUD(colorHint, 5)
     if (answerTarget.designatedAnswer === "subcard" || answerTarget.selectionMode === "mixed") {
       return showHUD(`当前题目没有匹配到直接子卡片答案：${questionTitle}`, 4)
     }
@@ -1472,7 +1492,7 @@ export async function findCurrentAnswer(
     } finally {
       HUDController.hidden()
     }
-    return findCurrentAnswer(false, questionOverride, openInEditor)
+    return findCurrentAnswer(false, questionOverride, openInEditor, owner)
   }
   // 只改变默认展示项，候选清单顺序及序号保持不变。
   const answer = preferredAnswer(bindingSourceNotebookId, questionNoteId, matches)
@@ -1484,8 +1504,8 @@ export async function findCurrentAnswer(
       loadMatcherSettings().subcardAnswerDisplay === "reveal") {
       const revealed = revealSameMapQuestion(questionNoteId)
       if (revealed) showHUD("已显示当前题目的子卡片答案", 3)
-      else await showAnswer(questionTitle, answer, matches, { notebookId: bindingSourceNotebookId, noteId: questionNoteId })
-    } else await showAnswer(questionTitle, answer, matches, { notebookId: bindingSourceNotebookId, noteId: questionNoteId })
+      else await showAnswer(questionTitle, answer, matches, { notebookId: bindingSourceNotebookId, noteId: questionNoteId }, owner)
+    } else await showAnswer(questionTitle, answer, matches, { notebookId: bindingSourceNotebookId, noteId: questionNoteId }, owner)
   }
 }
 
@@ -1494,6 +1514,9 @@ async function runSafely(action: () => Promise<void>): Promise<void> {
     await action()
   } catch (error) {
     captureDiagnosticError(error, "生命周期")
+    try {
+      if (await recoverAnswerIndexError(error) !== undefined) return
+    } catch (recoveryError) { error = recoveryError }
     showHUD(`答案匹配失败：${describeError(error)}`, 4)
   }
 }
@@ -1522,7 +1545,7 @@ async function markSelectedQuestions(level?: number): Promise<void> {
   hideAnswerToolbar()
   try {
     const notebookId = currentNotebookId()
-    const questions = notebookId ? selectedMistakeQuestions(notebookId) : []
+    const questions = notebookId ? selectedQuestions() : []
     if (!notebookId || !questions.length) return showHUD("请先选中题目卡片")
     const previous = questions.length === 1
       ? mistakeRecordForSourceQuestion(questions[0], notebookId)
@@ -1543,6 +1566,9 @@ async function markSelectedQuestions(level?: number): Promise<void> {
     notifyWorkbenchDataChanged()
   } catch (error) {
     captureDiagnosticError(error, "生命周期")
+    try {
+      if (await recoverAnswerIndexError(error) !== undefined) return
+    } catch (recoveryError) { error = recoveryError }
     showHUD(`错题摘录失败：${describeError(error)}`, 5)
   }
 }
@@ -1553,6 +1579,46 @@ export async function onMistakeToolbarClick(): Promise<void> {
     return
   }
   await markSelectedQuestions()
+}
+
+export async function executeCardMenuCommand(command: CardMenuCommandId, noteID: string, owner: any = self): Promise<{ cancelled?: boolean }> {
+  hideAnswerToolbar()
+  const resolveNode = (target: CardMenuTarget): NodeNote => {
+    const note = MN.db.getNoteById(target.noteID)
+    if (!note) throw new Error("目标卡片已不存在")
+    return new NodeNote(note, target.notebookID)
+  }
+  return runCardMenuCommand(command, noteID, {
+    notebookID: currentNotebookId,
+    resolve(id) {
+      const notebookID = currentNotebookId()
+      if (!notebookID) throw new Error("请先打开卡片所在学习集")
+      const notebook = MN.db.getNotebookById(notebookID)
+      if (!notebookContainsNote(notebook, MN.db.getNoteById(id))) throw new Error("菜单卡片不属于当前学习集，请重新打开卡片菜单")
+      const target = {noteID:id,notebookID}
+      const question=resolveNode(target)
+      if (command === "markMistake") {
+        const rootID=sourceMindMapId(notebookID,question)
+        const scopes=answerOnlyBindingScopes(loadBindings())
+        if(scopes.has(notebookID)||scopes.has(bindingKey(notebookID,rootID)))throw new Error("答案脑图中的卡片不能标记为原题错题")
+        const stored=bindingForSource(notebookID,rootID), answerTarget=stored&&effectiveAnswerTarget(stored)
+        const allowed=filterMistakeAnswerCards([question],{
+          target:answerTarget,notebookId:notebookID,rootNodeId:rootID,
+          parentOf:node=>node.parentNode,colorOf:node=>node.note?.colorIndex,
+          isIndexedAnswer:node=>Boolean(answerTarget&&findAnswerByReference(answerTarget,String(node.note?.noteId??"").trim(),nodeIdentifier(node)))
+        })
+        if(!allowed.length)throw new Error("该卡片被识别为答案卡，请在原题上标记错题")
+      }
+      return target
+    },
+    findAnswer: target => findCurrentAnswer(true, resolveNode(target), false, owner),
+    currentLevel: target => mistakeRecordForSourceQuestion(resolveNode(target), target.notebookID)?.level,
+    chooseLevel: level => chooseMistakeLevel(level, 1),
+    async mark(target, level) {
+      if (!await markQuestionAsMistake(resolveNode(target), target.notebookID, level)) throw new Error("该卡片未能标记为错题")
+      notifyWorkbenchDataChanged()
+    }
+  })
 }
 
 export async function onMistakeLevel0Click(): Promise<void> {
@@ -1572,6 +1638,7 @@ export async function onMistakeLevel2Click(): Promise<void> {
 
 function notifyBindingSettingsChanged(): void {
   try {
+    ;(globalThis as any).__MNAM_SCENE_WORKBENCH_GLOBAL__?.notify(self, "nativeBindingsChanged")
     self.webController?.webView?.evaluateJavaScript(
       "typeof window.__onNativeBindingsChanged==='function'&&window.__onNativeBindingsChanged()",
       () => undefined
@@ -1581,19 +1648,6 @@ function notifyBindingSettingsChanged(): void {
   }
 }
 
-function notifyWorkbenchDataChanged(): void {
-  try {
-    const webView = self.webController?.webView
-    if (webView) {
-      webView.evaluateJavaScript(
-        "typeof window.__onNativeDataChanged==='function'&&window.__onNativeDataChanged()",
-        () => undefined
-      )
-    }
-  } catch {
-    // The workbench may not have been opened yet; it loads fresh data when shown.
-  }
-}
 export { notifyWorkbenchDataChanged }
 
 export interface AnswerWorkbenchCandidate {
@@ -1611,8 +1665,8 @@ export interface AnswerWorkbenchData {
   candidates: AnswerWorkbenchCandidate[]
 }
 
-export function answerWorkbenchData(): AnswerWorkbenchData {
-  const resolved = resolveAnswerLookupContext()
+export function answerWorkbenchData(questionOverride?: NodeNote): AnswerWorkbenchData {
+  const resolved = resolveAnswerLookupContext(questionOverride)
   if (resolved.error !== undefined) throw new Error(resolved.error)
   const { question, lookupQuestion, mistakeContext, sourceNotebookId, answerTarget, questionTitle, titles, path } = resolved
   if (!answerTarget) {
@@ -1627,6 +1681,10 @@ export function answerWorkbenchData(): AnswerWorkbenchData {
   // 避免一张失效卡片让整个 candidates 组装（含卡片 HTML 渲染）中断。
   const matches = findAnswersForQuestion(answerTarget, lookupQuestion, titles, path)
     .filter(answerNoteExists)
+  if (!matches.length) {
+    const colorHint = subcardColorHint(answerTarget, lookupQuestion.note?.colorIndex)
+    if (colorHint) throw new Error(colorHint)
+  }
   return {
     questionTitle,
     sourceNotebookTitle: notebookTitle(sourceNotebookId),
@@ -1640,6 +1698,21 @@ export function answerWorkbenchData(): AnswerWorkbenchData {
       path: answer.pathTitles.filter(Boolean).join(" › "),
       html: answerCardHtml(answer, questionTitle)
     }))
+  }
+}
+
+export async function answerWorkbenchDataWithIndexRecovery(): Promise<AnswerWorkbenchData | { cancelled: true }> {
+  const resolved = resolveAnswerLookupContext()
+  if (resolved.error !== undefined) throw new Error(resolved.error)
+  try {
+    return answerWorkbenchData(resolved.question)
+  } catch (error) {
+    const recovery = await recoverAnswerIndexError(error, {
+      notebookId: resolved.sourceNotebookId, question: resolved.lookupQuestion, target: resolved.answerTarget
+    })
+    if (recovery === undefined) throw error
+    if (recovery === "refreshed" && currentNotebookId() === resolved.questionNotebookId) return answerWorkbenchData(resolved.question)
+    return { cancelled: true }
   }
 }
 
@@ -1758,6 +1831,8 @@ export async function openMenu(): Promise<void> {
     ["刷新答案索引", () => runSafely(refreshCurrentIndex)],
     [`设置匹配方式：${matchingModeLabel(answerTarget)}`, () => runSafely(configureAnswerMatching)],
     ["检查插件更新", () => checkForUpdates(true)],
+    ["从链接安装更新", () => installUpdateFromLink()],
+    ["查看更新状态", () => showUpdateStatus()],
     ["解除当前答案绑定", () => runSafely(unbindCurrent)]
   ]
   const result = await select(
@@ -1873,9 +1948,11 @@ export {
   onReviewModeControlPress,
   onReviewModeControlRelease,
   onReviewModeControlHover,
+  onReviewModePan,
+  onReviewModeResult,
+  onReviewModeExpand, onReviewModeBranch, onReviewModeQueuePick, onReviewModeToolbarResult,
   onReviewModeExit,
   onReviewModeIndex,
-  onReviewModeInfo,
   onReviewModeNext,
   onReviewModePrevious,
   startReviewMode
@@ -1895,7 +1972,7 @@ export const handlers = defineEventHandlers<(typeof events)[number]>({
     const existingMistake = note && notebookId
       ? mistakeRecordForSourceQuestion(new NodeNote(note, notebookId), notebookId)
       : undefined
-    updateMistakeToolbarTitle(Boolean(existingMistake))
+    updateMistakeToolbarTitle(Boolean(existingMistake), existingMistake)
     showAnswerToolbar(winRect)
   },
   async onClosePopupMenuOnNote() {

@@ -1,3 +1,5 @@
+import { WINDOW_CONTROL_BACKGROUND_OPACITY } from "./ui-tokens"
+
 export type WindowControlSide = "left" | "right"
 
 export const PANEL_CLOSE_SIDE_KEY = "marginnote.extension.mn4-answer-matcher.rails.close-side.v1"
@@ -57,8 +59,47 @@ export function answerControlBarLayout(
   }
 }
 
+/** 窗口操作与等级反馈共用原生胶囊底座。 */
+export function styleWindowControlCapsule(view: UIView): void {
+  view.backgroundColor = UIColor.colorWithHexString("#fcfcfd").colorWithAlphaComponent(WINDOW_CONTROL_BACKGROUND_OPACITY)
+  view.layer.cornerRadius = ANSWER_BAR_HEIGHT / 2
+  view.layer.masksToBounds = false
+  const layer = view.layer as any
+  layer.shadowColor = UIColor.blackColor()
+  layer.shadowOffset = { width: 0, height: 4 }
+  layer.shadowRadius = 9
+  layer.shadowOpacity = 0.18
+}
+
+/** 与 Web 视窗图标同一 24pt 几何，使用透明原生形状，避免 WebView 内容层白底。 */
+export function createWindowControlIcon(): UIView {
+  const icon = new UIView({ x: 13, y: 9, width: 18, height: 18 })
+  icon.backgroundColor = UIColor.clearColor()
+  ;(icon as any).userInteractionEnabled = false
+  const ink = UIColor.blackColor().colorWithAlphaComponent(0.82)
+  const frame = new UIView({ x: 2.25, y: 3, width: 13.5, height: 12 })
+  frame.backgroundColor = UIColor.clearColor()
+  frame.layer.borderColor = ink
+  frame.layer.borderWidth = 1.35
+  frame.layer.cornerRadius = 1.5
+  ;(frame as any).userInteractionEnabled = false
+  icon.addSubview(frame)
+  for (const shape of [
+    { x: 2.25, y: 6.075, width: 13.5, height: 1.35 },
+    { x: 4.575, y: 4.2, width: 1.35, height: 1.35 },
+    { x: 6.825, y: 4.2, width: 1.35, height: 1.35 }
+  ]) {
+    const line = new UIView(shape)
+    line.backgroundColor = ink
+    line.layer.cornerRadius = 0.675
+    ;(line as any).userInteractionEnabled = false
+    icon.addSubview(line)
+  }
+  return icon
+}
+
 /** 答案悬浮条内的无独立底色按钮：相邻点击面连续，不绘制中缝。 */
-export function createWindowControlButton(title: string, action: string, selected = false): UIButton {
+export function createWindowControlButton(title: string, action: string, selected = false, owner: any = self): UIButton {
   const button = UIButton.buttonWithType(0)
   button.autoresizingMask = 0
   button.setTitleForState(title, 0)
@@ -70,8 +111,8 @@ export function createWindowControlButton(title: string, action: string, selecte
   // 所有控件同为 UIButton，默认系统字号天然一致，不得显式引用 UIFont。
   button.layer.cornerRadius = 0
   button.layer.masksToBounds = false
-  button.addTargetActionForControlEvents(self, "onAnswerControlPress:", 1 << 0)
-  button.addTargetActionForControlEvents(self, "onAnswerControlRelease:", (1 << 6) | (1 << 7) | (1 << 8))
-  button.addTargetActionForControlEvents(self, action, 1 << 6)
+  button.addTargetActionForControlEvents(owner, "onAnswerControlPress:", 1 << 0)
+  button.addTargetActionForControlEvents(owner, "onAnswerControlRelease:", (1 << 6) | (1 << 7) | (1 << 8))
+  button.addTargetActionForControlEvents(owner, action, 1 << 6)
   return button
 }

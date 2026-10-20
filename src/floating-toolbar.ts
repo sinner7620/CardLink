@@ -1,12 +1,14 @@
 import { MN } from "marginnote"
 import { UI_COLORS } from "./ui-tokens"
 import { loadMatcherSettings } from "./settings"
+import { reviewResultHint, type MistakeRecord, type MistakeLevel } from "./mistake-domain"
 
 const BUTTON_WIDTH = 96
 const BUTTON_HEIGHT = 34
 const TOOLBAR_HEIGHT = BUTTON_HEIGHT * 2 + 6
 const DROPDOWN_GAP = 4
 const DROPDOWN_HEIGHT = BUTTON_HEIGHT * 3 + DROPDOWN_GAP * 4
+const DROPDOWN_WIDTH = BUTTON_WIDTH
 
 function toolbarButton(title: string, color: string, selector: string): UIButton {
   const button = UIButton.buttonWithType(0)
@@ -44,7 +46,7 @@ export function createAnswerToolbar(): UIView {
   self.answerToolbarButton = answerButton
   self.answerToolbarLongPressGesture = answerLongPress
   self.mistakeToolbarButton = mistakeButton
-  const dropdown = new UIView({ x: 0, y: 0, width: BUTTON_WIDTH, height: DROPDOWN_HEIGHT })
+  const dropdown = new UIView({ x: 0, y: 0, width: DROPDOWN_WIDTH, height: DROPDOWN_HEIGHT })
   dropdown.backgroundColor = UIColor.colorWithHexString(UI_COLORS.surface)
   dropdown.layer.cornerRadius = 9
   dropdown.layer.masksToBounds = false
@@ -53,22 +55,26 @@ export function createAnswerToolbar(): UIView {
   dropdownLayer.shadowOffset = { width: 0, height: 2 }
   dropdownLayer.shadowRadius = 5
   dropdownLayer.shadowOpacity = 0.24
+  const levelButtons: UIButton[] = []
   ;[
     ["不会", UI_COLORS.level0, "onMistakeLevel0Click:"],
     ["不熟", UI_COLORS.level1, "onMistakeLevel1Click:"],
     ["掌握", UI_COLORS.level2, "onMistakeLevel2Click:"]
   ].forEach(([title, color, selector], index) => {
     const button = toolbarButton(title, color, selector)
+    button.titleLabel.font = UIFont.systemFontOfSize(13)
     button.frame = {
       x: DROPDOWN_GAP,
       y: DROPDOWN_GAP + index * (BUTTON_HEIGHT + DROPDOWN_GAP),
-      width: BUTTON_WIDTH - DROPDOWN_GAP * 2,
+      width: DROPDOWN_WIDTH - DROPDOWN_GAP * 2,
       height: BUTTON_HEIGHT
     }
     dropdown.addSubview(button)
+    levelButtons.push(button)
   })
   dropdown.hidden = true
   self.mistakeLevelDropdown = dropdown
+  self.mistakeLevelButtons = levelButtons
   toolbar.hidden = true
   return toolbar
 }
@@ -118,8 +124,10 @@ export function showAnswerToolbar(winRect: string): void {
   self.answerToolbarShownAt = Date.now()
 }
 
-export function updateMistakeToolbarTitle(isExistingMistake: boolean): void {
+export function updateMistakeToolbarTitle(isExistingMistake: boolean, record?: MistakeRecord): void {
   self.mistakeToolbarButton?.setTitleForState(isExistingMistake ? "复习结果" : "标记错题", 0)
+  const curves = loadMatcherSettings().mistakeReviewCurves
+  ;["不会", "不熟", "掌握"].forEach((title, level) => self.mistakeLevelButtons?.[level]?.setTitleForState(`${title}  ${reviewResultHint(record, level as MistakeLevel, curves)}`, 0))
 }
 
 export function hideAnswerToolbar(owner: any = self): void {
@@ -136,7 +144,7 @@ export function showMistakeLevelDropdown(): void {
   const y = below + DROPDOWN_HEIGHT <= studyFrame.height - 8
     ? below
     : Math.max(8, toolbar.frame.y - DROPDOWN_HEIGHT - 5)
-  dropdown.frame = { x: toolbar.frame.x, y, width: BUTTON_WIDTH, height: DROPDOWN_HEIGHT }
+  dropdown.frame = { x: Math.max(8, Math.min(toolbar.frame.x, studyFrame.width - DROPDOWN_WIDTH - 8)), y, width: DROPDOWN_WIDTH, height: DROPDOWN_HEIGHT }
   dropdown.hidden = false
   if (!dropdown.superview) MN.studyController.view.addSubview(dropdown)
 }
@@ -161,4 +169,5 @@ export function destroyAnswerToolbar(): void {
   const dropdown = self.mistakeLevelDropdown
   if (dropdown?.superview) dropdown.removeFromSuperview()
   self.mistakeLevelDropdown = undefined
+  self.mistakeLevelButtons = undefined
 }

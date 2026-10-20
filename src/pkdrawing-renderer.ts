@@ -14,7 +14,7 @@ try {
   coreScriptText = ""
 }
 
-const rendererBody = String.raw`
+export const pkDrawingRendererBody = String.raw`
   var core = typeof __mnPkdrawingCore === 'undefined' ? null : __mnPkdrawingCore
   function esc(value){return String(value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
   function strokeBounds(ss){var minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
@@ -47,4 +47,4 @@ const rendererBody = String.raw`
   Array.prototype.forEach.call(document.querySelectorAll('canvas[data-drawing]'),draw)`
 
 // 用拼接而不是模板插值组装：注入的 core 文本可能含模板字符串字面量
-export const pkDrawingRendererScript = "(function(){" + coreScriptText + rendererBody + "})();"
+export const pkDrawingRendererScript = "(function(){" + coreScriptText + pkDrawingRendererBody + "})();"

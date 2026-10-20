@@ -64,9 +64,25 @@ await esbuild({
 })
 
 await viteBuild({ configFile: path.join(root, "web", "vite.config.js") })
+await esbuild({ entryPoints:[path.join(root,"web","card-command-surface.js")],outfile:path.join(webDist,"card-command-surface.js"),bundle:true,minify:true,format:"iife",platform:"browser",target:"safari13" })
+
+// A packaged, same-origin frame replaces srcDoc in scene panels. Drawing code
+// is emitted at build time; the frame never evaluates scripts from card HTML.
+const rendererBuild = await esbuild({
+  stdin: { contents: 'export { pkDrawingRendererBody } from "./src/pkdrawing-renderer"', resolveDir: root },
+  bundle: true, format: "cjs", platform: "node", write: false
+})
+const rendererExports = { exports: {} }
+const { runInNewContext } = await import("node:vm")
+runInNewContext(rendererBuild.outputFiles[0].text, { module: rendererExports, exports: rendererExports.exports })
+await writeFile(path.join(webDist, "preview-runtime.js"), pkdrawingCoreScript + "\nwindow.__mnRenderDrawings=function(){" + rendererExports.exports.pkDrawingRendererBody + "};\n")
+for (const name of ["preview.html", "preview.css"]) await copyFile(path.join(root, "web", name), path.join(webDist, name))
 await writeFile(path.join(webDist, "index.html"), `<!doctype html>
-<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>答案与错题工作台</title><link rel="icon" href="./logo.png"><link rel="stylesheet" href="./app.css"></head><body><div id="root"><p id="boot-message" role="status" style="padding:24px;font:15px system-ui;color:#666">正在载入错题工作台…</p></div><script src="./boot.js"></script></body></html>\n`)
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>答案与错题工作台</title><link rel="icon" href="./logo.png"><link rel="stylesheet" href="./app.css"></head><body><div id="root"><p id="boot-message" role="status" style="padding:24px;font:15px system-ui;color:#666">正在载入错题工作台…</p></div><script src="./host-policy.js"></script><script src="./annotation-client.js"></script><script src="./boot.js"></script></body></html>\n`)
 await copyFile(path.join(root, "web", "boot.js"), path.join(webDist, "boot.js"))
+for (const name of ["host-policy.js", "annotation-client.js", "scene-entry.js", "card-menu.js"]) {
+  await copyFile(path.join(root, "web", name), path.join(webDist, name))
+}
 
 await copyFile(path.join(root, "assets", "logo.png"), path.join(webDist, "logo.png"))
 
@@ -84,7 +100,8 @@ for (const [source, name] of [
 // Refresh its source-linked HTML on every complete build as one artifact set.
 await import("./scripts/build-full-ui-preview.mjs")
 
-for (const name of ["main.js", "ui-constants.js", "WebBridgeCommands.js", "WebPanelController.js", "WebAddon.js"]) {
+await copyFile(path.join(root, "web", "host-policy.js"), path.join(addonRoot, "host-policy.js"))
+for (const name of ["main.js", "SceneMedia.js", "SceneWorkbench.js", "ui-constants.js", "WebBridgeCommands.js", "WebPanelController.js", "WebAddon.js"]) {
   await copyFile(path.join(root, "rails-native", name), path.join(addonRoot, name))
 }
 
@@ -99,8 +116,13 @@ for (const match of entrySource.matchAll(/JSB\.require\("([^"]+)"\)/g)) {
   }
 }
 await cp(webDist, path.join(addonRoot, "web-dist"), { recursive: true })
+// Scene pages are served at mnpanel://panel/index.html; assets resolve from
+// /pkg/ maps to the package root (same as the reference cardpractice plugin).
+// Keep the file:// classic entry under web-dist unchanged.
+await copyFile(path.join(root, "web", "scene-index.html"), path.join(addonRoot, "index.html"))
 await copyFile(path.join(root, "assets", "logo.png"), path.join(addonRoot, "logo.png"))
 await copyFile(path.join(root, "THIRD_PARTY_NOTICES.txt"), path.join(addonRoot, "THIRD_PARTY_NOTICES.txt"))
+await copyFile(path.join(root,"LICENSE"),path.join(addonRoot,"LICENSE"))
 
 const manifest = {
   addonid: betaChannel
@@ -110,6 +132,14 @@ const manifest = {
   title: betaChannel ? "CardLink Beta" : "CardLink",
   version: pkg.version,
   marginnote_version_min: "4.0.0",
+  panel: "index.html",
+  panelWidth: 640,
+  panelMaxHeight: 1000,
+  events: ["practice", "comments"],
+  cardCommands: [
+    { id:"findAnswer", title:{"zh-Hans":"查找答案","zh-Hant":"尋找答案",en:"Find answer"} },
+    { id:"markMistake", title:{"zh-Hans":"标记错题","zh-Hant":"標記錯題",en:"Mark mistake"} }
+  ],
   cert_key: ""
 }
 await writeFile(path.join(addonRoot, "mnaddon.json"), `${JSON.stringify(manifest, null, 2)}\n`)

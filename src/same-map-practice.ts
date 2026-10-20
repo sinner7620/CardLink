@@ -1,25 +1,33 @@
 import { delay, MN, showHUD, type UIImage } from "marginnote"
 import { decodeBase64Ascii } from "./base64"
 import { loadMatcherSettings } from "./settings"
-import { focusNoteInMindMapFocusMode, locateNoteInCurrentMindMap } from "./note-navigation"
+import { focusNoteInMindMapFocusMode } from "./note-navigation"
 
 type Rect = { x: number; y: number; width: number; height: number }
 type Calibration = { sx: number; sy: number; tx: number; ty: number }
 type MaskAppearance = { color: string; image?: UIImage }
 
-interface PracticeSession {
+interface PracticeQueue {
   notebookId: string
   questionIds: Set<string>
+  generation: number
+}
+
+interface PracticeSession extends PracticeQueue {
+  kind: "masked"
   revealedQuestionIds: Set<string>
   canvas: any
   calibration: Calibration
   masks: Map<string, UIView>
   appearance: MaskAppearance
-  generation: number
   rebinding: boolean
 }
 
-let active: PracticeSession | undefined
+interface FocusPracticeSession extends PracticeQueue {
+  kind: "focus"
+}
+
+let active: PracticeSession | FocusPracticeSession | undefined
 let nextGeneration = 0
 let decodedMaskImage: { source: string; image: UIImage } | undefined
 function currentNotebookId(): string {
@@ -50,7 +58,8 @@ function selectedCardView(map: any): { id: string; view: any } | undefined {
   return { id: noteId(selected.note?.note ?? selected.note), view: selected.view ?? selected }
 }
 
-async function calibrationCard(map: any, questionIds: Set<string>): Promise<{ id: string; view: any; map: any } | undefined> {
+async function calibrationCard(map: any, questionIds: Set<string>, isCurrent: () => boolean = () => true): Promise<{ id: string; view: any; map: any } | undefined> {
+  if (!isCurrent()) return
   const current = selectedCardView(map)
   const firstQuestionId = [...questionIds][0]
   if (current?.id === firstQuestionId && current.view?.superview &&
@@ -59,6 +68,7 @@ async function calibrationCard(map: any, questionIds: Set<string>): Promise<{ id
   }
   if (!firstQuestionId || typeof MNUtil?.selectNotesInMindmap !== "function") return
   for (let attempt = 0; attempt < 10; attempt++) {
+    if (!isCurrent()) return
     const currentMap = MN.notebookController?.mindmapView
     const selected = selectedCardView(currentMap)
     if (selected?.id === firstQuestionId && selected.view?.superview) {
@@ -231,7 +241,8 @@ async function rebindMask(session: PracticeSession): Promise<void> {
   const calibrationId = selectedId && visibleIds.has(selectedId) ? selectedId : [...visibleIds][0]
   session.rebinding = true
   try {
-    const card = await calibrationCard(map, new Set([calibrationId]))
+    const card = await calibrationCard(map, new Set([calibrationId]), () => active === session &&
+      (!currentNotebookId() || currentNotebookId() === session.notebookId))
     const notebookId = currentNotebookId()
     if (active !== session || !card || (notebookId && notebookId !== session.notebookId)) return
     const currentMap = card.map
@@ -267,27 +278,30 @@ function schedule(session: PracticeSession): void {
 }
 
 export function sameMapPracticeActive(): boolean {
+  const notebookId = currentNotebookId()
+  if (active && notebookId && active.notebookId !== notebookId) stopSameMapPractice()
   return !!active
 }
 
 export function sameMapPracticeQuestionIds(): string[] {
-  return active ? [...active.questionIds] : []
+  return sameMapPracticeActive() && active ? [...active.questionIds] : []
 }
 
 export async function navigateSameMapPractice(questionId: string): Promise<boolean> {
+  if (!sameMapPracticeActive()) return false
   const session = active
   if (!session?.questionIds.has(questionId)) return false
-  if (!await locateNoteInCurrentMindMap(questionId)) {
-    showHUD("无法定位当前题目卡片", 3)
+  if (await focusNoteInMindMapFocusMode(questionId) !== "focused") {
+    showHUD("无法定位并聚焦当前题目卡片", 3)
     return false
   }
-  if (active !== session) return false
+  if (!sameMapPracticeActive() || active !== session) return false
   return true
 }
 
 export function revealSameMapQuestion(questionNoteId: string): boolean {
   const session = active
-  if (!session || !session.questionIds.has(questionNoteId)) return false
+  if (!session || session.kind !== "masked" || !session.questionIds.has(questionNoteId)) return false
   session.revealedQuestionIds.add(questionNoteId)
   clearMasks(session)
   if (!updateMask(session)) void rebindMask(session)
@@ -299,31 +313,41 @@ export function stopSameMapPractice(): void {
   active = undefined
   nextGeneration++
   if (!session) return
-  clearMasks(session)
+  if (session.kind === "masked") clearMasks(session)
 }
 
-export async function startSameMapPractice(notebookId: string, questionIds: Iterable<string>): Promise<{ started: boolean; reason?: string; answerCount?: number }> {
+export async function startSameMapPractice(notebookId: string, questionIds: Iterable<string>, options: { alreadyFocused?: boolean; maskAnswers?: boolean } = {}): Promise<{ started: boolean; reason?: string; answerCount?: number; maskAnswers?: boolean }> {
   stopSameMapPractice()
+  const generation = nextGeneration
   const selected = new Set(Array.from(questionIds).filter(Boolean))
   if (!selected.size) return { started: false, reason: "请先选择刷题范围" }
   const map = MN.notebookController?.mindmapView
   if (!map) return { started: false, reason: "请先打开题目脑图" }
-  const answerCount = answerFrames(map, selected).size
-  if (!answerCount) return { started: false, reason: "所选题目没有直接子卡片答案" }
   const firstQuestionId = [...selected][0]
-  if (await focusNoteInMindMapFocusMode(firstQuestionId) !== "focused") {
+  if (!options.alreadyFocused && await focusNoteInMindMapFocusMode(firstQuestionId) !== "focused") {
     return { started: false, reason: "无法定位并聚焦队列第一道题" }
   }
+  if (generation !== nextGeneration) return { started: false, reason: "做题模式已结束" }
+  const focusedNotebookId = currentNotebookId()
+  if (focusedNotebookId && focusedNotebookId !== notebookId) return { started: false, reason: "学习集已切换，请重新开始做题" }
+  if (options.maskAnswers === false) {
+    active = { kind: "focus", notebookId, questionIds: selected, generation: ++nextGeneration }
+    return { started: true, answerCount: 0, maskAnswers: false }
+  }
   let card: { id: string; view: any; map: any } | undefined
-  try { card = await calibrationCard(MN.notebookController?.mindmapView, new Set([firstQuestionId])) }
+  try { card = await calibrationCard(MN.notebookController?.mindmapView, new Set([firstQuestionId]), () => generation === nextGeneration &&
+    (!currentNotebookId() || currentNotebookId() === notebookId)) }
   catch { return { started: false, reason: "无法自动选中题目卡片以定位遮盖" } }
   if (!card) {
     return { started: false, reason: "无法定位当前脑图卡片的遮盖位置" }
   }
+  if (generation !== nextGeneration) return { started: false, reason: "做题模式已结束" }
+  const calibratedNotebookId = currentNotebookId()
+  if (calibratedNotebookId && calibratedNotebookId !== notebookId) return { started: false, reason: "学习集已切换，请重新开始做题" }
   const currentMap = card.map
   const nodes = Array.from(currentMap.mindmapNodes ?? []) as any[]
   const currentAnswerCount = answerFrames(currentMap, selected).size
-  if (!currentAnswerCount) return { started: false, reason: "当前脑图中未找到所选题目的直接子卡片" }
+  if (!currentAnswerCount) return { started: false, reason: "所选题目没有直接子卡片答案" }
   const anchorId = card.id
   const node = nodes.find(item => noteId(item?.note) === anchorId)
   const frame = modelFrame(node)
@@ -334,7 +358,7 @@ export async function startSameMapPractice(notebookId: string, questionIds: Iter
   try { appearance = maskAppearance() }
   catch (error) { return { started: false, reason: error instanceof Error ? error.message : "自定义遮盖图片加载失败" } }
   const session: PracticeSession = {
-    notebookId: currentNotebookId() || notebookId, questionIds: selected, revealedQuestionIds: new Set(), canvas: placement.canvas,
+    kind: "masked", notebookId: currentNotebookId() || notebookId, questionIds: selected, revealedQuestionIds: new Set(), canvas: placement.canvas,
     calibration: placement.calibration, masks: new Map(), appearance, generation: ++nextGeneration, rebinding: false
   }
   active = session
@@ -348,5 +372,5 @@ export async function startSameMapPractice(notebookId: string, questionIds: Iter
     return { started: false, reason: "放置答案遮盖失败" }
   }
   if (active === session) schedule(session)
-  return { started: active === session, answerCount: currentAnswerCount }
+  return { started: active === session, answerCount: currentAnswerCount, maskAnswers: true }
 }

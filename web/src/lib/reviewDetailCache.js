@@ -25,7 +25,7 @@ export function createReviewDetailCache(fetchDetail, maxEntries = 6, maxChars = 
           try {
             const detail = await fetchDetail(recordId)
             const size = (detail.questionHtml?.length || 0) + (detail.answers || []).reduce((n, a) => n + (a.html?.length || 0), 0)
-            if (epoch === generation && size <= maxChars) {
+            if (detail.answerStatus !== "index-missing" && epoch === generation && size <= maxChars) {
               entries.set(key, { detail, size }); chars += size
               while (entries.size > maxEntries || chars > maxChars) {
                 const oldest = entries.keys().next().value

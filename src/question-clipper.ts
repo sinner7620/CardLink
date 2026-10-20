@@ -1,5 +1,5 @@
 import { getLocalDataByKey, setLocalDataByKey, MN, NodeNote, showHUD, select } from "marginnote"
-import { setCardToolbarEnabled } from "./card-toolbar-state"
+import { hideAnswerToolbar } from "./floating-toolbar"
 
 // Adapted from the supplied QuestionClipper v0.4.1-beta.1 source.
 export type ClipStage = "title" | "question" | "answer"
@@ -17,6 +17,7 @@ interface ClipSession {
   notebookId: string; window: any; running: boolean; started: boolean; stage: ClipStage
   title: string; questionId: string; tempTitleId: string; motherId: string; motherTitle: string
   manualTitle: boolean
+  titleFormatted?: boolean
   manualNumber?: number
   completed: number; generation: number; seen: Set<string>; issue: string; previousContinue?: boolean
   settings: ClipSettings; changed: () => void
@@ -89,7 +90,7 @@ function titleNumber(title: string): number | undefined {
 }
 function questionTitle(s: ClipSession, note: any): { title: string; recordNumber?: () => void } {
   const base = s.title || clean(note.noteTitle || note.excerptText) || "未命名题目"
-  if (s.manualTitle || s.settings.titleMode === "original") return { title: s.title || clean(note.noteTitle),
+  if (s.manualTitle || s.titleFormatted || s.settings.titleMode === "original") return { title: s.title || clean(note.noteTitle),
     recordNumber: s.manualNumber ? () => rememberNumber(s, s.manualNumber!) : undefined }
   if (s.settings.titleMode === "prefix") return { title: `${s.settings.titlePrefix} · ${base}` }
   const mother = s.motherId && MN.db.getNoteById(s.motherId)
@@ -127,14 +128,14 @@ export function saveClipperSetting(excerptTitle: boolean, owner: any = self): vo
     s.settings = settings; s.generation++
     if (!s.questionId) {
       s.stage = excerptTitle ? s.title ? "question" : "title" : "question"
-      if (!excerptTitle && !s.manualTitle) { s.title = ""; s.tempTitleId = "" }
+      if (!excerptTitle && !s.manualTitle) { s.title = ""; s.titleFormatted = false; s.tempTitleId = "" }
     }
     s.issue = ""; s.changed()
     if (s.running) switchTool(s)
   }
 }
 function completeClipperQuestion(s: ClipSession): void {
-  s.completed++; s.title = ""; s.manualTitle = false; s.manualNumber = undefined; s.questionId = ""
+  s.completed++; s.title = ""; s.titleFormatted = false; s.manualTitle = false; s.manualNumber = undefined; s.questionId = ""
   s.stage = s.settings.excerptTitle ? "title" : "question"
 }
 export function saveClipperAnswerSetting(excerptAnswer: boolean, owner: any = self): void {
@@ -176,7 +177,6 @@ export function enterClipperMode(changed: () => void, owner: any = self): void {
   owner.questionClipper = { owner, notebookId, window, running: false, started: false,
     stage: settings.excerptTitle ? "title" : "question", title: "", manualTitle: false, questionId: "", tempTitleId: "",
     motherId: "", motherTitle: "", completed: 0, generation: 0, seen: new Set(), issue: "", settings, changed } satisfies ClipSession
-  setCardToolbarEnabled(false, owner)
   notifyClipperStateChanged(owner)
 }
 export function exitClipperMode(owner: any = self): void {
@@ -187,12 +187,17 @@ export function exitClipperMode(owner: any = self): void {
     try { if (query("ContinueExcerpt", s.window)?.checked !== s.previousContinue) run("ContinueExcerpt", s.window) } catch { /* host is closing */ }
   }
   owner.questionClipper = undefined
-  setCardToolbarEnabled(true, owner)
   notifyClipperStateChanged(owner)
 }
 function switchTool(s: ClipSession, attempt = 0): void {
   const generation = s.generation, stage = s.stage
-  const command = s.settings.tools[stage] ?? (stage === "title" ? "ToolTextExcerpt" : s.settings.tools.question ?? "ToolRectCut")
+  const command = s.settings.tools[stage]
+  if (!command) {
+    s.running = false
+    s.issue = "当前步骤尚未绑定摘录工具，请结束摘题后绑定工具"
+    s.changed(); showHUD(s.issue, 4)
+    return
+  }
   const live = () => session(s.owner) === s && s.running && s.generation === generation && s.stage === stage
   NSTimer.scheduledTimerWithTimeInterval([.18, .32, .48, .7, .95][attempt], false, () => {
     if (!live()) return
@@ -216,8 +221,20 @@ function switchTool(s: ClipSession, attempt = 0): void {
 export function toggleClipperRunning(owner: any = self): void {
   const s = session(owner)
   if (!s) return
+  if (!s.running) {
+    s.settings = clipperSettings()
+    const required = stages.filter(stage => stage === "question" ||
+      (stage === "title" && s.settings.excerptTitle) || (stage === "answer" && s.settings.excerptAnswer))
+    const missing = required.filter(stage => !s.settings.tools[stage])
+    if (missing.length) {
+      s.issue = `尚未绑定${missing.map(stage => ({ title: "标题", question: "题目", answer: "答案" })[stage]).join("、")}摘录工具，请先在设置中绑定后再开始`
+      s.changed(); showHUD(s.issue, 5)
+      return
+    }
+  }
   if (!s.started) s.previousContinue = query("ContinueExcerpt", s.window)?.checked === true
   s.started = true; s.running = !s.running; s.generation++; s.issue = ""
+  if (s.running) hideAnswerToolbar(owner)
   if (s.running) switchTool(s)
   s.changed()
   notifyClipperStateChanged(owner)
@@ -241,7 +258,7 @@ export function resetClipperQuestion(owner: any = self): void {
   const s = session(owner)
   if (!s?.started) { showHUD("请先开始摘题", 2); return }
   s.generation++
-  s.title = ""; s.manualTitle = false; s.manualNumber = undefined; s.questionId = ""; s.tempTitleId = ""; s.issue = ""
+  s.title = ""; s.titleFormatted = false; s.manualTitle = false; s.manualNumber = undefined; s.questionId = ""; s.tempTitleId = ""; s.issue = ""
   s.stage = s.settings.excerptTitle ? "title" : "question"
   if (query("ContinueExcerpt", s.window)?.checked) run("ContinueExcerpt", s.window)
   if (s.running) switchTool(s)
@@ -324,7 +341,10 @@ function handleExcerpt(s: ClipSession, id: string, expected: ClipStage, generati
     if (expected === "title") {
       const title = clean(note.excerptText || note.noteTitle || fallback)
       if (!title) throw new Error("未读到标题文字，请重新摘录标题")
-      s.title = title; s.manualTitle = false; s.manualNumber = undefined; s.tempTitleId = id; s.stage = "question"
+      const earlyPrefix = s.settings.titleMode === "prefix" || s.settings.titleMode === "mother"
+      const formatted = earlyPrefix ? questionTitle({ ...s, title, titleFormatted: false, manualTitle: false, manualNumber: undefined }, note).title : title
+      if (earlyPrefix) { note.noteTitle = formatted; commit(s.notebookId) }
+      s.title = formatted; s.titleFormatted = earlyPrefix; s.manualTitle = false; s.manualNumber = undefined; s.tempTitleId = id; s.stage = "question"
     } else if (expected === "question") {
       if (id === s.tempTitleId) throw new Error("请关闭连续摘录，创建独立的题目卡片")
       const formatted = questionTitle(s, note)

@@ -1,4 +1,6 @@
 /** Web、原生控件与卡片 HTML 共用的唯一语义色值源。 */
+export const WINDOW_CONTROL_BACKGROUND_OPACITY = 0.96
+
 export const UI_COLORS = {
   /** 主操作、选中态和链接强调色 */
   accent: "#0e8dfd",

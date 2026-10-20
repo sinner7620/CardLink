@@ -39,11 +39,18 @@ export interface BindingTarget {
 export type BindingValue = string | BindingTarget
 export type Bindings = Record<string, BindingValue>
 
-/** A separately bound answer map always preserves the question's child content. */
-export function usesOnlySubcardAnswers(target: BindingTarget | undefined, notebookId: string, rootNodeId: string, colorIndex: number): boolean {
-  const main = "__mn4_main_mindmap__"
+export function subcardColorHint(target: BindingTarget, colorIndex?: number): string | undefined {
+  if (target.designatedAnswer !== "subcard" && target.selectionMode !== "mixed") return
+  if (!target.questionColors?.length) return "尚未绑定题目卡片颜色，请先在设置 → 答案配置 → 对应绑定的题目筛选中添加题目卡片颜色"
+  if (typeof colorIndex !== "number" || !target.questionColors.includes(colorIndex)) {
+    return "当前题目卡片颜色未加入绑定，请在对应绑定的题目筛选中添加该颜色"
+  }
+}
+
+/** Direct children are answers based on source question color, regardless of the additional answer-map destination. */
+export function usesSubcardAnswers(target: BindingTarget | undefined, colorIndex?: number): boolean {
   return !!target && (target.designatedAnswer === "subcard" || target.selectionMode === "mixed") &&
-    target.notebookId === notebookId && (target.rootNodeId || main) === (rootNodeId || main) &&
+    typeof colorIndex === "number" &&
     target.questionColors?.includes(colorIndex) === true
 }
 

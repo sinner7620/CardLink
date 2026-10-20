@@ -1,8 +1,9 @@
 import { delay, MN, NodeNote, popup, setTimeInterval, showHUD, UndoManager } from "marginnote"
 import type { MbBookNote } from "marginnote"
 import { renderCardHtml } from "./card-html"
-import { usesOnlySubcardAnswers } from "./binding"
+import { usesSubcardAnswers } from "./binding"
 import { CardLinkError } from "./errors"
+import { isAnswerIndexError } from "./answer-index-recovery"
 import { appendBoundMindMapHandwriting, readBoundMindMapHandwriting } from "./bound-handwriting"
 import { answerCardHtml, refreshIndex } from "./matcher"
 import { findAnswersForQuestion } from "./answer-lookup"
@@ -59,6 +60,13 @@ const REMINDER_THROTTLE = 6 * 60 * 60 * 1000
 function userManualTags(record: Pick<MistakeRecord, "manualCategories" | "manualCategory"> | undefined): string[] {
   return cleanMistakeTags(manualTagsOf(record)).filter(tag => !isManagedMistakeTag(tag))
 }
+
+function assertFixedReviewEnabled(): void {
+  const settings = loadMatcherSettings()
+  if (settings.debugModeEnabled && settings.debugReviewAlgorithm === "fsrs") {
+    throw new Error("当前使用智能复习，请在待复习页提交四档反馈；切回固定曲线后可修改原等级")
+  }
+}
 // v4 intentionally ignores the v3 marker: beta.3/beta.5 could mark the check
 // complete after a transient zero-result read before the database was ready.
 function legacyLevelTagMigrationKey(): string {
@@ -109,11 +117,10 @@ function pathTitles(question: NodeNote): string[] {
 // 整个笔记本，逐题调用会造成 O(n²)；在每次批量入口开始时清空以保证新鲜度。
 const childMapIdsCache = new Map<string, string[]>()
 
-function childMapIdsForNotebook(notebookId: string): string[] {
+function childMapIdsForNotebook(notebookId: string, knownNotes?: MbBookNote[]): string[] {
   const cached = childMapIdsCache.get(notebookId)
   if (cached) return cached
-  const notebook = MN.db.getNotebookById(notebookId)
-  const ids = collectChildMindMapNoteIds(notebookNotes(notebook))
+  const ids = collectChildMindMapNoteIds(knownNotes ?? notebookNotes(MN.db.getNotebookById(notebookId)))
   if (childMapIdsCache.size >= 32) childMapIdsCache.clear()
   childMapIdsCache.set(notebookId, ids)
   return ids
@@ -123,9 +130,8 @@ function clearChildMapIdsCache(): void {
   childMapIdsCache.clear()
 }
 
-function sourceMindMapInfo(question: NodeNote, notebookId: string): { rootNodeId: string; rootTitle: string } {
-  const childMapIds = childMapIdsForNotebook(notebookId)
-  const rootNodeId = mindMapScopeIdForNote(question.note, childMapIds)
+function sourceMindMapInfo(question: NodeNote, notebookId: string, knownNotes?: MbBookNote[]): { rootNodeId: string; rootTitle: string } {
+  const rootNodeId = mindMapScopeIdForNote(question.note, () => childMapIdsForNotebook(notebookId, knownNotes))
   if (rootNodeId === MAIN_MINDMAP_SCOPE_ID) return { rootNodeId, rootTitle: "主脑图" }
   const rootNote = MN.db.getNoteById(rootNodeId)
   const rootTitle = rootNote ? new NodeNote(rootNote, notebookId).title?.trim() || "未命名子脑图" : "未命名子脑图"
@@ -232,7 +238,8 @@ function syncManualTagsFromSource(
   const sourceTags = tagState.customTags
   const storedTags = userManualTags(record)
   const customChanged = !(sourceTags.length === storedTags.length && sourceTags.every((tag, index) => tag === storedTags[index]))
-  if (tagState.level !== undefined && tagState.level !== record.level) {
+  if (tagState.level !== undefined && tagState.level !== record.level &&
+    !(loadMatcherSettings().debugModeEnabled && loadMatcherSettings().debugReviewAlgorithm === "fsrs")) {
     // 用户在 MarginNote 内直接改了三档等级标签：与面板内改等级走同一推算，采纳为记录等级。
     recordRuntimeState("标签反向同步", "采纳 MarginNote 内的等级变化", `targetNoteId=${record.sourceNoteId} level=${tagState.level}`)
     synced = reviewMistake(synced, tagState.level, new Date(), curves)
@@ -424,7 +431,8 @@ async function recoverMistakesFromSourceTagsInternal(): Promise<MistakeTagRecove
         const sourceNoteId = noteId(note)
         if (!sourceNoteId) continue
         const recordId = sourceRecordKey(sourceNotebookId, sourceNoteId)
-        const sourceMap = sourceMindMapInfo(question, sourceNotebookId)
+        // 复用已读取的完整列表；仅在缺少直接归属时才收集子脑图候选。
+        const sourceMap = sourceMindMapInfo(question, sourceNotebookId, notes)
         const sourceRootNodeId = sourceMap.rootNodeId
         if (isAnswerOnlyMistakeScope(answerOnlyScopes, sourceNotebookId, sourceRootNodeId)) continue
         found++
@@ -516,6 +524,7 @@ export async function markQuestionAsMistake(
   }
   // 卡片侧边改等级与其他入口统一：已有记录按一次复测确认由 reviewMistake 推算，
   // 复测次数、下次复测时间与复测历史同步推进，而不是只改等级字段。
+  if (previous) assertFixedReviewEnabled()
   const record = previous
     ? {
         ...reviewMistake(
@@ -599,6 +608,7 @@ export async function markQuestionsAsMistakes(
         answerRootNodeId: binding?.rootNodeId,
         level: requestedLevel
       }
+      if (previous) assertFixedReviewEnabled()
       const record = previous
         ? {
             // 与其他入口统一：已有记录按一次复测确认推进复习计划。
@@ -613,27 +623,34 @@ export async function markQuestionsAsMistakes(
     }
   }
 
-  let committedAll = false
+  const verified = new Set<string>()
+  let committed = false
   if (prepared.length) {
-    committedAll = commitSourceTagTasks("批量标记错题", [{
+    committed = commitSourceTagTasks("批量标记错题", [{
       notebookId: sourceNotebookId,
       run: () => {
-        let status: TagWriteStatus = "verified"
+        verified.clear()
         for (const { record, previous } of prepared) {
-          status = combineTagWriteStatus(status, applySourceTags(record, userManualTags(previous)))
+          try {
+            if (applySourceTags(record, userManualTags(previous)) === "verified") verified.add(record.recordId)
+          } catch (error) {
+            captureDiagnosticError(error, "错题管理")
+          }
         }
-        return status
+        // 同一学习集仍只提交一次；失败卡片不撤销其他已回读确认的写入。
+        return verified.size ? "verified" : "failed"
       }
     }]).length > 0
-    if (committedAll) {
-      for (const { record } of prepared) upsertMistakeRecord(state, withTagsWritten(record))
+    if (committed) {
+      for (const { record } of prepared) {
+        if (verified.has(record.recordId)) upsertMistakeRecord(state, withTagsWritten(record))
+      }
       saveMistakeState(state)
-    } else {
-      failed += prepared.length
     }
   }
 
-  const succeeded = committedAll ? prepared : []
+  const succeeded = committed ? prepared.filter(item => verified.has(item.record.recordId)) : []
+  failed += prepared.length - succeeded.length
   return {
     added: succeeded.filter(item => !item.previous).length,
     updated: succeeded.filter(item => Boolean(item.previous)).length,
@@ -676,6 +693,7 @@ export function mistakeAnswerContext(
  * 档位相同按一次复测确认推进，档位不同重置复习序列；复习计划只由 reviewMistake 推算。
  */
 async function confirmMistakeLevel(recordId: string, level: MistakeLevel): Promise<MistakeRecord> {
+  assertFixedReviewEnabled()
   if (!isMistakeLevel(Number(level))) throw new Error("错题等级必须为不会、不熟或掌握")
   const state = loadMistakeState()
   const stored = state.records[recordId]
@@ -724,6 +742,7 @@ export function changeMistakeLevelById(recordId: string, level: MistakeLevel): P
 }
 
 export async function resumeMistakeReviewById(recordId: string): Promise<MistakeRecord> {
+  assertFixedReviewEnabled()
   const state = loadMistakeState()
   const previous = state.records[recordId]
   if (!previous) throw new CardLinkError("mistakeRecordMissing")
@@ -748,6 +767,7 @@ export async function reviewMistakesByIds(
   recordIds: unknown,
   level: MistakeLevel
 ): Promise<BatchMistakeChangeResult> {
+  assertFixedReviewEnabled()
   if (!isMistakeLevel(Number(level))) throw new Error("错题等级必须为不会、不熟或掌握")
   const ids = uniqueRecordIds(recordIds)
   if (!ids.length) throw new Error("请至少选择一道错题")
@@ -988,6 +1008,45 @@ export function mistakeWorkbenchRevision(): string {
   return `${ids.length}:${(hash >>> 0).toString(36)}`
 }
 
+/** Explicit toolbar refresh: re-read listed sources, without a recovery scan or tag writes. */
+export async function refreshMistakeList(): Promise<{ refreshed: number }> {
+  clearChildMapIdsCache()
+  const originals = Object.values(loadMistakeState().records)
+  const updates: Array<{ original: MistakeRecord; record: MistakeRecord; cancelled: boolean }> = []
+  const curves = loadMatcherSettings().mistakeReviewCurves
+  for (let index = 0; index < originals.length; index++) {
+    const original = originals[index]
+    try {
+      const record = refreshRecord(original)
+      const synced = syncManualTagsFromSource(record, curves)
+      updates.push({ original, record: synced.record, cancelled: synced.cancelled })
+    } catch (error) { captureDiagnosticError(error, "刷新错题列表") }
+    if (index % 40 === 39) await delay(0.01)
+  }
+  const state = loadMistakeState()
+  let refreshed = 0
+  for (const { original, record, cancelled } of updates) {
+    // A review/tag edit completed while yielding owns the newer record.
+    if (JSON.stringify(state.records[original.recordId]) !== JSON.stringify(original)) continue
+    if (cancelled) {
+      archiveMistakeRecords([original])
+      removeMistakeRecord(state, original.recordId)
+      refreshed++
+    } else if (JSON.stringify(record) !== JSON.stringify(original)) {
+      if (record.recordId !== original.recordId) removeMistakeRecord(state, original.recordId)
+      const existing = state.records[record.recordId]
+      upsertMistakeRecord(state, {
+        ...(existing && record.recordId !== original.recordId ? mergeIndexedRecords(existing, record) : record),
+        updatedAt: new Date(Math.max(Date.now(), (Date.parse(original.updatedAt) || 0) + 1)).toISOString()
+      })
+      refreshed++
+    }
+  }
+  if (refreshed) saveMistakeState(state)
+  workbenchDataCache = undefined
+  return { refreshed }
+}
+
 export function mistakeWorkbenchData(): MistakeWorkbenchData {
   const state = loadMistakeState()
   const matcherSettings = loadMatcherSettings()
@@ -1162,6 +1221,7 @@ export async function removeMistakesByIds(recordIds: unknown): Promise<BatchMist
 }
 
 export function saveMistakeReviewCurves(value: unknown): MistakeReviewCurves {
+  assertFixedReviewEnabled()
   const curves = normalizeMistakeReviewCurves(value)
   saveMatcherSettings({ mistakeReviewCurves: curves })
   showHUD("已保存错题复习天数；将在新标记或完成复习后生效", 4)
@@ -1226,15 +1286,15 @@ function questionHtml(record: MistakeRecord, resolveNote: ScopedNoteResolver = c
   if (!note) throw new CardLinkError("sourceNoteUnavailable")
   const scopeId = record.sourceRootNodeId || MAIN_MINDMAP_SCOPE_ID
   const target = answerBinding(record.sourceNotebookId, scopeId)
-  const onlySubcardAnswers = usesOnlySubcardAnswers(target, record.sourceNotebookId, scopeId, note.colorIndex)
-  return renderCardHtml(note, "错题原题", id => resolveNote(record.sourceNotebookId, id), media, media, false, !onlySubcardAnswers)
+  const subcardAnswers = usesSubcardAnswers(target, note.colorIndex)
+  return renderCardHtml(note, "错题原题", id => resolveNote(record.sourceNotebookId, id), media, media, false, !subcardAnswers)
 }
 
 export interface MistakeDetailData {
   record: MistakeWorkbenchRecord
   questionHtml: string
   answers: Array<{ id: string; title: string; path: string; html: string }>
-  answerStatus: "ready" | "unbound" | "not-found" | "index-missing"
+  answerStatus: "ready" | "unbound" | "not-found" | "index-missing" | "deferred"
 }
 
 export interface MistakeQuestionData {
@@ -1295,13 +1355,24 @@ function answerCandidatesForRecord(record: MistakeRecord, node: NodeNote, resolv
     const answerStatus: MistakeDetailData["answerStatus"] = answers.length ? "ready" : "not-found"
     return { answers, answerStatus, lookupDurationMs, answerHtmlDurationMs: Date.now() - answerHtmlStartedAt }
   } catch (error) {
-    return { answers: [], answerStatus: String(error).includes("索引") ? "index-missing" : "not-found", lookupDurationMs: 0, answerHtmlDurationMs: 0 }
+    return { answers: [], answerStatus: isAnswerIndexError(error) ? "index-missing" : "not-found", lookupDurationMs: 0, answerHtmlDurationMs: 0 }
   }
 }
 
 export interface MistakeContentData {
   questionHtml: string
   answers: Array<{ id: string; title: string; path: string; html: string }>
+}
+
+/** Read-only review content: never sync tags, edit levels or write fixed progress. */
+export function isolatedReviewContent(recordId: string): MistakeContentData {
+  const record = loadMistakeState().records[recordId]
+  if (!record) throw new CardLinkError("mistakeRecordMissing")
+  const note = MN.db.getNoteById(record.sourceNoteId)
+  if (!note) throw new CardLinkError("sourceNoteUnavailable")
+  const node = new NodeNote(note, record.sourceNotebookId)
+  const { answers } = answerCandidatesForRecord(record, node)
+  return { questionHtml: previewQuestionHtml(record), answers }
 }
 
 export interface MistakeContentReader {
@@ -1356,7 +1427,7 @@ export function createMistakeContentReader(): MistakeContentReader {
   }
 }
 
-export function mistakeDetailById(recordId: string): MistakeDetailData {
+export function mistakeDetailById(recordId: string, content: "all" | "question" | "answers" = "all"): MistakeDetailData {
   const detailStartedAt = Date.now()
   const state = loadMistakeState()
   const stored = state.records[recordId]
@@ -1368,22 +1439,24 @@ export function mistakeDetailById(recordId: string): MistakeDetailData {
     saveMistakeState(state)
     throw new CardLinkError("mistakeTagRemoved")
   }
-  const titleChanged = synced.record.sourceTitle !== stored.sourceTitle
-  const record = titleChanged ? {
+  const metadataChanged = JSON.stringify(synced.record) !== JSON.stringify(stored)
+  const record = metadataChanged ? {
     ...synced.record,
     // 标题变化也属于列表快照变化；确保同毫秒内的编辑能使 revision 失效。
     updatedAt: new Date(Math.max(Date.now(), (Date.parse(stored.updatedAt) || 0) + 1)).toISOString()
   } : synced.record
-  if (synced.changed || titleChanged) {
+  if (metadataChanged) {
     upsertMistakeRecord(state, record)
     saveMistakeState(state)
   }
   const note = MN.db.getNoteById(record.sourceNoteId)
   if (!note) throw new CardLinkError("sourceNoteUnavailable")
   const node = new NodeNote(note, record.sourceNotebookId)
-  const { answers, answerStatus, lookupDurationMs, answerHtmlDurationMs } = answerCandidatesForRecord(record, node)
+  const { answers, answerStatus, lookupDurationMs, answerHtmlDurationMs } = content === "question"
+    ? { answers: [], answerStatus: "deferred" as const, lookupDurationMs: 0, answerHtmlDurationMs: 0 }
+    : answerCandidatesForRecord(record, node)
   const questionHtmlStartedAt = Date.now()
-  const renderedQuestionHtml = previewQuestionHtml(record)
+  const renderedQuestionHtml = content === "answers" ? "" : previewQuestionHtml(record)
   const questionHtmlDurationMs = Date.now() - questionHtmlStartedAt
   const detail = {
     record: {
@@ -1400,7 +1473,7 @@ export function mistakeDetailById(recordId: string): MistakeDetailData {
     answerStatus
   }
   // 分段耗时：定位"详情慢"究竟是记录解析、答案匹配还是 HTML 生成
-  recordRuntimeState("桥接", "mistakeDetail 分段", `durationMs=${Date.now() - detailStartedAt} lookupMs=${lookupDurationMs} answerHtmlMs=${answerHtmlDurationMs} questionHtmlMs=${questionHtmlDurationMs} htmlBytes=${detail.questionHtml?.length || 0} answers=${answers.length} status=${answerStatus}`)
+  recordRuntimeState("桥接", "mistakeDetail 分段", `content=${content} durationMs=${Date.now() - detailStartedAt} lookupMs=${lookupDurationMs} answerHtmlMs=${answerHtmlDurationMs} questionHtmlMs=${questionHtmlDurationMs} htmlBytes=${detail.questionHtml?.length || 0} answers=${answers.length} status=${answerStatus}`)
   return detail
 }
 
@@ -1412,6 +1485,12 @@ export async function openSourceByMistakeId(
   const enterFocusMode = options.enterFocusMode ?? loadMatcherSettings().sourceLocateMode === "focus"
   const locateHint = await openNoteInMindMap(record.sourceNoteId, record.sourceNotebookId, { enterFocusMode })
   return locateHint ? { locateHint } : {}
+}
+
+export function mistakeHandwritingTarget(recordId: string): { recordId: string; noteid: string; topicid: string; title: string } {
+  const record = recordById(recordId)
+  if (!MN.db.getNoteById(record.sourceNoteId)) throw new CardLinkError("sourceNoteUnavailable")
+  return { recordId: record.recordId, noteid: record.sourceNoteId, topicid: record.sourceNotebookId, title: record.sourceTitle }
 }
 
 export async function openMistakeById(recordId: string): Promise<{ locateHint?: string }> {

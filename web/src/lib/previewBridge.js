@@ -4,10 +4,13 @@ const DAY = 86400000
 const levelCurves = [[1, 3, 7], [2, 5, 10], [14]]
 let customCategories = ["计算题", "概念辨析", "需要重做"]
 let debugModeEnabled = false
+let reviewAlgorithm = "fixed"
+let debugUpdateDownloadsEnabled = false
+let debugAutoInstallUpdatesEnabled = false
 let pluginEnabled = true
 let previewClipper = { mode: false, running: false, started: false, excerptTitle: true, toolLabels: {} }
 let sourceLocateMode = "locate"
-let previewPersonalSettings = { boundHandwritingDisplay: "doubleTap", mistakeListDisplay: "always", subcardAnswerDisplay: "window", answerMaskStyle: "dark", answerMaskColor: "#141922", maskImageConfigured: false, autoCollapseComments: false, reviewExpandedCommentCount: 2 }
+let previewPersonalSettings = { sceneWorkbenchEnabled: false, entranceDefaultMode: "practice", boundHandwritingDisplay: "doubleTap", mistakeListDisplay: "always", subcardAnswerDisplay: "window", answerMaskStyle: "dark", answerMaskColor: "#141922", maskImageConfigured: false, autoCollapseComments: false, reviewExpandedCommentCount: 2 }
 let manualTodayIds = []
 let previewBindings = [
   { key: "questions::root::main", notebookId: "questions", notebookTitle: "多元微分", sourceRootNodeId: "main", sourceTitle: "考研真题", answerTitle: "多元微分答案 › 标准答案", hasAnswerMindMap: true, selectionMode: "mixed", designatedAnswer: "mindmap", questionColors: [1], availableColors: [0, 1, 2, 3] },
@@ -206,6 +209,20 @@ function previewPreparationCurrent() {
 }
 
 export async function previewSend(command, payload = null) {
+  if (debugModeEnabled && reviewAlgorithm === "fsrs" && ["saveMistakeReviewCurves", "reviewMistake", "changeMistakeLevel", "reviewMistakes", "changeMistakeLevels", "resumeMistakeReview"].includes(command)) throw new Error("FSRS 模式下固定曲线只读，请在待复习中提交反馈")
+  if (command === "setReviewAlgorithm") {
+    if (!debugModeEnabled) throw new Error("请先开启调试模式")
+    if (!["fixed", "fsrs"].includes(payload?.algorithm)) throw new Error("无效的算法")
+    if (payload.algorithm === "fsrs") (await import("./fsrsPreview")).fsrsPreview("initialize", null, records)
+    reviewAlgorithm = payload.algorithm
+    return { algorithm: reviewAlgorithm }
+  }
+  if (command.startsWith("fsrs")) {
+    if (!debugModeEnabled || reviewAlgorithm !== "fsrs") throw new Error("请先开启调试模式和智能复习")
+    if (command === "fsrsContent") return detail(payload.recordId)
+    return (await import("./fsrsPreview")).fsrsPreview(command, payload, records)
+  }
+  if (command === "startFsrsReviewMode") throw new Error("原生复习模式需要在 MarginNote 中使用")
   if (command === "mistakesRevision") return { revision: workbench().revision || "preview" }
   // AI 配置页与总览 AI 面板的预览 mock：形状与原生 publicSettings/报告索引一致。
   if (command === "aiConfirmDevelopmentWarning") return { confirmed: true }
@@ -267,7 +284,9 @@ export async function previewSend(command, payload = null) {
   if (command === "aiCancelQuestionPreparation") { if (previewPreparationJob) previewPreparationJob.status = "cancelled"; return { cancelled: !!previewPreparationJob } }
   if (command === "aiPreviewAnalysis") return { subjectId: payload?.subjectId, recordCount: 3, analyzableCount: 3, preparedCount: 2, needsPreparation: 1, withHistory: 2, withoutAnswerBinding: 1 }
   if (command === "aiRunDueSchedules" || command === "aiGetJob") return { accepted: true, status: "missing" }
+  if (command === "refreshMistakeList") return { refreshed: 0 }
   if (command === "dashboard") return {
+    reviewAlgorithm: debugModeEnabled ? reviewAlgorithm : "fixed",
     clipper: previewClipper,
     version: "2.4.0 · 完整界面预览",
     mistakes: workbenchPage(),
@@ -280,6 +299,8 @@ export async function previewSend(command, payload = null) {
       pairs: 0,
       regexRules: { questionPattern: "", answerPattern: "" },
       debugModeEnabled,
+      debugUpdateDownloadsEnabled,
+      debugAutoInstallUpdatesEnabled,
       pluginEnabled,
       sourceLocateMode,
       ...previewPersonalSettings
@@ -339,16 +360,36 @@ export async function previewSend(command, payload = null) {
   }
   if (command === "setDebugMode") {
     debugModeEnabled = payload?.enabled === true
-    return { enabled: debugModeEnabled }
+    if (!debugModeEnabled) { debugUpdateDownloadsEnabled = false; debugAutoInstallUpdatesEnabled = false }
+    return { enabled: debugModeEnabled, algorithm: debugModeEnabled ? reviewAlgorithm : "fixed" }
+  }
+  if (command === "setDebugUpdateDownloads") {
+    if (!debugModeEnabled) throw new Error("请先开启调试模式")
+    debugUpdateDownloadsEnabled = payload?.enabled === true
+    return { debugUpdateDownloadsEnabled }
+  }
+  if (command === "showUpdateStatus") return { preview: true }
+  if (command === "setDebugAutoInstallUpdates") {
+    if (!debugModeEnabled) throw new Error("请先开启调试模式")
+    debugAutoInstallUpdatesEnabled = payload?.enabled === true
+    return { debugAutoInstallUpdatesEnabled }
   }
   if (command === "setPluginEnabled") {
     pluginEnabled = payload?.enabled === true
     return { enabled: pluginEnabled }
   }
-  if (command === "mistakeDetail") return detail(String(payload?.recordId ?? ""))
+  if (command === "mistakeDetail") {
+    const value = detail(String(payload?.recordId ?? ""))
+    if (payload?.content === "question") return { ...value, answers: [], answerStatus: "deferred" }
+    if (payload?.content === "answers") return { ...value, questionHtml: "" }
+    return value
+  }
   if (command === "mistakeQuestion") {
     const value = detail(String(payload?.recordId ?? ""))
     return { questionHtml: value.questionHtml }
+  }
+  if (command === "openMistakeHandwriting") {
+    throw new Error("浏览器预览无法打开 MarginNote 原生手写板，请在支持场景插件的 MarginNote 中使用")
   }
   if (command === "chooseSourceLocateMode") {
     sourceLocateMode = sourceLocateMode === "focus" ? "locate" : "focus"

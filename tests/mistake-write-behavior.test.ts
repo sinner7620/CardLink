@@ -10,6 +10,7 @@ import assert from "node:assert/strict"
 
 // ---------- marginnote 运行时 mock ----------
 const notesById: Record<string, any> = {}
+const forbiddenNotebookScans = new Set<string>()
 const refreshed: string[] = []
 const syncDirty: string[] = []
 const undoCalls: Array<{ action: string; notebookId: string }> = []
@@ -51,6 +52,7 @@ class FakeNodeNote {
   set tags(next: string[]) { setTagsOf(this.note, next) }
   tidyupTags() {}
   get title() { return this.note?.title }
+  get titles() { return [this.title].filter(Boolean) }
 }
 
 class FakeUndoManager {
@@ -87,7 +89,10 @@ const marginnoteMock = {
     currnetNotebookId: "",
     db: {
       getNoteById: (id: string) => notesById[id],
-      getNotebookById: (id: string) => ({ topicId: id, notes: [] }),
+      getNotebookById: (id: string) => ({ topicId: id, get notes() {
+        if (forbiddenNotebookScans.has(id)) throw new Error("单题详情不应全量扫描学习集")
+        return []
+      } }),
       allNotebooks: () => [],
       setNotebookSyncDirty: (id: string) => syncDirty.push(id)
     },
@@ -162,6 +167,107 @@ function mistakeStateRecords(): Record<string, any> {
   const parsed = typeof raw === "string" ? JSON.parse(raw) : raw
   return parsed?.records ?? {}
 }
+
+test("混合绑定其他脑图时，详情/轻量原题/只读提取不夹带子卡答案；纯脑图模式保留子卡内容", async () => {
+  const book = `mixedPreview${seq++}`
+  const id = await seedRecord(book, `${book}-q`, 0)
+  const source = notesById[`${book}-q`]
+  source.childMindMap = { noteId: `${book}-root` }
+  source.colorIndex = 0
+  source.excerptText = "QUESTION_MARKER"
+  source.childNotes = [{ noteId: `${book}-a`, noteTitle: "答案子卡", excerptText: "ANSWER_MARKER" }]
+  const bindings = await import("../src/store")
+  const previousBindings = bindings.loadBindings()
+  forbiddenNotebookScans.add(book)
+  try {
+    for (const targetBook of [book, `${book}-other`]) {
+      bindings.saveBindings({ [`${book}::root::${book}-root`]: {
+        notebookId: targetBook, rootNodeId: "separate-answer-map", selectionMode: "mixed", questionColors: [0]
+      } })
+      for (const html of [manager.mistakeDetailById(id, "question").questionHtml,
+        manager.mistakeQuestionById(id).questionHtml, manager.createMistakeContentReader().readQuestion(id).questionHtml]) {
+        assert.match(html, /QUESTION_MARKER/)
+        assert.doesNotMatch(html, /ANSWER_MARKER/)
+      }
+    }
+    bindings.saveBindings({ [`${book}::root::${book}-root`]: {
+      notebookId: "answers", designatedAnswer: "mindmap", questionColors: [0]
+    } })
+    assert.match(manager.mistakeQuestionById(id).questionHtml, /ANSWER_MARKER/)
+    bindings.saveBindings({ [`${book}::root::${book}-root`]: {
+      notebookId: "answers", selectionMode: "mixed", questionColors: [1]
+    } })
+    assert.match(manager.mistakeQuestionById(id).questionHtml, /ANSWER_MARKER/)
+  } finally { bindings.saveBindings(previousBindings); forbiddenNotebookScans.delete(book) }
+})
+
+test("批量标记逐卡保存成功项，单卡失败不丢其他复测历史；去重且只提交一次学习集", async () => {
+  const book = `batchMark${seq++}`
+  const goodId = await seedRecord(book, `${book}-good`, 0)
+  const badId = await seedRecord(book, `${book}-bad`, 0)
+  const badNote = `${book}-bad`, newNote = `${book}-new`
+  notesById[newNote] = { noteId: newNote, title: "新题", comments: [{ type: "TextNote", text: "#用户标签" }] }
+  const beforeBad = JSON.parse(JSON.stringify(mistakeStateRecords()[badId]))
+  const beforeUndo = undoCalls.length
+  noWriteNotes.add(badNote)
+  try {
+    const cards = [`${book}-good`, badNote, newNote, `${book}-good`].map(id => new FakeNodeNote(notesById[id], book))
+    const result = await manager.markQuestionsAsMistakes(cards as any, book, 1)
+    assert.equal(result.added, 1)
+    assert.equal(result.updated, 1)
+    assert.equal(result.failed, 1)
+    assert.equal(result.records.length, 2)
+    const saved = mistakeStateRecords()
+    assert.equal(saved[goodId].history.length, 1)
+    assert.equal(saved[goodId].history[0].level, 1)
+    assert.ok(saved[goodId].lastReviewedAt)
+    assert.deepEqual(saved[badId], beforeBad)
+    assert.ok(saved[`${book}:${newNote}`])
+    assert.ok(tagsOf(notesById[newNote]).includes("用户标签"))
+    assert.equal(undoCalls.length - beforeUndo, 1)
+    assert.equal(undoCalls[undoCalls.length - 1]?.notebookId, book)
+    assert.equal(refreshed[refreshed.length - 1], book)
+    assert.equal(syncDirty[syncDirty.length - 1], book)
+  } finally { noWriteNotes.delete(badNote) }
+})
+
+test("批量标记全部写入失败时不创建记录；无效卡片计失败，重复项不重复计数", async () => {
+  await loadModules()
+  const book = `batchFailure${seq++}`, note = `${book}-new`
+  notesById[note] = { noteId: note, title: "未写入题目", comments: [] }
+  noWriteNotes.add(note)
+  try {
+    const card = new FakeNodeNote(notesById[note], book)
+    const result = await manager.markQuestionsAsMistakes([card, card, new FakeNodeNote({}, book)] as any, book, 0)
+    assert.equal(result.added, 0)
+    assert.equal(result.updated, 0)
+    assert.equal(result.failed, 2)
+    assert.deepEqual(result.records, [])
+    assert.equal(mistakeStateRecords()[`${book}:${note}`], undefined)
+  } finally { noWriteNotes.delete(note) }
+})
+
+test("显式列表刷新同步全部原卡标题标签与缺失状态，不写原卡、不增加复习次数", async () => {
+  const book = `refresh${seq++}`
+  const liveId = await seedRecord(book, `${book}-live`, 0)
+  const missingId = await seedRecord(book, `${book}-missing`, 0)
+  const live = notesById[`${book}-live`]
+  live.title = "修改后的题名"
+  setTagsOf(live, ["错题_不会", "很长的用户标签"])
+  delete notesById[`${book}-missing`]
+  manager.mistakeWorkbenchData() // Warm the cached list before refreshing.
+  const writes = undoCalls.length
+  await manager.refreshMistakeList()
+  const records = manager.mistakeWorkbenchData().records
+  assert.equal(records.find(r => r.recordId === liveId)?.sourceTitle, "修改后的题名")
+  assert.deepEqual(records.find(r => r.recordId === liveId)?.manualCategories, ["很长的用户标签"])
+  assert.equal(records.find(r => r.recordId === liveId)?.reviewCount, 0)
+  assert.equal(records.find(r => r.recordId === missingId)?.noteAvailable, false)
+  assert.equal(undoCalls.length, writes)
+  notesById[`${book}-missing`] = { noteId: `${book}-missing`, title: "恢复原卡", comments: [{ type: "TextNote", text: "#错题_不会" }] }
+  await manager.refreshMistakeList()
+  assert.equal(manager.mistakeWorkbenchData().records.find(r => r.recordId === missingId)?.noteAvailable, true)
+})
 
 test("取消已删除原卡片的错题：直接持久化删除，不访问学习集写入", async () => {
   const notebookId = `nbDeleted${seq++}`
@@ -243,6 +349,61 @@ test("原卡仅改标题后读取详情：保存新标题并使列表缓存失�
   assert.equal(nextList.records.find(record => record.recordId === id)?.sourceTitle, detail.record.sourceTitle)
   manager.mistakeDetailById(id)
   assert.equal(manager.mistakeWorkbenchRevision(), nextList.revision, "标题未变化时不反复更新版本")
+})
+
+test("首次打开子脑图题目直接取卡，移动后详情同步新脑图且不扫描学习集", async () => {
+  const notebookId = `nbDirect${seq++}`
+  const noteId = `${notebookId}-note`
+  const id = await seedRecord(notebookId, noteId, 0)
+  notesById[noteId].childMindMap = { noteId: "first-root" }
+  forbiddenNotebookScans.add(notebookId)
+  try {
+    const first = manager.mistakeDetailById(id, "question")
+    assert.equal(first.record.sourceRootNodeId, "first-root")
+    assert.ok(first.questionHtml)
+    assert.equal(first.answerStatus, "deferred")
+    notesById[noteId].childMindMap = { noteId: "moved-root" }
+    const moved = manager.mistakeDetailById(id, "question")
+    assert.equal(moved.record.sourceRootNodeId, "moved-root")
+    assert.equal(mistakeStateRecords()[id].sourceRootNodeId, "moved-root")
+  } finally { forbiddenNotebookScans.delete(notebookId) }
+})
+
+test("错题详情将带错误码的索引未建立识别为可恢复状态，读取原题不触发该查询", async () => {
+  const notebookId = `nbIndexMissing${seq++}`
+  const noteId = `${notebookId}-note`
+  const id = await seedRecord(notebookId, noteId, 0)
+  const state = store.loadMistakeState()
+  store.upsertMistakeRecord(state, { ...state.records[id], answerNotebookId: `${notebookId}-answers` })
+  store.saveMistakeState(state)
+  assert.equal(manager.mistakeDetailById(id, "question").answerStatus, "deferred")
+  assert.equal(manager.mistakeDetailById(id, "answers").answerStatus, "index-missing")
+})
+
+test("详情可先读原题并延后答案；答案请求不再次读取原题笔迹", async () => {
+  const notebookId = `nbDeferred${seq++}`
+  const noteId = `${notebookId}-note`
+  const id = await seedRecord(notebookId, noteId, 0)
+  const db = marginnoteMock.MN.db as any
+  let handwritingReads = 0
+  db.getSketchNoteForMindMapFocusNoteId = () => { handwritingReads++; return null }
+  try {
+    notesById[noteId].title = "按需详情"
+    const question = manager.mistakeDetailById(id, "question")
+    assert.equal(question.answerStatus, "deferred")
+    assert.deepEqual(question.answers, [])
+    assert.ok(question.questionHtml)
+    assert.equal(question.record.sourceTitle, "按需详情")
+    assert.equal(handwritingReads, 1)
+    const answers = manager.mistakeDetailById(id, "answers")
+    assert.equal(answers.questionHtml, "")
+    assert.notEqual(answers.answerStatus, "deferred")
+    assert.equal(handwritingReads, 1)
+    const full = manager.mistakeDetailById(id)
+    assert.ok(full.questionHtml)
+    assert.notEqual(full.answerStatus, "deferred")
+    assert.equal(handwritingReads, 2)
+  } finally { delete db.getSketchNoteForMindMapFocusNoteId }
 })
 
 test("待复习轻量原题读取同步标题，绑定手写仅加入本地预览", async () => {
@@ -502,6 +663,26 @@ test("纯答案范围旧记录只归档，不凭同名恢复原题或重写答�
   bindings.saveBindings({})
 })
 
+test("标签恢复复用已取得的学习集卡片，不为识别子脑图根重复读取列表", async () => {
+  await loadModules()
+  const notebookId = `nbRecoveryDirect${seq++}`
+  const rootId = `${notebookId}-root`
+  notesById[rootId] = { noteId: rootId, title: "恢复根题", comments: [{ type: "TextNote", text: "#错题_不会" }] }
+  const child = { noteId: `${rootId}-child`, parentNote: notesById[rootId], childMindMap: notesById[rootId], comments: [] }
+  let reads = 0
+  const notebook = { topicId: notebookId, title: "恢复学习集", flags: 2, get notes() { reads++; return [notesById[rootId], child] } }
+  const db = marginnoteMock.MN.db as any
+  const previous = db.allNotebooks
+  db.allNotebooks = () => [notebook]
+  try {
+    const result = await manager.recoverMistakesFromTags()
+    assert.equal(result.added, 1)
+    assert.equal(result.failed, 0)
+    assert.equal(mistakeStateRecords()[`${notebookId}:${rootId}`].sourceRootNodeId, rootId)
+    assert.equal(reads, 1)
+  } finally { db.allNotebooks = previous }
+})
+
 test("保存不再写快照键，旧迁移源键被置空瘦身", async () => {
   await loadModules()
   // 种入旧键数据（模拟升级残留）
@@ -516,4 +697,18 @@ test("保存不再写快照键，旧迁移源键被置空瘦身", async () => {
   assert.ok(legacyBackup === "" || legacyBackup === undefined, "旧 NSUserDefaults 备份键应被置空")
   // 主存储与新备份文件不受清理影响
   assert.ok(typeof kv["mn4-answer-matcher.mistakes.v2"] === "string" && (kv["mn4-answer-matcher.mistakes.v2"] as string).length > 2)
+})
+
+test("FSRS 开启时拒绝固定间隔保存，关闭调试后恢复，原参数不受影响", async () => {
+  await loadModules()
+  const settings = await import("../src/settings")
+  const before = settings.loadMatcherSettings()
+  try {
+    settings.saveMatcherSettings({ debugModeEnabled: true, debugReviewAlgorithm: "fsrs" })
+    assert.throws(() => manager.saveMistakeReviewCurves([[9], [9], [9]]), /智能复习/)
+    assert.deepEqual(settings.loadMatcherSettings().mistakeReviewCurves, before.mistakeReviewCurves)
+    settings.saveMatcherSettings({ debugModeEnabled: false })
+    manager.saveMistakeReviewCurves(before.mistakeReviewCurves)
+    assert.deepEqual(settings.loadMatcherSettings().mistakeReviewCurves, before.mistakeReviewCurves)
+  } finally { settings.saveMatcherSettings(before) }
 })

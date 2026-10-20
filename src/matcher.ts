@@ -13,7 +13,7 @@ import {
 import { readSafeNote } from "./safe-note"
 import { renderCardHtml } from "./card-html"
 import { loadStoredIndex, saveStoredIndex, storedIndexUpdatedAt, StoredAnswerIndexItem } from "./index-store"
-import { isInMindMap, nodeIdentifier } from "./mindmap-scope"
+import { isInMindMap, nodeIdentifier, readMindMapBranch } from "./mindmap-scope"
 import { collectChildMindMapNoteIds } from "./mindmap-candidate"
 import { clearNotebookShapeCache, notebookNotes } from "./note-tree"
 import { IndexScope as MindMapScope, scopeKey } from "./scope-key"
@@ -90,7 +90,7 @@ export async function refreshIndex(scope: string | MindMapScope): Promise<Refres
   let brokenLinks = 0
   // notebookNotes normalizes the root-only/flat semantics divergence between
   // the official docs and older builds (see note-tree.ts).
-  const notes = notebookNotes(notebook)
+  const notes = readMindMapBranch(notebookId, rootNodeId) ?? notebookNotes(notebook)
   const childMapIds = collectChildMindMapNoteIds(notes)
   for (let index = 0; index < notes.length; index++) {
     const note = notes[index]

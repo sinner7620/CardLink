@@ -1,51 +1,206 @@
 import { MN } from "marginnote"
-import { freePositionFrame, isFrameFullyOutside } from "./answer-card-layout"
+import { answerReviewControlsHtml, REVIEW_CONTROL_WIDTH, REVIEW_CONTROL_HEIGHT, REVIEW_COLLAPSED_WIDTH, REVIEW_VISUAL_INSET, REVIEW_LEVEL_NAMES } from "./answer-review-controls"
+import { defaultAnswerFrame, freePositionFrame, isFrameFullyOutside } from "./answer-card-layout"
+import { pauseControlSurface, syncControlSurface } from "./native-control-surface"
 import {
   createWindowControlButton,
+  createWindowControlIcon,
+  styleWindowControlCapsule,
   answerControlBarLayout,
   normalizeWindowControlSide,
   storedWindowControlSide,
   ANSWER_BAR_DRAG_STRIP_HEIGHT,
+  ANSWER_BAR_TOP_OFFSET,
+  ANSWER_BAR_SIDE_INSET,
   type WindowControlSide
 } from "./window-controls"
 
 const ANSWER_WINDOW_Z_POSITION = 100000
 const ANSWER_WINDOW_FRONT_INTERVAL = 0.25
 
-function keepAnswerCardInFront(): void {
-  const view = self.answerCardView
+/** UIWebView 加载后可能重置内部内容层底色，只清理评分绘制层，不改答案正文。 */
+function clearAnswerReviewBackground(owner: any = self): void {
+  const visual = owner.answerCardReviewControls
+  if (!visual) return
+  const clear = (view: any): void => {
+    view.opaque = false
+    view.backgroundColor = UIColor.clearColor()
+    for (const child of Array.from(view.subviews ?? []) as any[]) clear(child)
+  }
+  clear(visual)
+  // 某些宿主桥接不在 subviews 列表中暴露 scrollView。
+  if (visual.scrollView) clear(visual.scrollView)
+}
+
+function detachAnswerReviewDismiss(owner: any = self): void {
+  if (owner.answerReviewDismissHost && owner.answerReviewDismissTap) {
+    owner.answerReviewDismissHost.removeGestureRecognizer(owner.answerReviewDismissTap)
+  }
+  owner.answerReviewDismissHost = undefined
+  owner.answerReviewDismissTap = undefined
+}
+
+export function collapseAnswerReviewSelection(): void {
+  self.answerReviewExpanded = false
+  syncAnswerReviewControls()
+}
+
+/** Expand the entire capsule first; the next feedback choice commits immediately. */
+export function selectAnswerReviewLevel(level: number): boolean {
+  if (self.answerReviewExpanded && level >= 0 && level <= (self.cardLinkReviewMode?.algorithm === "fsrs" ? 3 : 2)) return true
+  self.answerReviewExpanded = true
+  syncAnswerReviewControls()
+  return false
+}
+
+export function onAnswerReviewOutsideTap(sender: UITapGestureRecognizer): void {
+  if (!self.answerReviewExpanded || !self.answerCardView || self.answerCardView.hidden) return
+  const point = sender.locationInView(self.answerCardView)
+  const insideButton = [self.answerCardReviewToggleButton, ...(self.answerCardReviewButtons || [])].some((button: any) => {
+    const f = button.frame
+    return !button.hidden && point.x >= f.x && point.x <= f.x + f.width && point.y >= f.y && point.y <= f.y + f.height
+  })
+  if (!insideButton) collapseAnswerReviewSelection()
+}
+
+/** 答案所属题目与冻结队列当前题一致时，才允许写入复测结果。 */
+export function syncAnswerReviewControls(owner: any = self): void {
+  const view = owner.answerCardView
+  if (!view) return
+  const current = owner.cardLinkReviewMode
+  const intelligent = current?.algorithm === "fsrs"
+  const feedbackNames = intelligent ? ["不会", "不熟", "良好", "掌握"] : REVIEW_LEVEL_NAMES
+  if (owner.answerCardReviewControls && owner.answerReviewAlgorithm !== intelligent) {
+    pauseControlSurface(owner.answerCardReviewControls)
+    owner.answerCardReviewControls.removeFromSuperview()
+    owner.answerCardReviewToggleButton?.removeFromSuperview()
+    owner.answerCardReviewButtons?.forEach((button: any) => button.removeFromSuperview())
+    owner.answerCardReviewControls = undefined
+  }
+  owner.answerReviewAlgorithm = intelligent
+  const item = current?.items[current.index]
+  const visible = Boolean(item && item.sourceNoteId === owner.answerCardQuestionNoteId &&
+    item.sourceNotebookId === owner.answerCardQuestionNotebookId)
+  const context = visible ? item.recordId : undefined
+  if (context !== owner.answerReviewSelectionContext || !visible || view.hidden) owner.answerReviewExpanded = false
+  owner.answerReviewSelectionContext = context
+  if (!owner.answerCardReviewControls) {
+    const controls = new UIWebView({ x: 0, y: 0, width: REVIEW_CONTROL_WIDTH, height: REVIEW_CONTROL_HEIGHT })
+    const visual = controls as any
+    visual.autoresizingMask = 0
+    visual.opaque = false
+    visual.backgroundColor = UIColor.clearColor()
+    visual.userInteractionEnabled = false
+    visual.accessibilityElementsHidden = true
+    visual.scrollView.opaque = false
+    visual.scrollView.backgroundColor = UIColor.clearColor()
+    visual.scrollView.scrollEnabled = false
+    visual.scrollView.bounces = false
+    visual.scrollView.userInteractionEnabled = false
+    visual.scrollView.contentInsetAdjustmentBehavior = 2
+    view.addSubview(controls)
+    owner.answerCardReviewControls = controls
+    const toggle = UIButton.buttonWithType(0)
+    toggle.backgroundColor = UIColor.clearColor()
+    ;(toggle as any).tag = -1
+    ;(toggle as any).accessibilityLabel = "展开复习反馈"
+    toggle.addTargetActionForControlEvents(owner, "onReviewModeResult:", 1 << 6)
+    view.addSubview(toggle)
+    owner.answerCardReviewToggleButton = toggle
+    owner.answerCardReviewButtons = feedbackNames.map((_label, level) => {
+      const button = UIButton.buttonWithType(0)
+      button.backgroundColor = UIColor.clearColor()
+      ;(button as any).tag = level
+      button.addTargetActionForControlEvents(owner, "onReviewModeResult:", 1 << 6)
+      view.addSubview(button)
+      return button
+    })
+  }
+  const expanded = owner.answerReviewExpanded === true
+  // The feedback capsule stays at the corner opposite the window controls.
+  const bar = answerControlBarLayout(view.frame.width, storedWindowControlSide(), Boolean(owner.answerCandidatesButton && !owner.answerCandidatesButton.hidden)).bar
+  // Keep the drawing viewport fixed across toggle; CSS animates the capsule width.
+  const controlWidth = Math.min(REVIEW_CONTROL_WIDTH * feedbackNames.length / 3, view.frame.width - bar.width - 20)
+  const visibleWidth = expanded ? controlWidth : REVIEW_COLLAPSED_WIDTH
+  const left = storedWindowControlSide() === "left"
+    ? view.frame.width - ANSWER_BAR_SIDE_INSET - controlWidth
+    : ANSWER_BAR_SIDE_INSET
+  const top = ANSWER_BAR_TOP_OFFSET
+  const hitLeft = storedWindowControlSide() === "left" ? view.frame.width - ANSWER_BAR_SIDE_INSET - visibleWidth : ANSWER_BAR_SIDE_INSET
+  if (owner.answerCardWebView) {
+    owner.answerCardWebView.frame = { x: 0, y: 0, width: view.frame.width, height: view.frame.height }
+  }
+  clearAnswerReviewBackground(owner)
+  owner.answerCardReviewControls.frame = { x: left - REVIEW_VISUAL_INSET, y: top - REVIEW_VISUAL_INSET, width: controlWidth + REVIEW_VISUAL_INSET * 2, height: REVIEW_CONTROL_HEIGHT + REVIEW_VISUAL_INSET * 2 }
+  owner.answerCardReviewControls.hidden = !visible
+  const enabled = visible && !current?.navigating && !current?.submitting
+  const toggle = owner.answerCardReviewToggleButton
+  toggle.frame = { x: hitLeft, y: top, width: REVIEW_COLLAPSED_WIDTH, height: REVIEW_CONTROL_HEIGHT }
+  toggle.hidden = !visible || expanded
+  toggle.enabled = enabled
+  owner.answerCardReviewButtons.forEach((button: any, level: number) => {
+    button.frame = { x: left + level * controlWidth / feedbackNames.length, y: top, width: controlWidth / feedbackNames.length, height: REVIEW_CONTROL_HEIGHT }
+    button.hidden = !visible || !expanded
+    button.enabled = enabled && expanded
+    button.accessibilityLabel = '复习结果：' + feedbackNames[level]
+  })
+  if (visible && !view.hidden) syncControlSurface(owner.answerCardReviewControls, {
+    html: () => answerReviewControlsHtml(storedWindowControlSide() === "right", intelligent),
+    method: "setReviewSelection", rootId: "capsule",
+    args: [expanded, Boolean(enabled), controlWidth, storedWindowControlSide() === "right"],
+    active: () => Boolean(view.superview) && !view.hidden && !owner.answerCardReviewControls.hidden,
+    onReady: () => clearAnswerReviewBackground(owner)
+  })
+  else pauseControlSurface(owner.answerCardReviewControls)
+  const host = visible && !view.hidden ? ((MN.studyController.view as any).window || MN.studyController.view) : undefined
+  if (host !== owner.answerReviewDismissHost) {
+    detachAnswerReviewDismiss(owner)
+    if (host) {
+      const tap = new UITapGestureRecognizer(owner, "onAnswerReviewOutsideTap:")
+      tap.cancelsTouchesInView = false
+      host.addGestureRecognizer(tap)
+      owner.answerReviewDismissTap = tap
+      owner.answerReviewDismissHost = host
+    }
+  }
+}
+
+function keepAnswerCardInFront(owner: any = self): void {
+  const view = owner.answerCardView
   if (!view || view.hidden || !view.superview) return
+  clearAnswerReviewBackground(owner)
   view.layer.zPosition = ANSWER_WINDOW_Z_POSITION
   view.superview.bringSubviewToFront?.(view)
 }
 
-function stopAnswerCardFrontCorrection(): void {
-  self.answerCardFrontTimer?.invalidate?.()
-  self.answerCardFrontTimer = undefined
+function stopAnswerCardFrontCorrection(owner: any = self): void {
+  owner.answerCardFrontTimer?.invalidate?.()
+  owner.answerCardFrontTimer = undefined
 }
 
-function startAnswerCardFrontCorrection(): void {
-  stopAnswerCardFrontCorrection()
-  keepAnswerCardInFront()
-  self.answerCardFrontTimer = NSTimer.scheduledTimerWithTimeInterval(
+function startAnswerCardFrontCorrection(owner: any = self): void {
+  stopAnswerCardFrontCorrection(owner)
+  keepAnswerCardInFront(owner)
+  owner.answerCardFrontTimer = NSTimer.scheduledTimerWithTimeInterval(
     ANSWER_WINDOW_FRONT_INTERVAL,
     true,
-    keepAnswerCardInFront
+    () => keepAnswerCardInFront(owner)
   )
 }
 
-function layoutAnswerCardWindowControls(width: number, side: WindowControlSide = storedWindowControlSide()): void {
-  if (!self.answerCardView) return
-  const candidatesVisible = Boolean(self.answerCandidatesButton && !self.answerCandidatesButton.hidden)
+function layoutAnswerCardWindowControls(width: number, side: WindowControlSide = storedWindowControlSide(), owner: any = self): void {
+  if (!owner.answerCardView) return
+  syncAnswerReviewControls(owner)
+  const candidatesVisible = Boolean(owner.answerCandidatesButton && !owner.answerCandidatesButton.hidden)
   const frames = answerControlBarLayout(width, side, candidatesVisible)
-  self.answerCardControlBar.frame = frames.bar
-  self.answerCardCloseButton.frame = frames.close
-  self.answerCardLocateButton.frame = frames.locate
-  self.answerCardRefreshButton.frame = frames.refresh
+  owner.answerCardControlBar.frame = frames.bar
+  owner.answerCardCloseButton.frame = frames.close
+  owner.answerCardLocateButton.frame = frames.locate
+  owner.answerCardRefreshButton.frame = frames.refresh
   // 拖动区覆盖顶部整条：关闭/刷新/候选控件叠于其上（可点），其余区域拖动窗口
-  if (self.answerCardDragArea) self.answerCardDragArea.frame = { x: 0, y: 0, width, height: ANSWER_BAR_DRAG_STRIP_HEIGHT }
-  if (self.answerCandidatesButton) {
-    self.answerCandidatesButton.frame = frames.candidates
+  if (owner.answerCardDragArea) owner.answerCardDragArea.frame = { x: 0, y: 0, width, height: ANSWER_BAR_DRAG_STRIP_HEIGHT }
+  if (owner.answerCandidatesButton) {
+    owner.answerCandidatesButton.frame = frames.candidates
   }
 }
 
@@ -116,35 +271,31 @@ export function onAnswerControlRelease(): void {
 /** 同步悬浮条内候选控件的标题/可见性；点击后由原生选择弹窗承接。 */
 export function syncAnswerCandidatesControl(
   candidates: Array<{ id: string; title: string; standard: boolean }>,
-  currentIndex: number
+  currentIndex: number, owner: any = self
 ): void {
-  if (!self.answerCardView || !self.answerCandidatesButton) return
+  if (!owner.answerCardView || !owner.answerCandidatesButton) return
   const count = candidates.length
   if (count < 2) {
-    self.answerCandidatesButton.hidden = true
-    layoutAnswerCardWindowControls(self.answerCardView.frame.width)
+    owner.answerCandidatesButton.hidden = true
+    layoutAnswerCardWindowControls(owner.answerCardView.frame.width, undefined, owner)
     return
   }
   const safeIndex = currentIndex >= 0 && currentIndex < count ? currentIndex : 0
-  self.answerCandidatesButton.setTitleForState(String(safeIndex + 1), 0)
-  self.answerCandidatesButton.hidden = false
-  layoutAnswerCardWindowControls(self.answerCardView.frame.width)
+  owner.answerCandidatesButton.setTitleForState(String(safeIndex + 1), 0)
+  owner.answerCandidatesButton.hidden = false
+  layoutAnswerCardWindowControls(owner.answerCardView.frame.width, undefined, owner)
 }
 
-export function showAnswerCard(html: string): void {
+export function showAnswerCard(html: string, owner: any = self): void {
+  owner.answerReviewExpanded = false
   const host = MN.studyController.view
   const hostFrame = host.bounds
-  const defaultWidth = Math.max(280, Math.min(620, hostFrame.width - 24))
-  const defaultHeight = Math.max(320, Math.min(720, hostFrame.height - 56))
-  const defaultFrame = {
-    x: Math.max(12, (hostFrame.width - defaultWidth) / 2),
-    y: Math.max(20, (hostFrame.height - defaultHeight) / 2),
-    width: defaultWidth,
-    height: defaultHeight
-  }
+  const defaultFrame = defaultAnswerFrame(hostFrame.width, hostFrame.height)
+  const defaultWidth = defaultFrame.width, defaultHeight = defaultFrame.height
 
-  if (!self.answerCardView) {
+  if (!owner.answerCardView) {
     const container = new UIView(defaultFrame)
+    container.backgroundColor = UIColor.whiteColor()
     container.layer.cornerRadius = 12
     container.layer.masksToBounds = false
     const layer = container.layer as any
@@ -166,35 +317,30 @@ export function showAnswerCard(html: string): void {
     dragArea.autoresizingMask = 0
     dragArea.backgroundColor = UIColor.blackColor().colorWithAlphaComponent(0.001)
     // 构造器 (target, action) 即完成注册；再调 addTargetAction 会重复注册导致回调双发。
-    const dragGesture = new UIPanGestureRecognizer(self, "onAnswerCardPan:")
+    const dragGesture = new UIPanGestureRecognizer(owner, "onAnswerCardPan:")
     dragArea.addGestureRecognizer(dragGesture)
     container.addSubview(dragArea)
 
     // 悬浮条初始帧取自同一布局函数（双控件形态），创建与重排永远同源。
     const initialBar = answerControlBarLayout(defaultWidth, storedWindowControlSide(), false).bar
     const controlBar = new UIView(initialBar)
-    controlBar.backgroundColor = UIColor.colorWithHexString("#fcfcfd").colorWithAlphaComponent(0.96)
-    controlBar.layer.cornerRadius = initialBar.height / 2
-    controlBar.layer.masksToBounds = false
-    const controlBarLayer = controlBar.layer as any
-    controlBarLayer.shadowColor = UIColor.blackColor()
-    controlBarLayer.shadowOffset = { width: 0, height: 4 }
-    controlBarLayer.shadowRadius = 9
-    controlBarLayer.shadowOpacity = 0.18
+    styleWindowControlCapsule(controlBar)
     container.addSubview(controlBar)
 
-    const closeButton = createWindowControlButton("✕", "onCloseAnswerCard:")
+    const closeButton = createWindowControlButton("✕", "onCloseAnswerCard:", undefined, owner)
     controlBar.addSubview(closeButton)
 
-    const locateButton = createWindowControlButton("↗", "onLocateAnswerCard:")
+    const locateButton = createWindowControlButton("↗", "onLocateAnswerCard:", undefined, owner)
     controlBar.addSubview(locateButton)
 
-    const refreshButton = createWindowControlButton("↻", "onRefreshAnswerCard:")
+    const refreshButton = createWindowControlButton("", "onRefreshAnswerCard:", undefined, owner)
+    ;(refreshButton as any).accessibilityLabel = "复原答案窗口"
+    refreshButton.addSubview(createWindowControlIcon())
     controlBar.addSubview(refreshButton)
 
     // 候选答案控件：使用悬浮条的选中态，仅显示当前候选序号，多候选时才显示。
     // 尺寸/圆角与关闭、刷新控件完全一致（同为 UIButton，默认字号一致），仅底色不同。
-    const candidatesButton = createWindowControlButton("", "onChooseAnswerCandidate:", true)
+    const candidatesButton = createWindowControlButton("", "onChooseAnswerCandidate:", true, owner)
     candidatesButton.hidden = true
     controlBar.addSubview(candidatesButton)
 
@@ -211,39 +357,43 @@ export function showAnswerCard(html: string): void {
     resizeHandle.backgroundColor = UIColor.blackColor().colorWithAlphaComponent(0.5)
     resizeHandle.layer.cornerRadius = 12
     resizeHandle.layer.masksToBounds = true
-    const resizeGesture = new UIPanGestureRecognizer(self, "onAnswerCardResize:")
+    const resizeGesture = new UIPanGestureRecognizer(owner, "onAnswerCardResize:")
     resizeHandle.addGestureRecognizer(resizeGesture)
     container.addSubview(resizeHandle)
 
-    self.answerCardView = container
-    self.answerCardWebView = webView
-    self.answerCardCloseButton = closeButton
-    self.answerCardLocateButton = locateButton
-    self.answerCardRefreshButton = refreshButton
-    self.answerCandidatesButton = candidatesButton
-    self.answerCardControlBar = controlBar
-    self.answerCardDragArea = dragArea
-    self.answerCardResizeHandle = resizeHandle
+    owner.answerCardView = container
+    owner.answerCardWebView = webView
+    owner.answerCardCloseButton = closeButton
+    owner.answerCardLocateButton = locateButton
+    owner.answerCardRefreshButton = refreshButton
+    owner.answerCandidatesButton = candidatesButton
+    owner.answerCardControlBar = controlBar
+    owner.answerCardDragArea = dragArea
+    owner.answerCardResizeHandle = resizeHandle
   }
 
-  const previous = self.answerCardView.frame
+  const previous = owner.answerCardView.frame
   const preserved = freePositionFrame(previous)
   // A deliberately parked, partially off-screen window keeps its position.
   // If it was moved completely away, looking up an answer again recovers it.
   const frame = isFrameFullyOutside(preserved, hostFrame) ? defaultFrame : preserved
   const { width, height } = frame
-  self.answerCardView.frame = frame
-  self.answerCardWebView.frame = { x: 0, y: 0, width, height }
-  layoutAnswerCardWindowControls(width)
-  self.answerCardResizeHandle.frame = { x: width - 52, y: height - 52, width: 44, height: 44 }
-  self.answerCardHtml = html
-  ;(self.answerCardWebView as any).loadHTMLStringBaseURL(html, null)
-  self.answerCardView.hidden = false
-  if (!self.answerCardView.superview) host.addSubview(self.answerCardView)
-  startAnswerCardFrontCorrection()
+  owner.answerCardView.frame = frame
+  owner.answerCardWebView.frame = { x: 0, y: 0, width, height }
+  layoutAnswerCardWindowControls(width, undefined, owner)
+  owner.answerCardResizeHandle.frame = { x: width - 52, y: height - 52, width: 44, height: 44 }
+  owner.answerCardHtml = html
+  ;(owner.answerCardWebView as any).loadHTMLStringBaseURL(html, null)
+  owner.answerCardView.hidden = false
+  if (!owner.answerCardView.superview) host.addSubview(owner.answerCardView)
+  syncAnswerReviewControls(owner)
+  startAnswerCardFrontCorrection(owner)
 }
 
 export function closeAnswerCard(): void {
+  pauseControlSurface(self.answerCardReviewControls)
+  self.answerReviewExpanded = false
+  detachAnswerReviewDismiss()
   if (self.answerCardView) self.answerCardView.hidden = true
   stopAnswerCardFrontCorrection()
 }
@@ -327,6 +477,7 @@ export function resetAnswerCardPosition(): void {
     height
   })
   view.hidden = false
+  syncAnswerReviewControls()
   if (!view.superview) MN.studyController.view.addSubview(view)
   startAnswerCardFrontCorrection()
 }

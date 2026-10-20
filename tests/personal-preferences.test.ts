@@ -42,6 +42,13 @@ test("旧设置保留双击手写和固定列表；两项设置持久化且互�
   let api = moduleAt("src/settings.ts", modules)
   assert.equal(api.loadMatcherSettings().boundHandwritingDisplay, "doubleTap")
   assert.equal(api.loadMatcherSettings().mistakeListDisplay, "always")
+  assert.equal(api.loadMatcherSettings().entranceDefaultMode, "practice")
+  api.saveMatcherSettings({ entranceDefaultMode: "clipper" })
+  assert.equal(api.loadMatcherSettings().entranceDefaultMode, "clipper")
+  api.saveMatcherSettings({ entranceDefaultMode: "invalid" })
+  assert.equal(api.loadMatcherSettings().entranceDefaultMode, "clipper")
+  const reloaded = moduleAt("src/settings.ts", { marginnote: store, "./mistake-review-settings": { normalizeMistakeReviewCurves: () => [] } })
+  assert.equal(reloaded.loadMatcherSettings().entranceDefaultMode, "clipper")
   api.saveMatcherSettings({ boundHandwritingDisplay: "always" })
   api.saveMatcherSettings({ mistakeListDisplay: "autoHide" })
   api = moduleAt("src/settings.ts", modules)
@@ -108,4 +115,37 @@ test("答案窗口恢复已选序号，保留全部候选，切题不会把旧�
   questionId = "q1"
   await context.exports.findCurrentAnswer()
   assert.equal(ordinal, 1)
+})
+
+
+test("场景与手写总开关默认关闭，持久化且不覆盖其他设置，非法值不改变开关", () => {
+  const store = storage()
+  const modules = { marginnote: store, "./mistake-review-settings": { normalizeMistakeReviewCurves: (v: any) => v ?? {} } }
+  let api = moduleAt("src/settings.ts", modules)
+  assert.equal(api.loadMatcherSettings().sceneWorkbenchEnabled, false)
+  api.saveMatcherSettings({ sceneWorkbenchEnabled: true, mistakeListDisplay: "autoHide" })
+  api = moduleAt("src/settings.ts", modules)
+  assert.equal(api.loadMatcherSettings().sceneWorkbenchEnabled, true)
+  api.saveMatcherSettings({ sceneWorkbenchEnabled: "false" })
+  assert.equal(api.loadMatcherSettings().sceneWorkbenchEnabled, true)
+  api.saveMatcherSettings({ sceneWorkbenchEnabled: false })
+  api = moduleAt("src/settings.ts", modules)
+  assert.equal(api.loadMatcherSettings().sceneWorkbenchEnabled, false)
+  assert.equal(api.loadMatcherSettings().mistakeListDisplay, "autoHide")
+})
+
+
+test("自动安装设置默认关闭，随调试模式关闭清除，重开不自动恢复", () => {
+  const store = storage()
+  const modules = { marginnote: store, "./mistake-review-settings": { normalizeMistakeReviewCurves: () => [] } }
+  let api = moduleAt("src/settings.ts", modules)
+  assert.equal(api.loadMatcherSettings().debugAutoInstallUpdatesEnabled, false)
+  api.saveMatcherSettings({ debugAutoInstallUpdatesEnabled: true })
+  assert.equal(api.loadMatcherSettings().debugAutoInstallUpdatesEnabled, false)
+  api.saveMatcherSettings({ debugModeEnabled: true, debugAutoInstallUpdatesEnabled: true })
+  api = moduleAt("src/settings.ts", modules)
+  assert.equal(api.loadMatcherSettings().debugAutoInstallUpdatesEnabled, true)
+  api.saveMatcherSettings({ debugModeEnabled: false })
+  api.saveMatcherSettings({ debugModeEnabled: true })
+  assert.equal(api.loadMatcherSettings().debugAutoInstallUpdatesEnabled, false)
 })

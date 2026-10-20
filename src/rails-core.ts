@@ -12,12 +12,15 @@ import {
   chooseCurrentAnswerBinding,
   isCardToolbarEnabled,
   setCardToolbarEnabled,
-  answerWorkbenchData,
+  answerWorkbenchDataWithIndexRecovery,
+  recoverAnswerIndexError,
+  executeCardMenuCommand,
   bindAnswerNotebook,
   configureAnswerMatching,
   eventObservers,
   handlers,
   lifecycle,
+  onAnswerReviewOutsideTap,
   onAnswerCardPan,
   onAnswerCardResize,
   onAnswerControlPress,
@@ -60,11 +63,13 @@ import {
   onReviewModeIndex,
   onReviewModePrevious,
   onReviewModeNext,
-  onReviewModeInfo,
   onReviewModeExit,
   onReviewModeControlPress,
   onReviewModeControlRelease,
   onReviewModeControlHover,
+  onReviewModePan,
+  onReviewModeResult,
+  onReviewModeExpand, onReviewModeBranch, onReviewModeQueuePick, onReviewModeToolbarResult,
   unbindCurrent
 } from "./plugin"
 import {
@@ -77,8 +82,10 @@ import {
   legacyMistakeTagMigrationCompleted,
   markQuestionAsMistake,
   mistakeDetailById,
+  mistakeHandwritingTarget,
   mistakeQuestionById,
   mistakeWorkbenchRevision,
+  refreshMistakeList,
   migrateLegacyMistakeFavorites,
   openSourceByMistakeId,
   removeMistakesByIds,
@@ -92,12 +99,13 @@ import {
   setMistakeFavoriteById,
   setMistakeCategoryById
 } from "./mistake-manager"
-import { checkForUpdates } from "./updater"
+import { checkForUpdates, configureUpdatePath, setDebugUpdateDownloads, setDebugAutoInstallUpdates, showUpdateStatus } from "./updater"
 import { runTelemetryConnectivityTest } from "./telemetry"
 import { exportMistakes, previewMistakeExport, cancelMistakeExportPreparation } from "./mistake-export"
 import { captureDiagnosticError, clearNavigationRuntimeLog, consumePendingLocateHint, exportNavigationRuntimeLog, focusNoteInFloatMindMap, recordRuntimeState } from "./note-navigation"
 import { presentError } from "./error-messages"
 import { CardLinkError } from "./errors"
+import { isAnswerIndexError } from "./answer-index-recovery"
 import { loadMatcherSettings, saveMatcherSettings } from "./settings"
 import { aiBridge, isAICommand, aiRuntimeEnabled } from "./ai-subsystem"
 
@@ -110,7 +118,40 @@ function selectedNode(): NodeNote | undefined {
   return focus ? new NodeNote(focus) : undefined
 }
 
+function sceneFeatures(owner?: any): { scenePanel: boolean; handwriting: boolean } {
+  const scene = (globalThis as any).__MNAM_SCENE_WORKBENCH_GLOBAL__
+  const enabled = loadMatcherSettings().sceneWorkbenchEnabled && !!scene && scene.enabled(owner ?? self)
+  return { scenePanel: enabled, handwriting: enabled }
+}
+
 async function bridgeInternal(command: string, payload: any, owner?: any): Promise<any> {
+  if (command === "setReviewAlgorithm") {
+    if (!loadMatcherSettings().debugModeEnabled) throw new CardLinkError("debugModeRequired")
+    if (!["fixed", "fsrs"].includes(payload?.algorithm)) throw new Error("无效的复习算法")
+    if ((owner ?? self)?.cardLinkReviewMode) throw new Error("请先退出当前复习，再切换算法")
+    if (payload.algorithm === "fsrs") (await import("./fsrs-service")).initializeFsrs()
+    saveMatcherSettings({ debugReviewAlgorithm: payload.algorithm })
+    return { algorithm: payload.algorithm }
+  }
+  if (command.startsWith("fsrs")) {
+    const settings = loadMatcherSettings()
+    if (!settings.debugModeEnabled || settings.debugReviewAlgorithm !== "fsrs") throw new CardLinkError("debugModeRequired")
+    return (await import("./fsrs-service")).fsrsCommand(command, payload)
+  }
+  if (command === "startFsrsReviewMode") {
+    const settings = loadMatcherSettings()
+    if (!settings.debugModeEnabled || settings.debugReviewAlgorithm !== "fsrs") throw new CardLinkError("debugModeRequired")
+    const snapshot = (await import("./fsrs-service")).fsrsSnapshot()
+    const ids = new Set(Array.isArray(payload?.recordIds) ? payload.recordIds : [])
+    const items = snapshot.records.filter(item => ids.has(item.recordId) && !item.progress.paused).map(item => ({ ...item,
+      level: item.progress.legacyLevel, reviewCount: item.historyCount, fsrsProgress: item.progress,
+      lastReviewedAt: item.progress.card?.last_review }))
+    return startReviewMode(items, owner ?? self, "fsrs")
+  }
+  if (command === "cardMenuCommand") {
+    if (!(globalThis as any).__MNAM_SCENE_WORKBENCH_GLOBAL__?.enabled(owner ?? self)) throw new Error("卡片菜单命令要求软件450及以上且处于场景页面")
+    return executeCardMenuCommand(payload?.id, payload?.noteID, owner)
+  }
   if (command === "aiConfirmDevelopmentWarning" || command === "aiGetSettings" || command === "aiListReports" || command === "aiGetReport" ||
     command === "aiGetJob" || command === "aiPreviewAnalysis" || command === "aiStartAnalysis" ||
     command === "aiOpenEvidence" || command === "aiCancelJob" || command === "aiListStudySets" || command === "aiListMistakeStudySets" ||
@@ -133,6 +174,8 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
   if (command === "dashboard") {
     return {
       version: __APP_VERSION__,
+      reviewAlgorithm: loadMatcherSettings().debugModeEnabled && loadMatcherSettings().debugReviewAlgorithm === "fsrs" ? "fsrs" : "fixed",
+      features: sceneFeatures(owner),
       locateHint: consumePendingLocateHint(),
       mistakeRefreshConsentRequired: !legacyMistakeTagMigrationCompleted(),
       mistakes: beginMistakeWorkbenchTransfer(),
@@ -149,7 +192,7 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
     matching: answerMatchingSettingsData(),
     answerBindings: managedAnswerBindings()
   }
-  if (command === "answer") return answerWorkbenchData()
+  if (command === "answer") return answerWorkbenchDataWithIndexRecovery()
   if (command === "acceptMistakeRefreshConsent") {
     await repairAndOrganizeMistakes()
     rememberLegacyMistakeTagMigration()
@@ -157,6 +200,7 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
   }
   if (command === "mistakes") return beginMistakeWorkbenchTransfer()
   if (command === "mistakesRevision") return { revision: mistakeWorkbenchRevision() }
+  if (command === "refreshMistakeList") return refreshMistakeList()
   if (command === "mistakesPage") {
     return continueMistakeWorkbenchTransfer(String(payload?.transferId ?? ""), Number(payload?.offset ?? 0))
   }
@@ -185,9 +229,11 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
   if (command === "chooseManagedAnswerMindMap") return chooseManagedAnswerMindMap(String(payload?.key ?? ""), payload?.activateMixed === true)
   if (command === "setPersonalSetting") {
     const key = String(payload?.key ?? "")
-    if (key === "subcardAnswerDisplay" && ["reveal", "window"].includes(payload?.value)) saveMatcherSettings({ subcardAnswerDisplay: payload.value })
+    if (key === "sceneWorkbenchEnabled" && typeof payload?.value === "boolean") saveMatcherSettings({ sceneWorkbenchEnabled: payload.value })
+    else if (key === "subcardAnswerDisplay" && ["reveal", "window"].includes(payload?.value)) saveMatcherSettings({ subcardAnswerDisplay: payload.value })
     else if (key === "boundHandwritingDisplay" && ["always", "doubleTap"].includes(payload?.value)) saveMatcherSettings({ boundHandwritingDisplay: payload.value })
     else if (key === "mistakeListDisplay" && ["always", "autoHide"].includes(payload?.value)) saveMatcherSettings({ mistakeListDisplay: payload.value })
+    else if (key === "entranceDefaultMode" && ["practice", "clipper"].includes(payload?.value)) saveMatcherSettings({ entranceDefaultMode: payload.value })
     else if (key === "answerMaskStyle" && ["dark", "light"].includes(payload?.value)) saveMatcherSettings({ answerMaskStyle: payload.value })
     else if (key === "answerMaskColor" && /^#[0-9a-f]{6}$/i.test(String(payload?.value ?? ""))) saveMatcherSettings({ answerMaskColor: payload.value, answerMaskImage: "" })
     else if (key === "answerMaskImage" && (payload?.value === "" || (typeof payload?.value === "string" && /^data:image\/(?:png|jpeg|webp);base64,/.test(payload.value) && payload.value.length <= 400000))) saveMatcherSettings({ answerMaskImage: payload.value })
@@ -219,7 +265,29 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
   if (command === "refreshAnswerIndex") return refreshCurrentIndex()
   if (command === "unbindAnswerNotebook") return unbindCurrent()
   if (command === "openCurrentMistakeSource") return onMistakeLinkToolbarClick()
-  if (command === "mistakeDetail") return mistakeDetailById(String(payload?.recordId ?? ""))
+  if (command === "mistakeDetail") {
+    const recordId = String(payload?.recordId ?? "")
+    const content = payload?.content === "question" || payload?.content === "answers" ? payload.content : "all"
+    let detail = mistakeDetailById(recordId, content)
+    if (detail.answerStatus === "index-missing") {
+      const record = detail.record
+      const note = MN.db.getNoteById(record.sourceNoteId)
+      if (note) {
+        const recovery = await recoverAnswerIndexError(new CardLinkError("indexNotReady"), {
+          notebookId: record.sourceNotebookId,
+          question: new NodeNote(note, record.sourceNotebookId),
+          target: record.answerNotebookId ? { notebookId: record.answerNotebookId, rootNodeId: record.answerRootNodeId } : undefined
+        })
+        if (recovery === "refreshed" || recovery === "rebound") detail = mistakeDetailById(recordId, content)
+      }
+    }
+    return { ...detail, handwritingAvailable: sceneFeatures(owner).handwriting }
+  }
+  if (command === "openMistakeHandwriting") {
+    const target = mistakeHandwritingTarget(String(payload?.recordId ?? ""))
+    if (!sceneFeatures(owner).handwriting) throw new Error("请先在设置 → 关于插件开启“场景面板与整卡手写”，并在软件4.5.0及以上的场景面板内使用")
+    return target
+  }
   if (command === "mistakeQuestion") return mistakeQuestionById(String(payload?.recordId ?? ""))
   if (command === "setMistakeFavorite") return setMistakeFavoriteById(String(payload?.recordId ?? ""), payload?.favorite === true)
   if (command === "migrateLegacyFavorites") return migrateLegacyMistakeFavorites(payload?.titles)
@@ -272,12 +340,16 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
   }
   if (command === "setDebugMode") {
     const enabled = payload?.enabled === true
+    if (!enabled && (owner ?? self)?.cardLinkReviewMode?.algorithm === "fsrs") throw new Error("请先退出智能复习，再关闭调试模式")
     saveMatcherSettings({ debugModeEnabled: enabled })
     if (!enabled) clearNavigationRuntimeLog()
     showHUD(enabled ? "调试模式已开启" : "调试模式已关闭，运行日志已清空", 3)
-    return { enabled }
+    return { enabled, algorithm: enabled && loadMatcherSettings().debugReviewAlgorithm === "fsrs" ? "fsrs" : "fixed" }
   }
   if (command === "checkUpdates") return checkForUpdates(true)
+  if (command === "setDebugUpdateDownloads") return setDebugUpdateDownloads(payload?.enabled === true)
+  if (command === "setDebugAutoInstallUpdates") return setDebugAutoInstallUpdates(payload?.enabled === true)
+  if (command === "showUpdateStatus") return showUpdateStatus()
   if (command === "legacyMenu") return openMenu()
   if (command === "notify") return showHUD(String(payload?.message ?? ""), 3)
   throw new Error(`未知工作台命令：${command}`)
@@ -306,17 +378,28 @@ async function bridge(command: string, payload: any, owner?: any): Promise<any> 
     return result
   } catch (error) {
     captureDiagnosticError(error, "桥接", `trace=${traceId} cmd=${command} durationMs=${Date.now() - startedAt}`)
+    // 后台 AI/导出保持只读失败语义；交互查答案和卡片菜单允许用户主动恢复。
+    if (command === "cardMenuCommand" && isAnswerIndexError(error)) {
+      const note = MN.db.getNoteById(String(payload?.noteID ?? ""))
+      const recovery = await recoverAnswerIndexError(error, note ? {
+        notebookId: String(note.notebookId || MN.currnetNotebookId || ""), question: new NodeNote(note)
+      } : undefined)
+      if (recovery !== undefined) return { cancelled: true }
+    }
     // 码化错误在此换成表内用户文案并携带 code；未码化错误原样透传给信封
     throw presentError(error)
   }
 }
 
 ;(globalThis as any).__MN_ANSWER_CORE_GLOBAL__ = {
+  configureUpdatePath,
   bridge,
   eventObservers,
   handlers,
   lifecycle,
   notifyWorkbenchDataChanged,
+  annotationLog: (event: string, detail: string) => recordRuntimeState("手写", event, detail),
+  sceneWorkbenchEnabled: () => loadMatcherSettings().sceneWorkbenchEnabled,
   cardToolbar: { isEnabled: isCardToolbarEnabled, setEnabled: setCardToolbarEnabled },
   instanceMethods: {
     onClipperEnd, onClipperBindMother, onClipperResetQuestion, onClipperEditTitle,
@@ -335,6 +418,7 @@ async function bridge(command: string, payload: any, owner?: any): Promise<any> 
     onLocateAnswerCard,
     onRefreshAnswerCard,
     onPanelCloseButtonSideChanged,
+    onAnswerReviewOutsideTap,
     onAnswerCardPan,
     onAnswerCardResize,
     onAnswerControlPress,
@@ -356,10 +440,12 @@ async function bridge(command: string, payload: any, owner?: any): Promise<any> 
     onReviewModeIndex,
     onReviewModePrevious,
     onReviewModeNext,
-    onReviewModeInfo,
     onReviewModeExit,
     onReviewModeControlPress,
     onReviewModeControlRelease,
     onReviewModeControlHover,
+    onReviewModePan,
+    onReviewModeResult,
+  onReviewModeExpand, onReviewModeBranch, onReviewModeQueuePick, onReviewModeToolbarResult,
   }
 }

@@ -1,6 +1,6 @@
 import { MN, NodeNote } from "marginnote"
 import { BindingTarget } from "./binding"
-import { nodeIdentifier } from "./mindmap-scope"
+import { nodeIdentifier, readMindMapBranch } from "./mindmap-scope"
 import { collectChildMindMapNoteIds, noteBelongsToMindMapScope } from "./mindmap-candidate"
 import { notebookNotes } from "./note-tree"
 import {
@@ -61,7 +61,7 @@ export function collectPairingGroups(root: NodeNote): PairingGroup[] {
 export function collectPairingGroupsForScope(notebookId: string, scopeId: string): PairingGroup[] {
   const notebook = MN.db.getNotebookById(notebookId)
   if (!notebook) return []
-  const notes = notebookNotes(notebook)
+  const notes = readMindMapBranch(notebookId, scopeId) ?? notebookNotes(notebook)
   const childMapIds = collectChildMindMapNoteIds(notes)
   const groups: PairingGroup[] = []
   const visited = new Set<string>()

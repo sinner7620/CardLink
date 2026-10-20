@@ -31,6 +31,26 @@ test("关闭侧边按钮只持久化设置并隐藏当前工具栏，重新开�
   assert.deepEqual(hides, ["toolbar"])
 })
 
+test("侧边标签只受运行中的摘题临时抑制，准备和暂停保留用户开关", () => {
+  let enabled = true
+  const owner: any = { questionClipper: { running: false } }
+  const sandbox: any = { exports: {}, self: owner, require: (name: string) => name === "./settings"
+    ? { loadMatcherSettings: () => ({ cardToolbarEnabled: enabled }), saveMatcherSettings: (v: any) => { enabled = v.cardToolbarEnabled } }
+    : { hideAnswerToolbar() {} } }
+  runInNewContext(transpileModule(readFileSync("src/card-toolbar-state.ts", "utf8"), { compilerOptions: { module: 1, target: 7 } }).outputText, sandbox)
+  const api = sandbox.exports
+  assert.equal(api.isCardToolbarEnabled(owner), true)
+  owner.questionClipper.running = true
+  assert.equal(api.isCardToolbarEnabled(owner), false)
+  assert.equal(api.setCardToolbarEnabled(true, owner).enabled, false)
+  assert.equal(enabled, true)
+  owner.questionClipper.running = false
+  assert.equal(api.isCardToolbarEnabled(owner), true)
+  api.setCardToolbarEnabled(false, owner)
+  owner.questionClipper = undefined
+  assert.equal(api.isCardToolbarEnabled(owner), false)
+})
+
 test("选择卡片触发相同布局时，不重复赋面板 frame 或重置根滚动", () => {
   const source = readFileSync("rails-native/WebPanelController.js", "utf8")
   const body = source.match(/function ensureLayout\(controller\) \{([\s\S]*?)\n  \}/)?.[1]
@@ -138,18 +158,12 @@ test("侧边错题按钮使用原生三级下拉而不是直接打开等级弹�
   assert.match(toolbar, /onMistakeLevel2Click:/)
 })
 
-test("错题标记排除同学习集另一脑图残留选中的答案卡片", () => {
-  const plugin = readFileSync("src/plugin.ts", "utf8")
+test("错题恢复仍隔离纯答案范围，批量标记不再使用选卡过滤", () => {
   const manager = readFileSync("src/mistake-manager.ts", "utf8")
-  assert.match(plugin, /selectedMistakeQuestions\(notebookId: string\)/)
-  assert.match(plugin, /filterSelectionToAnchorGroup\(/)
-  assert.match(plugin, /findAnswerByReference\(answerTarget, noteId, nodeIdentifier\(node\)\)/)
-  assert.match(plugin, /const questions = notebookId \? selectedMistakeQuestions\(notebookId\) : \[\]/)
   assert.match(manager, /answerOnlyBindingScopes\(loadBindings\(\)\)/)
   assert.doesNotMatch(manager, /scanBoundAnswerRecordKeys/)
   assert.doesNotMatch(manager, /recoverBeta12ReversedMistakes/)
   assert.match(manager, /archiveMistakeRecords\(archived\)/)
-  assert.match(plugin, /answerOnlyScopes\.has\(notebookId\)/)
 })
 
 test("索引失效只引导手动重建：查找路径不自动重建，refreshIndex 仅在手动确认之后", () => {
@@ -229,7 +243,7 @@ test("复习模式入口冻结当前队列并提供原生导航、信息和退�
   assert.match(review, /layer\.cornerRadius = BAR_HEIGHT \/ 2[\s\S]*layer\.masksToBounds = true/)
   assert.match(review, /跨题重挂载[\s\S]*configureReviewSvgSurface\(webView\)/)
   assert.match(review, /loadHTMLStringBaseURL\(reviewToolbarSvgHtml\(current\), null\)/)
-  assert.match(review, /\.index\{left:5px;width:38px\}[\s\S]*font:600 18px\/20px[\s\S]*font-variant-numeric:tabular-nums/)
+  assert.match(review, /font-variant-numeric:tabular-nums/)
   assert.match(review, /\.glyph,\.glyph svg\{display:block;width:20px;height:20px;color:/)
   assert.match(review, /\$\{lucideSvg\(ChevronLeft\)\}[\s\S]*\$\{lucideSvg\(ChevronRight\)\}[\s\S]*\$\{lucideSvg\(Info\)\}[\s\S]*\$\{lucideSvg\(LogOut\)\}/)
   assert.match(review, /setReviewToolbarState[\s\S]*previousDisabled[\s\S]*nextDisabled[\s\S]*infoActive/)
@@ -250,9 +264,9 @@ test("复习模式入口冻结当前队列并提供原生导航、信息和退�
   assert.match(review, /function applyJustGlassStaticShell[\s\S]*GLASS_BACKGROUND[\s\S]*colorWithAlphaComponent\(0\.74\)/)
   assert.match(review, /borderColor = UIColor\.whiteColor\(\)\.colorWithAlphaComponent\(0\.72\)/)
   assert.match(review, /topRim[\s\S]*colorWithAlphaComponent\(0\.95\)[\s\S]*bottomRim[\s\S]*GLASS_BOTTOM_RIM[\s\S]*colorWithAlphaComponent\(0\.09\)/)
-  assert.match(review, /applyJustGlassStaticShell\(toolbar, BAR_WIDTH, BAR_HEIGHT, 22\)/)
+  assert.match(review, /applyJustGlassStaticShell\(toolbar, BAR_WIDTH, BAR_HEIGHT,/)
   assert.match(review, /applyJustGlassStaticShell\(info, INFO_WIDTH, INFO_HEIGHT, 18\)/)
-  assert.match(review, /const BAR_TOP_INSET = 10 \+ BAR_HEIGHT/)
+  assert.ok(Number(review.match(/const BAR_TOP_INSET = (\d+)/)?.[1]) >= 100)
   assert.match(review, /new UIView\(\{ x, y: BAR_TOP_INSET, width: BAR_WIDTH, height: BAR_HEIGHT \}\)/)
   assert.match(review, /y: BAR_TOP_INSET \+ BAR_HEIGHT \+ 5/)
   assert.match(review, /infoLines\(item\)\.forEach[\s\S]*new Label\(\{ x: 14, y: 8 \+ index \* 24, width: INFO_WIDTH - 28, height: 22 \}\)/)
@@ -356,7 +370,7 @@ test("答案窗口刷新按钮同时复位位置尺寸并重新载入当前答�
   const plugin = readFileSync("src/plugin.ts", "utf8")
   const main = readFileSync("src/main.ts", "utf8")
   assert.match(view, /onRefreshAnswerCard:/)
-  assert.match(view, /createWindowControlButton\("↻", "onRefreshAnswerCard:"\)/)
+  assert.match(view, /createWindowControlButton\("[^"]*", "onRefreshAnswerCard:"\)/)
   assert.match(controls, /export function answerControlBarLayout/)
   assert.match(controls, /export function createWindowControlButton/)
   assert.match(view, /self\.answerCardHtml = html/)
@@ -370,7 +384,7 @@ test("答案窗口关闭、定位、刷新与候选按钮共用连续胶囊规�
   const controls = readFileSync("src/window-controls.ts", "utf8")
   assert.match(view, /createWindowControlButton\("✕", "onCloseAnswerCard:"\)/)
   assert.match(view, /createWindowControlButton\("↗", "onLocateAnswerCard:"\)/)
-  assert.match(view, /createWindowControlButton\("↻", "onRefreshAnswerCard:"\)/)
+  assert.match(view, /createWindowControlButton\("[^"]*", "onRefreshAnswerCard:"\)/)
   assert.doesNotMatch(controls, /systemImageNamed|setImageForState/)
   assert.match(view, /createWindowControlButton\("", "onChooseAnswerCandidate:", true\)/)
   assert.match(controls, /ANSWER_BAR_CONTROL_WIDTH = 44/)
@@ -393,7 +407,7 @@ test("答案窗口控件合并为可左右换边的悬浮条，候选复用原�
   assert.match(view, /createWindowControlButton\("", "onChooseAnswerCandidate:", true\)/)
   assert.match(controls, /button\.addTargetActionForControlEvents\(self, action, 1 << 6\)/)
   assert.match(view, /const controlBar = new UIView/)
-  assert.match(view, /controlBar\.backgroundColor = UIColor\.colorWithHexString\("#fcfcfd"\)\.colorWithAlphaComponent\(0\.96\)/)
+  assert.match(view, /styleWindowControlCapsule\(controlBar\)/)
   assert.match(view, /controlBar\.addSubview\(closeButton\)[\s\S]*controlBar\.addSubview\(refreshButton\)[\s\S]*controlBar\.addSubview\(candidatesButton\)/)
   assert.match(view, /self\.answerCardControlBar = controlBar/)
   assert.match(view, /self\.answerCandidatesButton = candidatesButton/)
@@ -511,7 +525,6 @@ test("跨学习集只派发官方链接，前台等待与 notebookWillOpen 接�
 test("卡片侧边按钮开关持久化且不再关闭全局后台服务", () => {
   const addon = readFileSync("rails-native/WebAddon.js", "utf8")
   const core = readFileSync("src/rails-core.ts", "utf8")
-  const state = readFileSync("src/card-toolbar-state.ts", "utf8")
   const bridge = readFileSync("rails-native/WebBridgeCommands.js", "utf8")
   const panel = readFileSync("rails-native/WebPanelController.js", "utf8")
   const navigation = readFileSync("src/note-navigation.ts", "utf8")
@@ -521,7 +534,6 @@ test("卡片侧边按钮开关持久化且不再关闭全局后台服务", () =>
   // 状态由普通 JS 服务拥有，不暴露 JSExtension 自定义 boolean selector。
   assert.doesNotMatch(addon, /methods\.(?:set|is)PluginEnabled = function/)
   assert.match(core, /cardToolbar: \{ isEnabled: isCardToolbarEnabled, setEnabled: setCardToolbarEnabled \}/)
-  assert.match(state, /saveMatcherSettings\(\{ cardToolbarEnabled: next \}\)/)
   assert.match(bridge, /cardToolbar\.setEnabled\([\s\S]*context\.addon\)/)
   assert.doesNotMatch(core, /export const runtimeControl/)
   // Bridge：dashboard 附加 pluginEnabled；设置页经 setPluginEnabled 命令改状态

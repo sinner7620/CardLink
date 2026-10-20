@@ -9,6 +9,7 @@ import { pkDrawingRendererScript } from "../src/pkdrawing-renderer"
 import { transpileModule } from "typescript"
 import { collectQuestionTree, mindMapScopeOf, questionIdsInTree, renderedMindMapNoteIds } from "../src/quick-menu-selection"
 import { quickMenuGeometry } from "../src/quick-menu-geometry"
+import * as bindings from "../src/binding"
 
 function surface() {
   const events = new Map<string, Set<any>>()
@@ -173,6 +174,7 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
   assert.equal(bottomEdge.frame.y + bottomEdge.frame.height, 762)
   class View {
     frame: any; layer: any = {}; children: any[] = []; superview: any; alpha = 1; enabled = true; imageView: any; backgroundColor: any; titleLabel: any = {}
+    get bounds() { return { x: 0, y: 0, width: this.frame?.width, height: this.frame?.height } }
     constructor(frame?: any) { this.frame = frame }
     addSubview(view: any) { this.children.push(view); view.superview = this }
     addGestureRecognizer() {}
@@ -194,7 +196,7 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
       super(frame)
     }
   }
-  const window: any = new View(); window.bounds = { width: 1024, height: 768 }
+  const window: any = new View({ x: 0, y: 0, width: 1024, height: 768 })
   const root: any = { noteId: "root", noteTitle: "章节", colorIndex: 0 }
   const question: any = { noteId: "question", noteTitle: "题目", colorIndex: 1, parentNote: root }
   const answer: any = { noteId: "answer", noteTitle: "答案", colorIndex: 2, parentNote: question }
@@ -203,6 +205,11 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
   const mindmap = { mindmapNodes: [root, question, answer].map(note => ({ note })) }
   let visible = false, shown = 0
   let startedSelection: string[] = []
+  let startError = false
+  let answerBinding: bindings.BindingTarget = { notebookId: "answers", designatedAnswer: "mindmap", questionColors: [1] }
+  const startedModes: boolean[] = []
+  const menuLogs: string[] = []
+  const hudMessages: string[] = []
   const ball = new View({ x: 900, y: 60, width: 44, height: 44 }); ball.imageView = { alpha: 1 }; window.addSubview(ball)
   const entrance = {
     button: ball,
@@ -234,14 +241,17 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
       ? {}
       : name === "./ui-tokens" ? { UI_COLORS: { accent: "#0e8dfd", grayFill: "#d8d8dd", surface: "#f7f8fa" } }
       : name === "./quick-menu-geometry" ? { quickMenuGeometry }
+      : name === "./settings" ? { loadMatcherSettings: () => ({ entranceDefaultMode: "practice", allowSameStudySetMindMap: true }) }
+      : name === "./note-navigation" ? { recordRuntimeState: (_scope: string, label: string, detail: string) => menuLogs.push(`${label} ${detail}`) }
       : name === "./question-clipper" ? { clipperModeActive: () => false, exitClipperMode() {} }
-      : name === "./same-map-practice" ? { sameMapPracticeActive: () => false, stopSameMapPractice() {}, startSameMapPractice: (_book: string, ids: Set<string>) => { startedSelection = [...ids]; return { started: true, answerCount: 1 } } }
+      : name === "./same-map-practice" ? { sameMapPracticeActive: () => false, stopSameMapPractice() {}, startSameMapPractice: (_book: string, ids: Set<string>, options: { maskAnswers: boolean }) => { if (startError) throw new Error("native selection failed"); startedSelection = [...ids]; startedModes.push(options.maskAnswers); return { started: true, answerCount: options.maskAnswers ? 1 : 0, maskAnswers: options.maskAnswers } } }
       : name === "./quick-menu-selection" ? { collectQuestionTree, mindMapScopeOf, questionIdsInTree, renderedMindMapNoteIds }
       : name === "./note-tree" ? { notebookNotes: () => notes }
       : name === "./mindmap-candidate" ? { MAIN_MINDMAP_SCOPE_ID: "__mn4_main_mindmap__", mindMapScopeIdForNote: (note: any) => note?.childMindMap?.noteId || "__mn4_main_mindmap__" }
-      : name === "./store" ? { bindingKey: (notebookId: string, rootId: string) => `${notebookId}::root::${rootId}`, loadBindings: () => ({ "book::root::__mn4_main_mindmap__": { notebookId: "book", rootNodeId: "__mn4_main_mindmap__", questionColors: [1] } }), normalizeBinding: (value: any) => value }
+      : name === "./store" ? { loadBindings: () => ({ "book::root::__mn4_main_mindmap__": answerBinding }) }
+      : name === "./binding" ? bindings
       : name === "marginnote" ? {
-        showHUD() {}, MN: { currnetNotebookId: "book", db: { getNotebookById: () => ({ notes }) }, notebookController: { mindmapView: mindmap } },
+        showHUD(message: string) { hudMessages.push(message) }, MN: { currnetNotebookId: "book", db: { getNotebookById: () => ({ notes }) }, notebookController: { mindmapView: mindmap } },
         NodeNote: { getSelectedNodes: () => [{ note: question }] }
       }
       : { showHUD() {} }
@@ -252,7 +262,7 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
   assert.equal(owner.mnutilsQuickMenu.open, true)
   assert.equal(ball.frame.width, 44)
   assert.equal(ball.frame.x, 900)
-  assert.equal(owner.mnutilsQuickMenu.content.frame.width, 272)
+  assert.equal(owner.mnutilsQuickMenu.content.frame.width, 44)
   assert.equal(owner.mnutilsQuickMenu.content.superview, window)
   assert.equal(owner.mnutilsQuickMenu.content.layer.mask, undefined)
   assert.equal(window.children.length, 2)
@@ -264,6 +274,27 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
   assert.equal(ball.frame.x, 900)
   assert.equal(owner.mnutilsQuickMenu.controls.alpha, 1)
   assert.equal(ball.children.length, 0)
+  // UIKit reports coordinates in the requested view even when the window and
+  // menu have different origins. A tap on either control must not dismiss it.
+  const windowTap = (x: number, y: number) => sandbox.exports.onMnutilsQuickMenuWindowTap({
+    state: 3,
+    locationInView(view: any) {
+      const content = owner.mnutilsQuickMenu.content
+      if (view === content) return { x, y }
+      if (view === window) return { x: content.frame.x + x, y: content.frame.y + y }
+      throw new Error("Unexpected coordinate space")
+    }
+  })
+  const startFrame = owner.mnutilsQuickMenu.startButton.frame
+  const actualFrame = owner.mnutilsQuickMenu.content.frame
+  owner.mnutilsQuickMenu.content.frame = { ...actualFrame, x: actualFrame.x - 400 }
+  windowTap(startFrame.x + 10, startFrame.y + 10)
+  assert.equal(owner.mnutilsQuickMenu.open, true)
+  owner.mnutilsQuickMenu.content.frame = actualFrame
+  const filterFrame = owner.mnutilsQuickMenu.filterButton.frame
+  const segmentFrame = owner.mnutilsQuickMenu.segment.frame
+  windowTap(segmentFrame.x + filterFrame.x + 10, segmentFrame.y + filterFrame.y + 10)
+  assert.equal(owner.mnutilsQuickMenu.open, true)
   sandbox.exports.onMnutilsQuickMenuFilter()
   assert.equal(owner.mnutilsQuickMenu.mode, "filter")
   assert.match(owner.mnutilsQuickMenu.segmentVisual.html, /transition:transform 0\.45s var\(--ease-main\)/)
@@ -275,6 +306,9 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
   assert.equal(owner.mnutilsQuickMenu.listContainer.alpha, 1)
   assert.equal(owner.mnutilsQuickMenu.content.frame.width, 272)
   assert.equal(owner.mnutilsQuickMenu.scroll.contentSize.height >= 42, true)
+  // The window gesture may also arrive after the filter action relayouts the menu.
+  windowTap(segmentFrame.x + filterFrame.x + 10, segmentFrame.y + filterFrame.y + 10)
+  assert.equal(owner.mnutilsQuickMenu.open, true)
   sandbox.exports.onMnutilsQuickMenuToggleQuestion({ tag: 0 })
   assert.equal(owner.mnutilsQuickMenu.selectedIds.size, 1)
   const previousList = owner.mnutilsQuickMenu.listContainer
@@ -294,7 +328,7 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
   const closingContent = owner.mnutilsQuickMenu.content
   sandbox.exports.onMnutilsQuickMenuDismiss()
   await new Promise(resolve => setImmediate(resolve))
-  assert.equal(closingContent.alpha, 0)
+  assert.equal(closingContent.alpha, 1)
   assert.equal(owner.mnutilsQuickMenu, undefined)
   assert.equal(ball.frame.width, 44)
   assert.equal(ball.frame.x, anchoredX)
@@ -311,6 +345,30 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
   assert.equal(shown, 1)
   sandbox.exports.onMnutilsEntranceClick({})
   sandbox.exports.onMnutilsQuickMenuSelectAll()
-  sandbox.exports.onMnutilsQuickMenuStart()
+  await sandbox.exports.onMnutilsQuickMenuStart()
   assert.deepEqual(startedSelection, ["question"])
+  assert.equal(owner.mnutilsQuickMenu.open, true)
+  assert.deepEqual(startedModes, [false])
+  assert.ok(hudMessages.includes("已开始做题，按队列定位聚焦"))
+  for (const target of [
+    { notebookId: "book", designatedAnswer: "subcard" as const, questionColors: [1] },
+    { notebookId: "answers", selectionMode: "mixed" as const, questionColors: [1] }
+  ]) {
+    answerBinding = target
+    await sandbox.exports.onMnutilsQuickMenuStart()
+  }
+  assert.deepEqual(startedModes, [false, true, true])
+  assert.ok(menuLogs.some(line => line.includes("start.result started=true answerCount=1")))
+  startError = true
+  await sandbox.exports.onMnutilsQuickMenuStart()
+  assert.equal(owner.mnutilsQuickMenu.open, true)
+  assert.ok(hudMessages.some(message => message.includes("native selection failed")))
+  assert.ok(menuLogs.some(line => line.includes("start.error native selection failed")))
+  windowTap(Number.NaN, 0)
+  assert.equal(owner.mnutilsQuickMenu.open, true)
+  windowTap(-1, 10)
+  assert.equal(owner.mnutilsQuickMenu.open, false)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(owner.mnutilsQuickMenu, undefined)
+  assert.ok(menuLogs.some(line => line.includes("close reason=outside-tap")))
 })

@@ -22,14 +22,17 @@ export function collectChildMindMapNoteIds(notes: Iterable<unknown>): string[] {
 
 export function mindMapScopeIdForNote(
   note: unknown,
-  knownChildMapNoteIds: Iterable<string> = []
+  knownChildMapNoteIds: Iterable<string> | (() => Iterable<string>) = []
 ): string {
   const childId = childMindMapNoteId(note)
   if (childId) return childId
   if (note && typeof note === "object") {
     const noteId = cleanId((note as { noteId?: unknown }).noteId)
     if (noteId) {
-      for (const childMapId of knownChildMapNoteIds) {
+      // 普通子脑图卡片已由 childMindMap 确认；只有根卡片等无直接归属的
+      // 情况才读取候选，避免调用方提前扫描整个学习集。
+      const knownIds = typeof knownChildMapNoteIds === "function" ? knownChildMapNoteIds() : knownChildMapNoteIds
+      for (const childMapId of knownIds) {
         if (noteId === childMapId) return childMapId
       }
     }
@@ -40,14 +43,15 @@ export function mindMapScopeIdForNote(
 export function noteBelongsToMindMapScope(
   note: unknown,
   scopeId: string,
-  knownChildMapNoteIds: Iterable<string> = []
+  knownChildMapNoteIds: Iterable<string> | (() => Iterable<string>) = []
 ): boolean {
   if (!note || typeof note !== "object") return false
   const noteId = cleanId((note as { noteId?: unknown }).noteId)
   const childId = childMindMapNoteId(note)
   if (scopeId === MAIN_MINDMAP_SCOPE_ID) {
     if (childId) return false
-    for (const childMapId of knownChildMapNoteIds) {
+    const knownIds = typeof knownChildMapNoteIds === "function" ? knownChildMapNoteIds() : knownChildMapNoteIds
+    for (const childMapId of knownIds) {
       if (noteId === childMapId) return false
     }
     return true

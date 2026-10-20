@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs"
 import { runInNewContext } from "node:vm"
 import { transpileModule } from "typescript"
 import { collectQuestionTree, questionIdsInTree } from "../src/quick-menu-selection"
-import { normalizeBinding, usesOnlySubcardAnswers } from "../src/binding"
+import { normalizeBinding, usesSubcardAnswers } from "../src/binding"
 import { renderCardHtml } from "../src/card-html"
 
 test("指定颜色只把该颜色的卡片加入快捷区题目来源", () => {
@@ -15,16 +15,19 @@ test("指定颜色只把该颜色的卡片加入快捷区题目来源", () => {
   assert.deepEqual(questionIdsInTree(collectQuestionTree([question, answer, zero], [0], () => true)), ["z"])
 })
 
-test("同色的题目子卡不计数；子卡答案只在没有独立答案脑图时从原题隐藏", () => {
+test("同色的题目子卡不计数；混合绑定独立答案脑图仍从原题隐藏子卡答案", () => {
   const q: any = { noteId: "q", noteTitle: "题目", colorIndex: 1 }
   const a: any = { noteId: "a", noteTitle: "答案", excerptText: "答案正文", colorIndex: 1, parentNote: q }
   q.childNotes = [a]
   assert.deepEqual(questionIdsInTree(collectQuestionTree([q, a], [1], () => true)), ["q"])
   const target = { notebookId: "source", rootNodeId: "root", selectionMode: "mixed" as const, questionColors: [1] }
-  assert.equal(usesOnlySubcardAnswers(target, "source", "root", 1), true)
-  assert.equal(usesOnlySubcardAnswers({ ...target, rootNodeId: "answers" }, "source", "root", 1), false)
-  assert.equal(usesOnlySubcardAnswers({ ...target, notebookId: "answers" }, "source", "root", 1), false)
-  assert.equal(usesOnlySubcardAnswers(target, "source", "root", 2), false)
+  assert.equal(usesSubcardAnswers(target, 1), true)
+  assert.equal(usesSubcardAnswers({ ...target, rootNodeId: "answers" }, 1), true)
+  assert.equal(usesSubcardAnswers({ ...target, notebookId: "answers" }, 1), true)
+  assert.equal(usesSubcardAnswers(target, 2), false)
+  assert.equal(usesSubcardAnswers({ ...target, selectionMode: "designated", designatedAnswer: "mindmap" }, 1), false)
+  assert.equal(usesSubcardAnswers({ ...target, questionColors: [0] }, 0), true)
+  assert.equal(usesSubcardAnswers(target, undefined), false)
   assert.doesNotMatch(renderCardHtml(q, "原题", () => undefined, () => undefined, undefined, false, false), /答案正文/)
   assert.match(renderCardHtml(q, "原题", () => undefined, () => undefined), /答案正文/)
 })
@@ -46,7 +49,8 @@ test("旧绑定保留默认答案脑图；子卡模式只匹配指定颜色的�
       toIndexedAnswer: (note: any, notebookId: string) => ({ answer: { id: note.noteId, noteId: note.noteId, notebookId } }),
       findAnswers: () => { calls.push("mindmap"); return [{ id: "remote", noteId: "remote" }] },
       findAnswersByRegex: () => [], findAnswerByReference: () => undefined
-    } : name === "./ordered-pairing" ? { pairedAnswerReference: () => undefined }
+    } : name === "./binding" ? { usesSubcardAnswers }
+      : name === "./ordered-pairing" ? { pairedAnswerReference: () => undefined }
       : name === "marginnote" ? { MN: { currnetNotebookId: "source" } } : {}
   }
   runInNewContext(transpileModule(readFileSync("src/answer-lookup.ts", "utf8"), {

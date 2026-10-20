@@ -1,11 +1,16 @@
 import React, { useEffect, useRef } from "react"
 import { mountCardPreview } from "../../src/card-preview"
 import { wireFramePinchZoom } from "../../src/pinch-zoom"
+import { PreviewFrame } from "./SceneResources"
 
 const commentOpenStates = new Map()
 
 // 同一个组件覆盖详情原题/答案、复习原题/答案；导出是静态排版，不绑定交互手势。
-export const CardPreview = React.memo(function CardPreview({ html, title, zoom = 100, onZoom, onInteract, initialAutoHeight = false, defaultExpandedComments }) {
+export const CardPreview = React.memo(function CardPreview(props) {
+  return <HtmlCardPreview {...props} />
+})
+
+function HtmlCardPreview({ html, title, zoom = 100, onZoom, onInteract, initialAutoHeight = false, defaultExpandedComments }) {
   const frameRef = useRef(null), cleanupRef = useRef(() => {})
   const callbacks = useRef({ onZoom, onInteract })
   callbacks.current = { onZoom, onInteract }
@@ -52,5 +57,5 @@ export const CardPreview = React.memo(function CardPreview({ html, title, zoom =
       controller.destroy()
     }
   }
-  return <iframe ref={frameRef} title={title} aria-description={html?.includes("data-bound-handwriting hidden") ? "双击预览区域显示或隐藏脑图绑定手写" : undefined} srcDoc={html} scrolling="auto" onLoad={loaded} style={{ colorScheme: "light" }} />
-})
+  return <PreviewFrame title={title} aria-description={html?.includes("data-bound-handwriting hidden") ? "双击预览区域显示或隐藏脑图绑定手写" : undefined} html={html} scrolling="auto" onLoad={event => { frameRef.current = event.currentTarget; loaded() }} style={{ colorScheme: "light" }} />
+}
