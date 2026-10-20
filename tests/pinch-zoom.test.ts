@@ -45,3 +45,37 @@ test("gesture先开始时touchstart不能覆盖原始比例", () => {
   assert.equal(h.scale(), .8)
   h.cleanup()
 })
+
+test("第三指离开时比例和内容锚点一起重建，下一次移动不跳位", () => {
+  const handlers = new Map<string, any>()
+  let scale = 1, anchor = 0, starts = 0
+  wireFramePinchZoom({ addEventListener: (name: string, handler: any) => handlers.set(name, handler), removeEventListener() {} }, {
+    getScale: () => scale,
+    onPinchStart: (point: any) => { anchor = point.x; starts++ },
+    applyScale: (value: number, point: any) => { scale = value; assert.equal(point.x, anchor) }
+  })
+  const fire = (name: string, points: any[]) => handlers.get(name)({ touches: points, preventDefault() {} })
+  fire("touchstart", touches(100))
+  fire("touchstart", [...touches(100), { clientX: 300, clientY: 0 }])
+  fire("touchend", [{ clientX: 100, clientY: 0 }, { clientX: 200, clientY: 0 }])
+  fire("touchmove", [{ clientX: 100, clientY: 0 }, { clientX: 200, clientY: 0 }])
+  assert.equal(scale, 1)
+  assert.equal(starts, 2)
+  assert.equal(anchor, 150)
+})
+
+test("双指起始即拦截默认行为，单指保持原生滚动；gesture坐标0不替换为中心", () => {
+  const handlers = new Map<string, any>()
+  let prevented = 0, point: any
+  wireFramePinchZoom({ addEventListener: (name: string, handler: any, config: any) => { handlers.set(name, handler); if (name === "touchstart") assert.equal(config.passive, false) }, removeEventListener() {} }, {
+    getScale: () => 1, applyScale() {}, onGestureStart: (value: any) => point = value, clientWidth: () => 200, clientHeight: () => 250
+  })
+  const fire = (name: string, values: any) => handlers.get(name)({ preventDefault: () => prevented++, ...values })
+  fire("touchstart", { touches: touches(100).slice(0, 1) })
+  assert.equal(prevented, 0)
+  fire("touchstart", { touches: touches(100) })
+  assert.equal(prevented, 1)
+  fire("touchend", { touches: [] })
+  fire("gesturestart", { clientX: 0, clientY: 0 })
+  assert.deepEqual(point, { x: 0, y: 0 })
+})

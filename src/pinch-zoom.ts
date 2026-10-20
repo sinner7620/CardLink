@@ -26,10 +26,13 @@ export function wireFramePinchZoom(target: any, options: any): () => void {
   }
 
   listen("touchstart", (event: any) => {
-    if (gestureActive || event.touches.length !== 2) return
+    if (event.touches.length > 2) { startDistance = 0; return }
+    if (event.touches.length !== 2) return
+    event.preventDefault()
+    if (gestureActive) return
     const point = reanchor(event.touches)
     if (options.onPinchStart) options.onPinchStart(point)
-  }, { passive: true })
+  }, { passive: false })
 
   listen("touchmove", (event: any) => {
     // Safari可同时发送touch和gesture，只让一条序列计算缩放。
@@ -39,18 +42,21 @@ export function wireFramePinchZoom(target: any, options: any): () => void {
       return
     }
     if (event.touches.length !== 2) return
+    event.preventDefault()
     if (!startDistance) {
       const point = reanchor(event.touches)
       if (options.onPinchStart) options.onPinchStart(point)
       return
     }
-    event.preventDefault()
     applyScale(startScale * distance(event.touches) / startDistance, midpoint(event.touches))
   }, { passive: false })
 
   listen("touchend", (event: any) => {
     if (gestureActive) return
-    if (event.touches.length === 2) reanchor(event.touches)
+    if (event.touches.length === 2) {
+      const point = reanchor(event.touches)
+      options.onPinchStart?.(point)
+    }
     else if (event.touches.length < 2) {
       if (startDistance) options.onPinchEnd?.()
       startDistance = 0
@@ -60,8 +66,8 @@ export function wireFramePinchZoom(target: any, options: any): () => void {
 
   if (withGestureEvents) {
     const gesturePoint = (event: any) => ({
-      x: Number(event.clientX || (options.clientWidth ? options.clientWidth() : 0)),
-      y: Number(event.clientY || (options.clientHeight ? options.clientHeight() : 0))
+      x: Number(event.clientX ?? (options.clientWidth ? options.clientWidth() : 0)),
+      y: Number(event.clientY ?? (options.clientHeight ? options.clientHeight() : 0))
     })
     listen("gesturestart", (event: any) => {
       event.preventDefault()
@@ -78,10 +84,11 @@ export function wireFramePinchZoom(target: any, options: any): () => void {
       if (!gestureActive) return
       applyScale(startScale * Number(event.scale || 1), gesturePoint(event))
     }, { passive: false })
-    listen("gestureend", () => {
+    listen("gestureend", (event: any) => {
+      event.preventDefault()
       if (!gestureActive) return
       gestureActive = false; options.onPinchEnd?.()
-    }, { passive: true })
+    }, { passive: false })
   }
   return () => cleanups.forEach(cleanup => cleanup())
 }

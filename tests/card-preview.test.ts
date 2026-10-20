@@ -21,8 +21,14 @@ function surface() {
   const root = { style: {} as any, clientWidth: 400, dataset: {} as any }
   const doc = { ...target, body: { style: {} as any }, documentElement: root, querySelector: () => card }
   let scrollCalls = 0
-  const win: any = { ...target, document: doc, innerWidth: 400, innerHeight: 500, scrollX: 0, scrollY: 0, setTimeout, clearTimeout, scrollTo() { scrollCalls++ } }
-  return { win, card, root, events, scrollCalls: () => scrollCalls }
+  const frames = new Map<number, any>()
+  let frameId = 0
+  const win: any = { ...target, document: doc, innerWidth: 400, innerHeight: 500, scrollX: 0, scrollY: 0, setTimeout, clearTimeout,
+    requestAnimationFrame(callback: any) { frames.set(++frameId, callback); return frameId },
+    cancelAnimationFrame(id: number) { frames.delete(id) },
+    scrollTo(x: number, y: number) { scrollCalls++; win.scrollX = x; win.scrollY = y } }
+  const draw = () => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(callback => callback()) }
+  return { win, card, root, events, draw, frames, scrollCalls: () => scrollCalls }
 }
 
 test("缩小后短卡水平垂直居中，长卡仅水平居中且保留滚动高度", () => {
@@ -84,18 +90,18 @@ test("图片笔迹叠加使用底图坐标，笔迹边界不能改变画布比�
   assert.deepEqual(transforms, [[2, 2]])
 })
 
-test("HTML与iframe重复接入时只安装一个预览控制器，100%没有transform，清理释放手势", () => {
+test("HTML与iframe重复接入时只安装一个预览控制器，跨100%保持变换坐标系，清理释放手势", () => {
   const { win, card, events } = surface()
   const controller = mountCardPreview(win, wireFramePinchZoom)
   assert.equal(mountCardPreview(win, wireFramePinchZoom), controller)
   assert.equal(events.get("touchmove")?.size, 2)
-  assert.equal(card.style.transform, "none")
+  assert.equal(card.style.transform, "scale(1)")
   controller.setScale(1.5)
   assert.equal(card.style.transform, "scale(1.5)")
   assert.equal(win.document.body.style.width, "600px")
   assert.equal(win.document.body.style.height, "1200px")
   controller.setScale(1)
-  assert.equal(card.style.transform, "none")
+  assert.equal(card.style.transform, "scale(1)")
   controller.destroy()
   assert.equal(events.get("touchmove")?.size, 0)
   assert.equal(win.__mnCardPreview, undefined)
@@ -106,13 +112,13 @@ test("相同比例回写不重复调整滚动锚点，避免工具条与手势�
   const controller = mountCardPreview(win, wireFramePinchZoom)
   controller.setScale(1.4, { x: 100, y: 100 })
   assert.equal(scrollCalls(), 1)
-  controller.setScale(1.4, { x: 100, y: 100 })
+  controller.setScale(1.4)
   assert.equal(scrollCalls(), 1)
   controller.destroy()
 })
 
 test("单指上下移动不拦截，双指由唯一手势内核接管", () => {
-  const { win, events } = surface()
+  const { win, events, draw } = surface()
   mountCardPreview(win, wireFramePinchZoom)
   let prevented = 0
   const fire = (name: string, touches: any[]) => events.get(name)?.forEach(handler => handler({ touches, preventDefault: () => prevented++ }))
@@ -121,9 +127,46 @@ test("单指上下移动不拦截，双指由唯一手势内核接管", () => {
   assert.equal(prevented, 0)
   fire("touchstart", [{ clientX: 10, clientY: 10 }, { clientX: 20, clientY: 10 }])
   fire("touchmove", [{ clientX: 10, clientY: 10 }, { clientX: 30, clientY: 10 }])
-  assert.equal(prevented, 1)
+  assert.equal(prevented, 2)
+  draw()
   assert.equal(win.__mnCardPreview.getScale(), 2)
   win.__mnCardPreview.destroy()
+})
+
+test("同帧缩放只提交最后位置，抬指刷新尾帧，销毁取消未绘制更新", () => {
+  const { win, events, draw, frames, scrollCalls } = surface()
+  const controller = mountCardPreview(win, wireFramePinchZoom)
+  const fire = (name: string, distance: number) => events.get(name)?.forEach(handler => handler({
+    touches: distance ? [{ clientX: 100, clientY: 100 }, { clientX: 100 + distance, clientY: 100 }] : [], preventDefault() {}
+  }))
+  fire("touchstart", 100)
+  fire("touchmove", 120); fire("touchmove", 150)
+  assert.equal(scrollCalls(), 0)
+  assert.equal(frames.size, 1)
+  draw()
+  assert.equal(controller.getScale(), 1.5)
+  assert.equal(scrollCalls(), 1)
+  fire("touchmove", 170); fire("touchend", 0)
+  assert.equal(controller.getScale(), 1.7)
+  assert.equal(frames.size, 0)
+  fire("touchstart", 100); fire("touchmove", 130)
+  controller.destroy(); draw()
+  assert.equal(controller.getScale(), 1.7)
+})
+
+test("双指等距移动也更新内容锚点", () => {
+  const { win, events, draw } = surface()
+  const controller = mountCardPreview(win, wireFramePinchZoom)
+  controller.setScale(2)
+  win.scrollX = 100; win.scrollY = 200
+  const fire = (name: string, x: number, y: number) => events.get(name)?.forEach(handler => handler({
+    touches: [{ clientX: x, clientY: y }, { clientX: x + 100, clientY: y }], preventDefault() {}
+  }))
+  fire("touchstart", 100, 100)
+  fire("touchmove", 120, 130); draw()
+  assert.equal(controller.getScale(), 2)
+  assert.equal(win.scrollX, 80); assert.equal(win.scrollY, 170)
+  controller.destroy()
 })
 
 test("原生打包后的预览脚本完全自包含且强制浅色", async () => {
