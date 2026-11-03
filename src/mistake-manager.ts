@@ -1,6 +1,8 @@
 import { delay, MN, NodeNote, popup, setTimeInterval, showHUD, UndoManager } from "marginnote"
 import type { MbBookNote } from "marginnote"
 import { renderCardHtml } from "./card-html"
+import type { ErrorReason } from './error-reasons'
+import { withMistakeReason } from './mistake-domain'
 import { usesSubcardAnswers } from "./binding"
 import { CardLinkError } from "./errors"
 import { isAnswerIndexError } from "./answer-index-recovery"
@@ -49,6 +51,9 @@ import {
   hasLegacyManagedMistakeTag,
   isManagedMistakeTag,
   mistakeSourceTags,
+  mistakeReasonTag,
+  mistakeReasonSourceTags,
+  MISTAKE_REASON_TAG_PREFIX,
   mistakeStateFromSourceTags,
   withoutMistakeSourceTags
 } from "./mistake-tags"
@@ -178,7 +183,7 @@ function combineTagWriteStatus(left: TagWriteStatus, right: TagWriteStatus): Tag
   return "verified"
 }
 
-function applySourceTags(record: MistakeRecord, previousCategories?: string[]): TagWriteStatus {
+function applySourceTags(record: MistakeRecord, previousCategories?: string[], updateReason = true): TagWriteStatus {
   recordRuntimeState("标签", "applySourceTags 前", `targetNoteId=${record.sourceNoteId} notebookId=${record.sourceNotebookId}`)
   const note = MN.db.getNoteById(record.sourceNoteId)
   if (!note) {
@@ -186,12 +191,17 @@ function applySourceTags(record: MistakeRecord, previousCategories?: string[]): 
     return "failed"
   }
   const node = new NodeNote(note, record.sourceNotebookId)
-  node.tags = mistakeSourceTags(node.tags, record.level, userManualTags(record), previousCategories)
+  const reason = record.history[record.history.length - 1]?.errorReason
+  const currentTags = node.tags
+  const expectedReasons = updateReason ? [mistakeReasonTag(reason)].filter((tag): tag is string => !!tag)
+    : currentTags.filter(tag => tag.startsWith(MISTAKE_REASON_TAG_PREFIX))
+  node.tags = cleanMistakeTags([...mistakeSourceTags(currentTags, record.level, userManualTags(record), previousCategories), ...expectedReasons])
   node.tidyupTags()
   const written = readSourceTags(note)
   const status: TagWriteStatus = written === undefined
     ? "unverified"
-    : mistakeStateFromSourceTags(written).level === record.level ? "verified" : "failed"
+    : mistakeStateFromSourceTags(written).level === record.level &&
+      written.filter(tag => tag.startsWith(MISTAKE_REASON_TAG_PREFIX)).sort().join('\n') === expectedReasons.sort().join('\n') ? "verified" : "failed"
   recordRuntimeState("标签", "applySourceTags 完成", `targetNoteId=${record.sourceNoteId} status=${status} readback=${written === undefined ? "不可用" : "正常"}`)
   return status
 }
@@ -209,9 +219,29 @@ function removeSourceTags(record: MistakeRecord): TagWriteStatus {
   const written = readSourceTags(note)
   const status: TagWriteStatus = written === undefined
     ? "unverified"
-    : !mistakeStateFromSourceTags(written).isMistake ? "verified" : "failed"
+    : !mistakeStateFromSourceTags(written).isMistake && !written.some(tag => tag.startsWith(MISTAKE_REASON_TAG_PREFIX)) ? "verified" : "failed"
   recordRuntimeState("标签", "removeSourceTags 完成", `targetNoteId=${record.sourceNoteId} status=${status} readback=${written === undefined ? "不可用" : "正常"}`)
   return status
+}
+
+/** FSRS mirrors causes only; fixed grades/history/schedule remain independent. */
+export function syncMistakeReasonTags(recordId: string, reasons: ErrorReason[]): void {
+  const record = loadMistakeState().records[recordId]
+  if (!record) throw new Error('错题记录不存在')
+  const committed = commitSourceTagTasks('更新错因标签', [{ notebookId: record.sourceNotebookId, run: () => {
+    const note = MN.db.getNoteById(record.sourceNoteId)
+    if (!note) return 'failed'
+    const node = new NodeNote(note, record.sourceNotebookId)
+    const expected = mistakeReasonSourceTags(node.tags, reasons)
+    node.tags = expected
+    node.tidyupTags()
+    const written = readSourceTags(note)
+    if (!written) return 'unverified'
+    const actual = written.filter(tag => tag.startsWith(MISTAKE_REASON_TAG_PREFIX)).sort()
+    const target = expected.filter(tag => tag.startsWith(MISTAKE_REASON_TAG_PREFIX)).sort()
+    return actual.join('\n') === target.join('\n') ? 'verified' : 'failed'
+  } }])
+  if (!committed.length) throw new Error('错因标签未能写入原题，请重试')
 }
 
 function syncManualTagsFromSource(
@@ -499,7 +529,9 @@ function recordById(recordId: string): MistakeRecord {
 export async function markQuestionAsMistake(
   question: NodeNote,
   sourceNotebookId: string,
-  requestedLevel?: MistakeLevel
+  requestedLevel?: MistakeLevel,
+  reason?: ErrorReason,
+  preserveReason = false
 ): Promise<MistakeRecord | undefined> {
   const sourceNoteId = noteId(question.note)
   if (!sourceNoteId) throw new Error("所选卡片没有 noteId，无法标记")
@@ -525,7 +557,7 @@ export async function markQuestionAsMistake(
   // 卡片侧边改等级与其他入口统一：已有记录按一次复测确认由 reviewMistake 推算，
   // 复测次数、下次复测时间与复测历史同步推进，而不是只改等级字段。
   if (previous) assertFixedReviewEnabled()
-  const record = previous
+  let record = previous
     ? {
         ...reviewMistake(
           previous,
@@ -536,11 +568,15 @@ export async function markQuestionAsMistake(
         ...metadata
       }
     : createMistakeRecord(metadata, now, loadMatcherSettings().mistakeReviewCurves)
+  // Preserving source causes must not copy an earlier cause into this review.
+  // A mastered grade has no current cause even if a caller supplies one.
+  const currentReason = preserveReason && record.level === 2 ? undefined : reason
+  record = withMistakeReason(record, currentReason)
   upsertMistakeRecord(state, record)
   saveMistakeState(state)
   const committed = commitSourceTagTasks("标记错题", [{
     notebookId: sourceNotebookId,
-    run: () => applySourceTags(record, userManualTags(previous))
+    run: () => applySourceTags(record, userManualTags(previous), !preserveReason || !!currentReason)
   }])
   if (!committed.length) {
     // 标签没写进卡片就不保留记录：否则下一次反向同步会把它当作"卡片没有托管
@@ -549,12 +585,69 @@ export async function markQuestionAsMistake(
     else removeMistakeRecord(state, record.recordId)
     saveMistakeState(state)
     showHUD("标记错题失败：未能写入原题标签，请打开原题所在学习集后重试", 5)
-    return previous
+    return undefined
   }
   upsertMistakeRecord(state, withTagsWritten(record))
   saveMistakeState(state)
 
   showHUD(previous ? "已确认为错题复测，记录与复习计划已更新" : "已标记为错题，可在错题浏览窗口中查看", 4)
+  return record
+}
+
+/** Stable receipt identity without adding a field to the persisted history schema.
+ * Causes and metadata are excluded so a failed/repeated supplement remains retryable.
+ */
+export function mistakeReasonHistoryId(record: MistakeRecord): string | undefined {
+  const latest = record.history[record.history.length - 1]
+  if (!latest) return undefined
+  return JSON.stringify([record.recordId, record.createdAt, record.history.length - 1, latest.at, latest.level])
+}
+
+/** Add a cause to the saved review, never create or advance a review. */
+export async function supplementMistakeReasonById(
+  recordId: string,
+  reason: ErrorReason,
+  expectedHistoryId?: string
+): Promise<MistakeRecord> {
+  if (!reason || typeof reason.key !== 'string' || !reason.key.trim() ||
+    typeof reason.label !== 'string' || !reason.label.trim()) throw new Error('请选择有效的本次错因')
+  const state = loadMistakeState()
+  const previous = state.records[recordId]
+  if (!previous) throw new CardLinkError('mistakeRecordMissing')
+  const latest = previous.history[previous.history.length - 1]
+  const historyId = mistakeReasonHistoryId(previous)
+  if (previous.recordId !== recordId || sourceRecordKey(previous.sourceNotebookId, previous.sourceNoteId) !== recordId ||
+    !historyId || (expectedHistoryId !== undefined && expectedHistoryId !== historyId)) {
+    throw new Error('本次等级记录已变化，请在目标卡片上重新保存等级')
+  }
+  if (latest.level !== previous.level || latest.level === 2) throw new Error('掌握等级或已变化的等级不能补写本次错因')
+  const record = withMistakeReason({
+    ...previous,
+    updatedAt: new Date(Math.max(Date.now(), (Date.parse(previous.updatedAt) || 0) + 1)).toISOString()
+  }, reason)
+  const committed = commitSourceTagTasks('补写本次错因', [{
+    notebookId: previous.sourceNotebookId,
+    run: () => {
+      const note = MN.db.getNoteById(previous.sourceNoteId)
+      if (!note || ((note as any).notebookId && String((note as any).notebookId) !== previous.sourceNotebookId)) return 'failed'
+      const node = new NodeNote(note, previous.sourceNotebookId)
+      // A source-side grade change must not be overwritten by an old receipt.
+      const currentTags = node.tags
+      if (mistakeStateFromSourceTags(currentTags).level !== latest.level) return 'failed'
+      const expected = mistakeReasonSourceTags(currentTags, [reason])
+      node.tags = expected
+      node.tidyupTags()
+      const written = readSourceTags(note)
+      if (written === undefined) return 'unverified'
+      const actualReasons = written.filter(tag => tag.startsWith(MISTAKE_REASON_TAG_PREFIX)).sort()
+      const expectedReasons = expected.filter(tag => tag.startsWith(MISTAKE_REASON_TAG_PREFIX)).sort()
+      return mistakeStateFromSourceTags(written).level === latest.level &&
+        actualReasons.join('\n') === expectedReasons.join('\n') ? 'verified' : 'failed'
+    }
+  }])
+  if (!committed.length) throw new CardLinkError('mistakeTagWriteFailed', { action: '补写错因' })
+  upsertMistakeRecord(state, withTagsWritten(record))
+  saveMistakeState(state)
   return record
 }
 
@@ -572,7 +665,9 @@ export interface BatchMistakeResult {
 export async function markQuestionsAsMistakes(
   questions: NodeNote[],
   sourceNotebookId: string,
-  requestedLevel: MistakeLevel
+  requestedLevel: MistakeLevel,
+  reason?: ErrorReason,
+  preserveReason = false
 ): Promise<BatchMistakeResult> {
   const state = loadMistakeState()
   const curves = loadMatcherSettings().mistakeReviewCurves
@@ -616,7 +711,8 @@ export async function markQuestionsAsMistakes(
             ...metadata
           }
         : createMistakeRecord(metadata, now, curves)
-      prepared.push({ record, previous })
+      const currentReason = preserveReason && requestedLevel === 2 ? undefined : reason
+      prepared.push({ record: withMistakeReason(record, currentReason), previous })
     } catch (error) {
       failed++
       captureDiagnosticError(error, "错题管理")
@@ -632,7 +728,7 @@ export async function markQuestionsAsMistakes(
         verified.clear()
         for (const { record, previous } of prepared) {
           try {
-            if (applySourceTags(record, userManualTags(previous)) === "verified") verified.add(record.recordId)
+            if (applySourceTags(record, userManualTags(previous), !preserveReason || (requestedLevel !== 2 && !!reason)) === "verified") verified.add(record.recordId)
           } catch (error) {
             captureDiagnosticError(error, "错题管理")
           }
@@ -692,7 +788,7 @@ export function mistakeAnswerContext(
  * 所有更改等级的入口（待复习确认按钮、详情侧下拉、批量更改）统一走这里：
  * 档位相同按一次复测确认推进，档位不同重置复习序列；复习计划只由 reviewMistake 推算。
  */
-async function confirmMistakeLevel(recordId: string, level: MistakeLevel): Promise<MistakeRecord> {
+async function confirmMistakeLevel(recordId: string, level: MistakeLevel, reason?: ErrorReason, preserveReason = false): Promise<MistakeRecord> {
   assertFixedReviewEnabled()
   if (!isMistakeLevel(Number(level))) throw new Error("错题等级必须为不会、不熟或掌握")
   const state = loadMistakeState()
@@ -706,15 +802,16 @@ async function confirmMistakeLevel(recordId: string, level: MistakeLevel): Promi
     throw new CardLinkError("mistakeTagRemoved")
   }
   const previous = synced.record
-  const record = reviewMistake(
+  const currentReason = preserveReason && Number(level) === 2 ? undefined : reason
+  const record = withMistakeReason(reviewMistake(
     previous,
     Number(level) as MistakeLevel,
     new Date(),
     loadMatcherSettings().mistakeReviewCurves
-  )
+  ), currentReason)
   const committed = commitSourceTagTasks("错题复习", [{
     notebookId: record.sourceNotebookId,
-    run: () => applySourceTags(record)
+    run: () => applySourceTags(record, undefined, !preserveReason || !!currentReason)
   }])
   if (!committed.length) {
     throw new CardLinkError("mistakeTagWriteFailed", { action: "复习" })
@@ -725,8 +822,8 @@ async function confirmMistakeLevel(recordId: string, level: MistakeLevel): Promi
   return record
 }
 
-export function reviewMistakeById(recordId: string, level: MistakeLevel): Promise<MistakeRecord> {
-  return confirmMistakeLevel(recordId, level)
+export function reviewMistakeById(recordId: string, level: MistakeLevel, reason?: ErrorReason): Promise<MistakeRecord> {
+  return confirmMistakeLevel(recordId, level, reason)
 }
 
 export function getManualTodayIds(): string[] {
@@ -737,8 +834,8 @@ export function addManualTodayOverdue(count: number): { ids: string[]; addedCoun
   return addOverdueToToday(loadMistakeState().records, count)
 }
 
-export function changeMistakeLevelById(recordId: string, level: MistakeLevel): Promise<MistakeRecord> {
-  return confirmMistakeLevel(recordId, level)
+export function changeMistakeLevelById(recordId: string, level: MistakeLevel, reason?: ErrorReason, preserveReason = false): Promise<MistakeRecord> {
+  return confirmMistakeLevel(recordId, level, reason, preserveReason)
 }
 
 export async function resumeMistakeReviewById(recordId: string): Promise<MistakeRecord> {
@@ -765,7 +862,8 @@ function uniqueRecordIds(recordIds: unknown): string[] {
 
 export async function reviewMistakesByIds(
   recordIds: unknown,
-  level: MistakeLevel
+  level: MistakeLevel,
+  reason?: ErrorReason
 ): Promise<BatchMistakeChangeResult> {
   assertFixedReviewEnabled()
   if (!isMistakeLevel(Number(level))) throw new Error("错题等级必须为不会、不熟或掌握")
@@ -786,7 +884,7 @@ export async function reviewMistakesByIds(
     }
     const synced = syncManualTagsFromSource(previous, curves)
     if (synced.cancelled) { cancelledRecords.push(previous); missing++; continue }
-    changedRecords.push(reviewMistake(synced.record, Number(level) as MistakeLevel, now, curves))
+    changedRecords.push(withMistakeReason(reviewMistake(synced.record, Number(level) as MistakeLevel, now, curves), reason))
   }
 
   archiveMistakeRecords(cancelledRecords)
@@ -840,7 +938,7 @@ export async function setMistakeCategoryById(recordId: string, categories: strin
   const previousTags = userManualTags(previous)
   const committed = commitSourceTagTasks("修改错题分类", [{
     notebookId: record.sourceNotebookId,
-    run: () => applySourceTags(record, previousTags)
+    run: () => applySourceTags(record, previousTags, false)
   }])
   if (!committed.length) {
     throw new CardLinkError("mistakeTagWriteFailed", { action: "修改分类" })
@@ -901,7 +999,7 @@ export async function deleteMistakeTag(tagValue: string): Promise<{ tag: string;
       run: () => {
         let status: TagWriteStatus = "verified"
         for (const { previousTags, record } of bucket) {
-          status = combineTagWriteStatus(status, applySourceTags(record, previousTags))
+          status = combineTagWriteStatus(status, applySourceTags(record, previousTags, false))
         }
         return status
       }
@@ -1562,7 +1660,7 @@ export async function repairAndOrganizeMistakes(): Promise<void> {
       notebookId,
       run: () => {
         let status: TagWriteStatus = "verified"
-        for (const record of records) status = combineTagWriteStatus(status, applySourceTags(record))
+        for (const record of records) status = combineTagWriteStatus(status, applySourceTags(record, undefined, false))
         return status
       }
     }))))

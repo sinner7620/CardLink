@@ -14,7 +14,7 @@ export function setSceneWindowSize(width, height, win = window) {
 const PRESETS_KEY = "cardlink.scene.sizePresets";
 export const DEFAULT_SCENE_PRESETS = [
   { label: "紧凑", width: 480, height: 540 },
-  { label: "标准", width: 640, height: 620 },
+  { label: "标准", width: 720, height: 520 },
   { label: "宽屏", width: 900, height: 720 }
 ];
 export function readSceneSizePresets(win = window) {
@@ -37,7 +37,31 @@ export function saveSceneSizePreset(width, height, win = window) {
   return presets;
 }
 export function removeSceneSizePreset(width, height, win = window) {
+  const selected = readDefaultSceneSize(win);
+  if (selected.width === width && selected.height === height) saveDefaultSceneSize(720, 520, win);
   const presets = readSceneSizePresets(win).filter(item => item.width !== width || item.height !== height);
   win.localStorage.setItem(PRESETS_KEY, JSON.stringify(presets));
   return presets;
+}
+
+const DEFAULT_PRESET_KEY = "cardlink.scene.defaultSizePreset";
+export function readDefaultSceneSize(win = window) {
+  try {
+    const size = JSON.parse(win.localStorage.getItem(DEFAULT_PRESET_KEY) || "null");
+    if (Number.isInteger(size?.width) && size.width >= 360 && Number.isInteger(size?.height) && size.height >= 360 && size.height <= 1000) return size;
+  } catch {}
+  return { width: 720, height: 520 };
+}
+export function saveDefaultSceneSize(width, height, win = window) {
+  const preset = [...DEFAULT_SCENE_PRESETS, ...readSceneSizePresets(win)].find(item => item.width === width && item.height === height);
+  if (!preset) throw new Error("请选择已有预设");
+  const size = { width: preset.width, height: preset.height };
+  win.localStorage.setItem(DEFAULT_PRESET_KEY, JSON.stringify(size));
+  return size;
+}
+export function resetSceneWindowSize(win = window, sdk = win.mn) {
+  const size = readDefaultSceneSize(win);
+  sdk.size(size.width, size.height);
+  try { win.localStorage.setItem("cardlink.scene.windowSize", JSON.stringify(size)); } catch {}
+  return size;
 }

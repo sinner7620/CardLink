@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { runInNewContext } from "node:vm"
 import AdmZip from "adm-zip"
+import ts from 'typescript'
 
 test("最终安装包通过宿主 /pkg/ 映射解析场景资源，经典文件入口仍可解析", () => {
   const pkg = JSON.parse(readFileSync("package.json", "utf8"))
@@ -12,6 +13,31 @@ test("最终安装包通过宿主 /pkg/ 映射解析场景资源，经典文件�
   assert.equal(manifest.version, pkg.version)
   assert.equal(manifest.addonid, "marginnote.extension.mn4-answer-matcher")
   assert.equal(manifest.title, "CardLink")
+  const core = ts.createSourceFile('AnswerMatcherCore.js', archive.readAsText('AnswerMatcherCore.js'), ts.ScriptTarget.Latest, true)
+  let nativeMethods: ts.ObjectLiteralExpression | undefined
+  function findMethods(node: ts.Node): void {
+    if (ts.isBinaryExpression(node) && ts.isPropertyAccessExpression(node.left) && node.left.name.text === '__MN_ANSWER_CORE_GLOBAL__' && ts.isObjectLiteralExpression(node.right)) {
+      const methods = node.right.properties.find(property => ts.isPropertyAssignment(property) && property.name.getText(core) === 'instanceMethods')
+      if (methods && ts.isPropertyAssignment(methods) && ts.isObjectLiteralExpression(methods.initializer)) nativeMethods = methods.initializer
+    }
+    ts.forEachChild(node, findMethods)
+  }
+  findMethods(core)
+  assert.ok(nativeMethods, '交付包必须包含正式 Rails 原生方法表')
+  const methodNames = nativeMethods.properties.map(property => property.name?.getText(core))
+  for (const name of ['onReviewModeReason', 'onReviewModeMark', 'onReviewModeNext', 'onReviewModeToolbarResult',
+    'onCardMistakePanelLevel', 'onCardMistakePanelReason', 'onCardMistakePanelSkip', 'onCardMistakePanelOutsideTap', 'onCardMistakePanelClose'])
+    assert.ok(methodNames.includes(name), `交付包的正式入口缺少 ${name}`)
+  // The crash-prone b15 drawing bridge must not survive in the delivered core.
+  assert.doesNotMatch(archive.readAsText('AnswerMatcherCore.js'), /CAShapeLayer|bezierPathWithArcCenterRadiusStartAngleEndAngleClockwise/)
+  assert.equal(archive.getEntries().filter(entry => /^review-toolbar\/progress-/.test(entry.entryName)).length, 0)
+  for (const name of ['previous', 'next', 'answer', 'category', 'collapse', 'forward', 'history', 'mark', 'exit']) {
+    const icon = archive.getEntry(`review-toolbar/${name}.png`)
+    assert.ok(icon, `missing native toolbar icon ${name}`)
+    const bytes = icon.getData()
+    assert.equal(bytes.readUInt32BE(0), 0x89504e47)
+    assert.equal(bytes[25], 6, `native icon must retain RGBA transparency: ${name}`)
+  }
   assert.ok(manifest.events.includes("comments"))
   const html = archive.readAsText(manifest.panel)
   const base = "mnpanel://panel/index.html"

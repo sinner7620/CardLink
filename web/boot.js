@@ -105,11 +105,11 @@
     window.__MN_WORKBENCH_MOUNTING__ = true;
     if (window.__MN_SCENE_ENABLED__) {
       var saved;
-      try { saved = JSON.parse(window.localStorage.getItem("cardlink.scene.windowSize") || "null"); } catch (_) {}
+      try { saved = JSON.parse(window.localStorage.getItem("cardlink.scene.defaultSizePreset") || "null"); } catch (_) {}
       if (retainedSize) saved = retainedSize;
-      var valid = saved && Number.isFinite(saved.width) && saved.width >= 360 && Number.isFinite(saved.height) && saved.height >= 360;
+      var valid = saved && Number.isInteger(saved.width) && saved.width >= 360 && Number.isInteger(saved.height) && saved.height >= 360 && saved.height <= 1000;
       window.mn.mode("workspace");
-      window.mn.size(valid ? Math.round(saved.width) : 640, valid ? Math.min(1000, Math.round(saved.height)) : 620);
+      window.mn.size(valid ? saved.width : 720, valid ? saved.height : 520);
       retainedSize = null;
     }
     if (wasCollapsed) {

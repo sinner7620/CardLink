@@ -42,3 +42,28 @@ test("所有引入的上游源码逐字节匹配固定提交的Git blob，不修
     assert.equal(blob, info.gitBlobs[name], `上游文件已被修改：${name}`)
   }
 })
+
+
+test("默认预设可选择内置或自定义，临时调窗不改变默认，删除所选项回退预设2", () => {
+  const { api, win, data } = presets()
+  const calls: any[] = []
+  const host = { ...win, mn: { size: (w: number, h: number) => calls.push([w, h]) } }
+  api.resetSceneWindowSize(host)
+  assert.deepEqual(calls.pop(), [720, 520])
+  api.saveDefaultSceneSize(480, 540, host)
+  api.setSceneWindowSize(1000, 800, host)
+  api.resetSceneWindowSize(host)
+  assert.deepEqual(calls.pop(), [480, 540])
+  api.saveSceneSizePreset(1800, 650, host)
+  api.saveDefaultSceneSize(1800, 650, host)
+  api.resetSceneWindowSize(host)
+  assert.deepEqual(calls.pop(), [1800, 650])
+  assert.equal(JSON.parse(data.get("cardlink.scene.defaultSizePreset")!).width, 1800)
+  api.removeSceneSizePreset(1800, 650, host)
+  api.resetSceneWindowSize(host)
+  assert.deepEqual(calls.pop(), [720, 520])
+  assert.throws(() => api.saveDefaultSceneSize(777, 666, host), /已有预设/)
+  data.set("cardlink.scene.defaultSizePreset", "invalid")
+  api.resetSceneWindowSize(host)
+  assert.deepEqual(calls.pop(), [720, 520])
+})

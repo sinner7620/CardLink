@@ -41,6 +41,18 @@ const REVIEW_CURVES_ARRAY = [[1, 3, 7], [2, 5, 10], [14]]
 // 面板侧历史上的白屏正是把对象形态的 REVIEW_CURVES 当数组用；两条形态都要能渲染。
 const REVIEW_CURVES_OBJECT = { 0: [1, 3, 7], 1: [2, 5, 10], 2: [14] } as unknown as number[][]
 
+test('复测时间轴显示保存的错因，自定义标签按文本转义，旧历史仍能渲染', () => {
+  const html = renderToString(React.createElement(ui.ReviewTimeline, {
+    history: [
+      { at: '2026-10-31T00:00:00Z', level: 0, errorReason: { key: 'custom', label: '<img src=x>' } },
+      { at: '2026-11-01T00:00:00Z', level: 2 }
+    ], gapForIndex: () => 20
+  }))
+  assert.match(html, /错因：&lt;img src=x&gt;/)
+  assert.match(html, /previewTimelineReason/)
+  assert.doesNotMatch(html, /<img src=x>/)
+})
+
 test("OCR 结果 Markdown 含图片和链接时可安全渲染", () => {
   assert.doesNotThrow(() => ui.renderMarkdownPreview("# 原题\n![电路图](assets/q1.png)\n[参考链接](https://example.com)"))
   const html = ui.renderMarkdownPreview("![电路图](assets/q1.png) 与 [参考链接](https://example.com)")
@@ -156,14 +168,10 @@ test("到期复习页签渲染队列与复测按钮", () => {
   assert.match(html, /class="settingsCapsule reviewToolbar"/)
   assert.match(html, /class="settingsCapsuleSlider"/)
   assert.doesNotMatch(html, /reviewLiquid|reviewCapsuleGoo|reviewToolbarSlider/)
-  assert.match(html, /reviewSecondaryMenu/)
-  assert.match(html, /reviewSecondaryActions[\s\S]*题目分类[\s\S]*掌握等级[\s\S]*展开全部[\s\S]*复习模式/)
-  assert.match(html, /展开复习菜单/)
-  assert.match(html, /reviewToolbar[\s\S]*reviewQueueTools[\s\S]*reviewList/)
-  assert.match(html, /复习模式/)
-  assert.match(html.replace(/<!--.*?-->/g, ""), /共 1 道题/)
-  assert.match(html, /全部分类/)
-  assert.match(html, /全部等级/)
+  assert.match(html, /aria-label="排序"/)
+  assert.match(html, /reviewStartButton[\s\S]*开始复习/)
+  assert.match(html, /展开全部题目/)
+  assert.doesNotMatch(html, /reviewStartGlass|<canvas/)
   assert.doesNotMatch(html, /复习计划概览/)
   assert.match(html, /第 1 题/)
   assert.match(html, /不会/)
@@ -239,6 +247,29 @@ test("设置页核心组件：等级复习曲线引导在对象/数组两种形�
     assert.match(html, /错题分类说明/)
     assert.match(html, /不会/)
     assert.match(html, /掌握/)
+  }
+})
+
+test('待复习设置显示复习反馈且无小字，开关沿用已有偏好键', async () => {
+  for (const enabled of [undefined, false, true]) {
+    const commands: any[] = []
+    const element = ui.ReviewFeedbackSettings({
+      matching: { reviewCompletionConfetti: enabled },
+      action: async (...args: any[]) => { commands.push(args) }
+    })
+    const html = renderToString(element)
+    assert.match(html, /待复习设置/)
+    assert.match(html, /aria-label="复习反馈"/)
+    assert.doesNotMatch(html, /复习完成烟花|复习完成时与结果弹窗一起播放/)
+    const row = html.match(/<button[^>]*><i>[\s\S]*?<strong>复习反馈<\/strong>[\s\S]*?<\/button>/)?.[0]
+    assert.ok(row)
+    assert.doesNotMatch(row.slice(row.lastIndexOf('<strong>')), /<small>/)
+    assert.match(html, /<small>题目预览默认展开前 2 条<\/small>/)
+    const items = element.props.items
+    const feedback = items.find((item: any[]) => item[1] === '复习反馈')
+    assert.equal(feedback[4].props.checked, enabled !== false)
+    await feedback[3]()
+    assert.deepEqual(commands, [['setPersonalSetting', { key: 'reviewCompletionConfetti', value: enabled === false }]])
   }
 })
 

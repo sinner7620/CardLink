@@ -60,3 +60,14 @@ test("同题刷新也丢弃上次旧内容，切到另一题立即撤下旧预�
   h.requests[2].resolve({ record: { recordId: "b" } })
   await next
 })
+
+test("当前失效题清除预览并后台同步列表，保留失败提示", async () => {
+  const h = harness()
+  const opening = h.open("missing")
+  h.requests[0].reject(new Error("原卡片不可用"))
+  await opening
+  assert.equal(h.state.detail, null)
+  assert.equal(h.state.error, "原卡片不可用")
+  assert.equal(h.state.reloads, 1)
+  assert.equal(h.state.busy, false)
+})

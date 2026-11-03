@@ -84,13 +84,13 @@ test("工作台首次打开明确恢复workspace与标准尺寸，菜单小窗�
   const normal = fixture()
   await normal.start
   assert.ok(normal.calls.some(c => Array.isArray(c) && c[0] === "mode" && c[1] === "workspace"))
-  assert.ok(normal.calls.some(c => Array.isArray(c) && c[0] === "size" && c[1] === 640 && c[2] === 620))
+  assert.ok(normal.calls.some(c => Array.isArray(c) && c[0] === "size" && c[1] === 720 && c[2] === 520))
   const menu = fixture(undefined, false, true)
   await menu.start
   assert.equal(menu.scripts.length, 0)
   menu.events["mn:workbenchRequested"]()
   assert.equal(menu.scripts.length, 1)
-  assert.ok(menu.calls.some(c => Array.isArray(c) && c[0] === "size" && c[1] === 640 && c[2] === 620))
+  assert.ok(menu.calls.some(c => Array.isArray(c) && c[0] === "size" && c[1] === 720 && c[2] === 520))
   menu.events["mn:workbenchRequested"]()
   assert.equal(menu.scripts.length, 1)
 })

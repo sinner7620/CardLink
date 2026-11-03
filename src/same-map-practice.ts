@@ -2,15 +2,20 @@ import { delay, MN, showHUD, type UIImage } from "marginnote"
 import { decodeBase64Ascii } from "./base64"
 import { loadMatcherSettings } from "./settings"
 import { focusNoteInMindMapFocusMode } from "./note-navigation"
+import { setWindowFrame } from "./window-opacity"
 
 type Rect = { x: number; y: number; width: number; height: number }
 type Calibration = { sx: number; sy: number; tx: number; ty: number }
 type MaskAppearance = { color: string; image?: UIImage }
+// Retain the detached UIKit carrier: it renders color/image/text without adding
+// an overlay UIView to the host's visible view tree (CardMask v0.1.5 approach).
+type MaskLayer = { carrier: UIView; layer: any }
 
 interface PracticeQueue {
   notebookId: string
   questionIds: Set<string>
   generation: number
+  currentQuestionId: string
 }
 
 interface PracticeSession extends PracticeQueue {
@@ -18,7 +23,7 @@ interface PracticeSession extends PracticeQueue {
   revealedQuestionIds: Set<string>
   canvas: any
   calibration: Calibration
-  masks: Map<string, UIView>
+  masks: Map<string, MaskLayer>
   appearance: MaskAppearance
   rebinding: boolean
 }
@@ -87,7 +92,6 @@ function canvasCalibration(cardView: any, map: any, model: Rect): { canvas: any;
   if (!cardBounds) return
   let child = cardView
   let converted = cardBounds
-  const candidates: Array<{ canvas: any; rect: Rect; score: number }> = []
   for (let level = 1; level <= 18; level++) {
     const parent = child?.superview
     const frame = rectOf(child)
@@ -99,32 +103,34 @@ function canvasCalibration(cardView: any, map: any, model: Rect): { canvas: any;
       y: frame.y + (converted.y - bounds.y) * sy,
       width: converted.width * sx, height: converted.height * sy
     }
-    const parentBounds = rectOf(parent, "bounds")
-    let score = Math.abs(converted.x - model.x) / Math.max(24, model.width) +
-      Math.abs(converted.y - model.y) / Math.max(24, model.height) +
-      Math.abs(converted.width - model.width) / Math.max(24, model.width) +
-      Math.abs(converted.height - model.height) / Math.max(24, model.height)
-    if (parentBounds) {
-      if (parentBounds.width < cardBounds.width * 1.35 && parentBounds.height < cardBounds.height * 1.35) score += 4
-      else if (parentBounds.width < cardBounds.width * 2 && parentBounds.height < cardBounds.height * 2) score += 1.2
+    // A ranked ancestor can be a UIScrollView. Only the actual canvas owns
+    // model-space overlays; never silently fall back to another view.
+    if (nativeViewClass(parent).includes("MindMapCanvas")) {
+      try {
+        const nativeRect = cardView.convertRectToView(cardBounds, parent)
+        const value = rectOf({ frame: nativeRect })
+        if (value) converted = value
+      } catch { /* Older JSB builds expose only frame/bounds conversion. */ }
+      const sx = converted.width / model.width, sy = converted.height / model.height
+      if (!Number.isFinite(sx) || !Number.isFinite(sy) || sx <= 0 || sy <= 0) return
+      if (typeof parent.layer?.addSublayer !== "function") return
+      return { canvas: parent, calibration: { sx, sy, tx: converted.x - model.x * sx, ty: converted.y - model.y * sy } }
     }
-    if (Array.from(parent.subviews ?? []).length <= 1) score += 0.7
-    if (level === 1) score += 0.9
-    else if (level === 2) score += 0.3
-    candidates.push({ canvas: parent, rect: { ...converted }, score })
     if (parent === map) break
     child = parent
   }
-  candidates.sort((a, b) => a.score - b.score)
-  // The reference add-on verified candidate #2 above the handwriting layer.
-  const candidate = candidates[1] ?? candidates[0]
-  if (!candidate) return
-  const sx = candidate.rect.width / model.width, sy = candidate.rect.height / model.height
-  if (!Number.isFinite(sx) || !Number.isFinite(sy) || sx <= 0 || sy <= 0) return
-  return {
-    canvas: candidate.canvas,
-    calibration: { sx, sy, tx: candidate.rect.x - model.x * sx, ty: candidate.rect.y - model.y * sy }
+}
+
+function nativeViewClass(view: any): string {
+  for (const key of ["className", "$className", "class", "$class"]) {
+    try {
+      const value = view[key]
+      const name = String(typeof value === "function" ? value.call(view) : value ?? "")
+      if (name && name !== "[object Object]") return name
+    } catch { /* Try the next JSB class representation. */ }
   }
+  try { return String(typeof view.description === "function" ? view.description() : view.description ?? "") }
+  catch { return "" }
 }
 
 function answerFrames(map: any, questionIds: Set<string>): Map<string, Rect> {
@@ -157,9 +163,11 @@ function maskAppearance(): MaskAppearance {
   return { color: settings.answerMaskColor || (settings.answerMaskStyle === "light" ? "#d9e4f2" : "#141922"), image }
 }
 
-function makeMask(appearance: MaskAppearance): UIView {
+function makeMask(appearance: MaskAppearance): MaskLayer {
+  // UIKit performs the color bridge; no UIColor.CGColor / UIImage.CGImage
+  // access is needed, including on builds where those properties throw.
   const mask = new UIView({ x: 0, y: 0, width: 1, height: 1 })
-  mask.backgroundColor = UIColor.colorWithHexString(appearance.color).colorWithAlphaComponent(0.99)
+  mask.backgroundColor = UIColor.colorWithHexString(appearance.color).colorWithAlphaComponent(1)
   mask.layer.cornerRadius = 8
   mask.layer.masksToBounds = true
   ;(mask as any).userInteractionEnabled = false
@@ -179,12 +187,12 @@ function makeMask(appearance: MaskAppearance): UIView {
     ? UIColor.colorWithHexString("#17345f") : UIColor.whiteColor()
   ;(label as any).userInteractionEnabled = false
   mask.addSubview(label)
-  return mask
+  return { carrier: mask, layer: mask.layer }
 }
 
 function clearMasks(session: PracticeSession): void {
   for (const mask of session.masks.values()) {
-    try { (mask as any).removeFromSuperview() } catch { /* detached canvas */ }
+    try { mask.layer.removeFromSuperlayer() } catch { /* detached canvas */ }
   }
   session.masks.clear()
 }
@@ -206,7 +214,7 @@ function updateMask(session: PracticeSession): boolean {
   if (!wanted.size && session.questionIds.size > session.revealedQuestionIds.size) return true
   for (const [id, mask] of session.masks) {
     if (!wanted.has(id)) {
-      ;(mask as any).removeFromSuperview()
+      mask.layer.removeFromSuperlayer()
       session.masks.delete(id)
     }
   }
@@ -220,15 +228,26 @@ function updateMask(session: PracticeSession): boolean {
       mask = makeMask(session.appearance)
       session.masks.set(id, mask)
     }
-    mask.frame = target
-    const subviews = Array.from((mask as any).subviews ?? []) as any[]
-    if (subviews.length > 1) subviews[0].frame = { x: 0, y: 0, width: target.width, height: target.height }
-    const label = subviews[subviews.length - 1]
-    if (label) label.frame = { x: 6, y: Math.max(0, target.height / 2 - 19), width: Math.max(0, target.width - 12), height: 38 }
-    session.canvas.addSubview(mask)
+    updateMaskLayer(mask, target, session.canvas.layer)
     covered++
   }
   return wanted.size === 0 || covered > 0
+}
+
+function updateMaskLayer(mask: MaskLayer, target: Rect, parentLayer: any): void {
+  const transaction = (globalThis as any).CATransaction
+  const transact = typeof transaction?.begin === "function" && typeof transaction?.setDisableActions === "function" && typeof transaction?.commit === "function"
+  if (transact) { transaction.begin(); transaction.setDisableActions(true) }
+  try {
+    setWindowFrame(mask.carrier, target)
+    mask.layer.opacity = 1
+    const subviews = Array.from((mask.carrier as any).subviews ?? []) as any[]
+    if (subviews.length > 1) setWindowFrame(subviews[0], { x: 0, y: 0, width: target.width, height: target.height })
+    const label = subviews[subviews.length - 1]
+    if (label) setWindowFrame(label, { x: 6, y: Math.max(0, target.height / 2 - 19), width: Math.max(0, target.width - 12), height: 38 })
+    // Reattach only after host detachment, rather than reordering every tick.
+    if (mask.layer.superlayer !== parentLayer) parentLayer.addSublayer(mask.layer)
+  } finally { if (transact) transaction.commit() }
 }
 
 async function rebindMask(session: PracticeSession): Promise<void> {
@@ -287,6 +306,11 @@ export function sameMapPracticeQuestionIds(): string[] {
   return sameMapPracticeActive() && active ? [...active.questionIds] : []
 }
 
+export function sameMapPracticeCurrentQuestionId(): string | undefined {
+  if (!sameMapPracticeActive() || !active) return
+  return active.currentQuestionId
+}
+
 export async function navigateSameMapPractice(questionId: string): Promise<boolean> {
   if (!sameMapPracticeActive()) return false
   const session = active
@@ -296,6 +320,7 @@ export async function navigateSameMapPractice(questionId: string): Promise<boole
     return false
   }
   if (!sameMapPracticeActive() || active !== session) return false
+  session.currentQuestionId = questionId
   return true
 }
 
@@ -331,7 +356,7 @@ export async function startSameMapPractice(notebookId: string, questionIds: Iter
   const focusedNotebookId = currentNotebookId()
   if (focusedNotebookId && focusedNotebookId !== notebookId) return { started: false, reason: "学习集已切换，请重新开始做题" }
   if (options.maskAnswers === false) {
-    active = { kind: "focus", notebookId, questionIds: selected, generation: ++nextGeneration }
+    active = { kind: "focus", notebookId, questionIds: selected, generation: ++nextGeneration, currentQuestionId: firstQuestionId }
     return { started: true, answerCount: 0, maskAnswers: false }
   }
   let card: { id: string; view: any; map: any } | undefined
@@ -353,13 +378,13 @@ export async function startSameMapPractice(notebookId: string, questionIds: Iter
   const frame = modelFrame(node)
   if (!frame) return { started: false, reason: "无法读取定位卡片的脑图位置" }
   const placement = canvasCalibration(card.view, currentMap, frame)
-  if (!placement?.canvas?.superview) return { started: false, reason: "无法建立脑图遮盖坐标" }
+  if (!placement?.canvas?.superview) return { started: false, reason: "无法定位 MindMapCanvas 或图层接口不可用，未启动答案遮盖" }
   let appearance: MaskAppearance
   try { appearance = maskAppearance() }
   catch (error) { return { started: false, reason: error instanceof Error ? error.message : "自定义遮盖图片加载失败" } }
   const session: PracticeSession = {
     kind: "masked", notebookId: currentNotebookId() || notebookId, questionIds: selected, revealedQuestionIds: new Set(), canvas: placement.canvas,
-    calibration: placement.calibration, masks: new Map(), appearance, generation: ++nextGeneration, rebinding: false
+    calibration: placement.calibration, masks: new Map(), appearance, generation: ++nextGeneration, rebinding: false, currentQuestionId: firstQuestionId
   }
   active = session
   try {

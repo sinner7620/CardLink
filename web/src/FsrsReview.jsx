@@ -51,10 +51,10 @@ export default function FsrsReview({ recordsRevision, sources, children }) {
     names: feedbackNames, busy: busy || !!editor, notice: error || (!data ? "正在读取复习记录…" : ""), manualTodayIds: manualIds,
     content: async recordId => ({ ...await MNBridge.send("fsrsContent", { recordId }), record: records.find(item => item.recordId === recordId) }),
     start: items => run(() => MNBridge.send("startFsrsReviewMode", { recordIds: items.filter(item => !item.reviewCompleted).map(item => item.recordId) })),
-    review: (item, level) => level === 0 ? setEditor({ item }) : submit(item, level),
+    review: (item, level) => level === 0 || level === 1 ? setEditor({ item, level }) : submit(item, level),
     resume: item => run(async () => { const result = await MNBridge.send("fsrsPause", { recordId: item.recordId, revision: item.progress.revision, paused: false }); await refresh(); return { nextReviewAt: result.card?.due || result.initialDue } }),
     addOverdue: count => { const start = new Date(); start.setHours(0, 0, 0, 0); const ids = records.filter(item => !item.reviewCompleted && Date.parse(item.nextReviewAt) < +start && !manualIds.includes(item.recordId)).sort(() => Math.random() - .5).slice(0, count).map(item => item.recordId); setManualIds(old => [...old, ...ids]); return { addedCount: ids.length } },
-    editor: item => editor?.item.recordId === item.recordId ? <div className="reviewHistory"><ErrorEditor busy={busy} onCancel={() => setEditor(null)} onSave={(keys, note) => submit(editor.item, 0, keys, note)} /></div> : null,
+    editor: item => editor?.item.recordId === item.recordId ? <div className="reviewHistory"><ErrorEditor busy={busy} onCancel={() => setEditor(null)} onSave={(keys, note) => submit(editor.item, editor.level, keys, note)} /></div> : null,
     history: (item, renderTimeline) => <FsrsHistory key={`${item.recordId}:${item.progress.revision}`} item={item} renderTimeline={renderTimeline} run={run} refresh={refresh} busy={busy} />
   }
   return children({ records, adapter })

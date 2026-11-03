@@ -849,3 +849,5 @@ body > #root > .shell > main > section.reviewPage.reviewFiltersOpen {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
+
+.reviewFilterToggle{position:relative;overflow:visible}.reviewFilterCount{position:absolute;right:-5px;top:-5px;min-width:16px;height:16px;padding:0 3px;border-radius:9px;background:var(--accent,#5b63df);color:white;font-size:10px;line-height:16px;text-align:center;pointer-events:none}

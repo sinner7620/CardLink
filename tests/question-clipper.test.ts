@@ -1,3 +1,4 @@
+import { windowOpacityFixture } from "./window-opacity-fixture"
 import assert from "node:assert/strict"
 import test from "node:test"
 import { readFileSync } from "node:fs"
@@ -22,7 +23,7 @@ function harness() {
   const db = { getNoteById: (id: string) => notes.get(id), deleteBookNote: (id: string) => notes.delete(id), setNotebookSyncDirty() {}, savedb() {} }
   const sandbox: any = { exports: {}, self: owner, Application: { sharedInstance: () => app },
     NSTimer: { scheduledTimerWithTimeInterval: (_delay: number, _repeat: boolean, action: () => void) => timers.push(action) },
-    require: (name: string) => name === "marginnote" ? {
+    require: (name: string) => name === "./window-opacity" ? windowOpacityFixture(sandbox.UIView, { failClass: true }) : name === "./quick-menu-surface" ? { styleQuickMenuSurface(view: any, radius = 18) { view.layer.cornerRadius = radius; view.backgroundColor = sandbox.UIColor.colorWithHexString("#f7f8fa").colorWithAlphaComponent(0.94) } } : name === "marginnote" ? {
       MN: { currnetNotebookId: "book", db }, NodeNote: { getSelectedNodes: () => selected ? [{ note: selected }] : [] },
       UIAlertViewStyle: { PlainTextInput: 2 },
       select: async () => choice,
@@ -302,6 +303,7 @@ test("设置桥接的 self 为网页控制器时，快捷区仍绑定插件实�
   sandbox.self = webController
   const color = (hex: string) => ({ hex, colorWithAlphaComponent() { return this } })
   Object.assign(sandbox, {
+    JSB: { defineClass: (_name: string, methods: any) => ({ new: () => ({ ...methods }) }) },
     MNUtil: { currentWindow: window }, MNButton: {}, UIAccessibility: { isReduceMotionEnabled: () => true },
     NSUserDefaults: { standardUserDefaults: () => ({ setObjectForKey() {}, synchronize() {} }) },
     UIView: View, UIToolbar: View, UILabel: View, UIWebView: class extends View { scrollView = new View() },
@@ -346,8 +348,8 @@ test("设置桥接的 self 为网页控制器时，快捷区仍绑定插件实�
   // Exercise actual drag/dock callbacks: native text and hit targets share frames.
   for (const y of [2, 350, 750, 2]) {
     const frame = owner.mnutilsEntranceBall.frame
-    menuApi.onMnutilsEntrancePan({ state: 1, locationInView: () => ({ x: frame.x + 20, y: frame.y + 20 }) })
-    menuApi.onMnutilsEntrancePan({ state: 3, locationInView: () => ({ x: 500, y }) })
+    menuApi.onMnutilsEntrancePan({ state: 1, translationInView: () => ({ x: 0, y: 0 }), setTranslationInView() {} })
+    menuApi.onMnutilsEntrancePan({ state: 3, translationInView: () => ({ x: 500 - frame.x, y: y - frame.y }), setTranslationInView() {} })
     const center = menu.closeButton.frame.y + menu.closeButton.frame.height / 2
     for (const control of [menu.startButton, menu.clipEnd, menu.clipControls]) {
       assert.equal(control.frame.y + control.frame.height / 2, center)

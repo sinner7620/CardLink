@@ -2,8 +2,10 @@
 ## 职责
 错题全生命周期业务中枢：标记、复习推算、改级、分类、恢复扫描、工作台数据装配、提醒轮询。
 ## 关键导出
-- markQuestionAsMistake / markQuestionsAsMistakes：单题与批量标记（统一走 reviewMistake 推算）
-- reviewMistakeById / changeMistakeLevelById / reviewMistakesByIds / resumeMistakeReviewById
+- markQuestionAsMistake / markQuestionsAsMistakes：单题与批量标记（统一走 reviewMistake 推算）。末尾 `preserveReason=false` 保持原有语义；卡片面板与侧边快捷等级反馈传 true，只保存等级时保留原卡已有错因标签，新历史不继承旧错因，掌握忽略本次错因。
+- reviewMistakeById / changeMistakeLevelById / reviewMistakesByIds / resumeMistakeReviewById。`changeMistakeLevelById` 同样支持末尾 `preserveReason=false`，详情侧边单项改级传 true；其他固定复习入口不变。
+- mistakeReasonHistoryId(record)：返回当前最新历史的组合身份（记录 ID、创建时间、历史序号、时间和等级），不新增持久化字段。
+- supplementMistakeReasonById(recordId, reason, expectedHistoryId?)：给刚保存的非掌握等级补写错因，原卡标签回读确认后才更新同一历史；不增加复测次数，不重算计划。卡片菜单必须传保存回执身份，过期、跨题及原卡等级变化时拒绝写入；失败可重试，不丢已保存等级。
 - repairAndOrganizeMistakes：刷新错题分类索引（手动入口，内含全量标签恢复 + beta.12 反向记录修复）
 - mistakeWorkbenchData / mistakeDetailById：面板数据装配（分段耗时已埋点）。详情可选 `content: "question" | "answers" | "all"`，默认 all 保留原调用行为；question 跳过答案工作并返回 answerStatus=deferred；answers 不生成原题 HTML。两种局部读取仍同步原卡元数据，日志包含 content。
 - recoverMistakesFromTags：全量标签恢复（仅手动）

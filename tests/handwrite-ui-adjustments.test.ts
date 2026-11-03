@@ -5,6 +5,7 @@ import { reviewResultHint } from "../src/mistake-domain"
 import { readFileSync } from "node:fs"
 import { runInNewContext } from "node:vm"
 import { transpileModule } from "typescript"
+import { windowOpacityFixture } from './window-opacity-fixture'
 
 test("答案窗口默认避开顶部软件工具栏，缩小后仍落在平板视区内", () => {
   for (const [width, height] of [[1024, 768], [1280, 894], [640, 768]]) {
@@ -33,12 +34,13 @@ test("天数显示保持原来的96点下拉区域及三个等宽88点按钮", (
     addSubview(view: any) { this.subviews.push(view) }
   }
   const owner: any = {}
+  const windowOpacity = windowOpacityFixture(View)
   const scope: any = {
     exports: {}, self: owner, UIView: View,
     UIButton: { buttonWithType: () => ({ title: "", layer: {}, titleLabel: {}, setTitleForState(title: string) { this.title = title }, setTitleColorForState() {}, addTargetActionForControlEvents() {}, addGestureRecognizer() {} }) },
     UIColor: { clearColor: () => "clear", whiteColor: () => "white", blackColor: () => "black", colorWithHexString: (color: string) => color },
     UIFont: { systemFontOfSize: (size: number) => size }, UILongPressGestureRecognizer: class {},
-    require: (name: string) => name === "./mistake-domain" ? { reviewResultHint } : name === "./settings" ? { loadMatcherSettings: () => ({ mistakeReviewCurves: { 0: [1, 3, 7], 1: [2, 5, 10], 2: [14] } }) } : name === "./ui-tokens" ? { UI_COLORS: {} } : { MN: {} }
+    require: (name: string) => name === './window-opacity' ? windowOpacity : name === "./mistake-domain" ? { reviewResultHint } : name === "./settings" ? { loadMatcherSettings: () => ({ mistakeReviewCurves: { 0: [1, 3, 7], 1: [2, 5, 10], 2: [14] } }) } : name === "./ui-tokens" ? { UI_COLORS: {} } : { MN: {} }
   }
   runInNewContext(transpileModule(readFileSync("src/floating-toolbar.ts", "utf8"), { compilerOptions: { module: 1, target: 7 } }).outputText, scope)
   scope.exports.createAnswerToolbar()

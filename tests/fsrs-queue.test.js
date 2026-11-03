@@ -22,3 +22,9 @@ test('迁入题保持待反馈，不能把旧等级显示为新反馈', () => {
   assert.equal(row.level, -1)
   assert.equal(row.reviewCompleted, true)
 })
+
+test('最后复习排序使用智能调度日期，迁入题不能继承旧固定复习日期', () => {
+  const progress = { revision: 1, paused: false, history: [{ rating: 3 }], card: { last_review: '2026-10-29' } }
+  assert.equal(fsrsQueueRecord({ progress }, { lastReviewedAt: '2026-10-01' }).lastReviewedAt, '2026-10-29')
+  assert.equal(fsrsQueueRecord({ progress: { ...progress, card: undefined } }, { lastReviewedAt: '2026-10-01' }).lastReviewedAt, undefined)
+})

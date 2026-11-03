@@ -1,8 +1,17 @@
+import type { ErrorReason } from './error-reasons'
 export type MistakeLevel = 0 | 1 | 2
 
 export interface MistakeHistoryItem {
   at: string
   level: MistakeLevel
+  errorReason?: ErrorReason
+}
+
+/** Attach only to this operation's new history entry; never rewrite past causes. */
+export function withMistakeReason(record: MistakeRecord, reason?: ErrorReason): MistakeRecord {
+  if (!reason || !record.history.length) return record
+  return { ...record, history: record.history.map((entry, index) => index === record.history.length - 1
+    ? { ...entry, errorReason: { key: reason.key, label: reason.label } } : entry) }
 }
 
 export interface MistakeRecord {

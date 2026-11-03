@@ -10,13 +10,13 @@ import { createMistakeRecord } from "../src/mistake-domain"
 function harness() {
   const settings: any = { debugModeEnabled: false, debugReviewAlgorithm: "fixed" }
   const fixed = { records: { "book:note": createMistakeRecord({ sourceNoteId: "note", sourceNotebookId: "book", sourceNotebookTitle: "书", sourceTitle: "题", sourcePathTitles: [], level: 1 }, new Date("2026-10-01")) } }
-  const kv: Record<string, unknown> = {}, backup: Record<string, unknown> = {}, access: string[] = []
+  const kv: Record<string, unknown> = {}, backup: Record<string, unknown> = {}, access: string[] = [], tagWrites: any[] = []
   const service: any = {}
   const modules: any = {
     "./fsrs-domain": domain, "./fsrs-store": storage,
     "./settings": { loadMatcherSettings: () => settings },
     "./mistake-store": { loadMistakeState: () => fixed },
-    "./mistake-manager": { isolatedReviewContent: () => ({ questionHtml: "q", answers: [] }) },
+    "./mistake-manager": { isolatedReviewContent: () => ({ questionHtml: "q", answers: [] }), syncMistakeReasonTags: (id: string, reasons: any[]) => tagWrites.push({ id, reasons }) },
     "./storage-paths": { cardLinkDocumentPath: () => "/backups", ensureStorageDirectory() {} },
     marginnote: { MN: { app: { documentPath: "/docs" } }, getLocalDataByKey: (key: string) => { access.push(`read:${key}`); return kv[key] },
       setLocalDataByKey: (value: unknown, key: string) => { access.push(`write:${key}`); kv[key] = value },
@@ -24,7 +24,7 @@ function harness() {
   }
   runInNewContext(transpileModule(readFileSync("src/fsrs-service.ts", "utf8"), { compilerOptions: { module: 1, target: 7 } }).outputText,
     { exports: service, require: (name: string) => modules[name] })
-  return { settings, fixed, kv, access, service }
+  return { settings, fixed, kv, access, service, tagWrites }
 }
 test("调试关闭和固定模式下 FSRS 命令零存储读写", () => {
   const h = harness()
@@ -44,7 +44,9 @@ test("初始化、评分、暂停、切换及错因补改都不写固定数据�
   h.settings.debugReviewAlgorithm = "fsrs"
   let result = h.service.fsrsCommand("fsrsReview", { recordId: "book:note", eventId: "event-1", revision: 0, rating: 4 })
   assert.equal(result.card.reps, 1)
+  assert.equal(h.tagWrites.length, 1)
   h.service.fsrsCommand("fsrsPause", { recordId: "book:note", revision: 1, paused: true })
+  assert.equal(h.tagWrites.length, 1, '暂停不改错因标签')
   const saved = h.kv[storage.FSRS_STORAGE_KEY]
   h.settings.debugModeEnabled = false
   assert.throws(() => h.service.fsrsCommand("fsrsReview", {}))
@@ -54,6 +56,7 @@ test("初始化、评分、暂停、切换及错因补改都不写固定数据�
   assert.equal(h.kv[storage.FSRS_STORAGE_KEY], saved)
   result = h.service.fsrsCommand("fsrsAmendErrors", { recordId: "book:note", revision: 2, eventId: "event-1", errorReasons: ["time"], errorNote: "耗时较长" })
   assert.equal(result.card.reps, 1)
+  assert.equal(h.tagWrites[1].reasons[0].label, '时间不足')
   assert.equal(JSON.stringify(h.fixed), fixedBefore)
   assert.ok(h.access.every(key => key.endsWith(storage.FSRS_STORAGE_KEY)))
 })

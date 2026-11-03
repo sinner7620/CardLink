@@ -1,151 +1,129 @@
-/** 原生答案 WebView 与 Web iframe 的唯一内容/缩放控制器。
- * 完全自包含：renderCardHtml 将本函数和同一手势内核序列化到 HTML。
- */
-export function mountCardPreview(win: any, wirePinch: any): any {
+import kinetic from "panzoom/lib/kinetic"
+
+/** Library-owned gestures and inertia; the adapter bounds content and isolates pen input. */
+export function mountCardPreview(win: any, Panzoom: any): any {
   if (win.__mnCardPreview) return win.__mnCardPreview
-  const doc = win.document, body = doc.body, root = doc.documentElement
+  const doc = win.document, root = doc.documentElement, body = doc.body
   if (!body) return
-  let card = doc.querySelector(".card")
+  let card = doc.querySelector('.card')
   if (!card) {
-    card = doc.createElement("div")
-    card.className = "cardPreviewContent"
-    card.style.padding = win.getComputedStyle?.(body).padding || "0"
-    body.style.padding = "0"
+    card = doc.createElement('div'); card.className = 'cardPreviewContent'
+    card.style.padding = win.getComputedStyle?.(body).padding || '0'; body.style.padding = '0'
     while (body.firstChild) card.appendChild(body.firstChild)
     body.appendChild(card)
   }
-  root.style.colorScheme = "light"
-  root.style.overflow = "auto"
-  root.style.touchAction = "pan-x pan-y"
-  root.style.overflowAnchor = "none"
-  root.style.scrollBehavior = "auto"
-  body.style.overflow = "hidden"
-  body.style.margin = "0"
-  body.style.background = "#fff"
-  body.style.touchAction = "pan-x pan-y"
-  card.style.boxSizing = "border-box"
-  card.style.transformOrigin = "0 0"
-  card.style.position = "relative"
-  card.style.touchAction = "pan-x pan-y"
-  let scale = 1, focusX = 0, focusY = 0, scheduled = 0
-  let pinchFrame = 0, pendingPinch: any = null
-  let offsetX = 0, offsetY = 0, renderedViewportHeight = 0
-  let renderedWidth = 0, renderedHeight = 0, renderedScale = 0
-  let width = Math.max(1, root.clientWidth || win.innerWidth)
-  const listeners = new Set<any>()
-  function layout() {
-    scheduled = 0
-    card.style.width = width + "px"
-    const height = Math.max(1, card.scrollHeight)
-    const viewportHeight = root.clientHeight || win.innerHeight
-    if (renderedWidth === width && renderedHeight === height && renderedScale === scale && renderedViewportHeight === viewportHeight) return
-    renderedViewportHeight = viewportHeight
-    renderedWidth = width
-    renderedHeight = height
-    renderedScale = scale
-    card.style.width = width + "px"
-    card.style.maxWidth = "none"
-    // 跨过100%仍保留同一变换坐标系，不在手势途中切回none。
-    card.style.transform = "scale(" + scale + ")"
-    offsetX = Math.max(0, (width - width * scale) / 2)
-    offsetY = scale < 1 ? Math.max(0, (viewportHeight - height * scale) / 2) : 0
-    card.style.left = offsetX + "px"
-    card.style.top = offsetY + "px"
-    // 不在100%时常驻 will-change 合成层；仅内容缩放，不缩放整个 document。
-    body.style.width = Math.ceil(Math.max(width, width * scale)) + "px"
-    body.style.height = Math.ceil(Math.max(viewportHeight, height * scale)) + "px"
-    root.dataset.previewScale = scale.toFixed(2)
-  }
-  function schedule() { if (!scheduled) scheduled = win.setTimeout(layout, 0) }
-  function flushPinch() {
-    if (pinchFrame) win.cancelAnimationFrame(pinchFrame)
-    pinchFrame = 0
-    const pending = pendingPinch
-    pendingPinch = null
-    if (pending) setScale(pending.value, pending.point)
-  }
-  function queuePinch(value: number, point: any) {
-    pendingPinch = { value, point }
-    if (!pinchFrame) pinchFrame = win.requestAnimationFrame(flushPinch)
-  }
-  function announce() { flushPinch(); listeners.forEach(listener => listener(scale)) }
-  function setScale(value: number, point?: any) {
-    const next = Math.max(.6, Math.min(3, Number(value) || 1))
-    // React 工具条与 iframe 手势共享控制器时会把同一比例回写一次；相同比例
-    // 不再重复改 document 几何和 scrollTo，避免缩放锚点来回抖动。
-    // 比例不变但双指中心移动时仍需平移，工具条同值回写则不动锚点。
-    if (Math.abs(next - scale) < .001 && !point) return
-    scale = next
-    layout()
-    if (point) win.scrollTo(Math.max(0, offsetX + focusX * scale - point.x), Math.max(0, offsetY + focusY * scale - point.y))
-  }
-  function remember(point: any) {
-    flushPinch()
-    focusX = (win.scrollX + point.x - offsetX) / scale
-    focusY = (win.scrollY + point.y - offsetY) / scale
-  }
-  const handwriting = doc.querySelector('[data-bound-handwriting]:not([data-bound-handwriting="always"])')
-  let tapStart: any = null, lastTap: any = null, lastToggle = 0
-  function toggleHandwriting() {
-    if (!handwriting) return
-    handwriting.hidden = !handwriting.hidden
-    layout()
-  }
-  function doubleClick(event: any) {
-    if (!handwriting) return
-    event.preventDefault()
-    if (Date.now() - lastToggle < 500) return
-    toggleHandwriting()
-  }
-  function tapBegin(event: any) {
-    if (event.touches.length !== 1) { tapStart = null; lastTap = null; return }
-    tapStart = { x: event.touches[0].clientX, y: event.touches[0].clientY, at: Date.now() }
-  }
-  function tapMove(event: any) {
-    if (!tapStart) return
-    if (event.touches.length !== 1 || Math.hypot(event.touches[0].clientX - tapStart.x, event.touches[0].clientY - tapStart.y) > 12) {
-      tapStart = null; lastTap = null
-    }
-  }
-  function tapEnd(event: any) {
-    if (!handwriting || !tapStart || event.touches.length || Date.now() - tapStart.at > 300) { tapStart = null; return }
-    if (lastTap && tapStart.at - lastTap.at < 350 && Math.hypot(tapStart.x - lastTap.x, tapStart.y - lastTap.y) < 24) {
-      event.preventDefault(); toggleHandwriting(); lastToggle = Date.now(); lastTap = null
-    } else lastTap = tapStart
-    tapStart = null
-  }
-  function tapCancel() { tapStart = null; lastTap = null }
-  doc.addEventListener("dblclick", doubleClick)
-  doc.addEventListener("touchstart", tapBegin, { passive: true })
-  doc.addEventListener("touchmove", tapMove, { passive: true })
-  doc.addEventListener("touchend", tapEnd, { passive: false })
-  doc.addEventListener("touchcancel", tapCancel)
-  const unbind = wirePinch(doc, {
-    getScale: () => pendingPinch ? Math.max(.6, Math.min(3, pendingPinch.value)) : scale,
-    applyScale: queuePinch, onPinchStart: remember, onGestureStart: remember,
-    onPinchEnd: announce, clientWidth: () => win.innerWidth / 2, clientHeight: () => win.innerHeight / 2
+  Object.assign(root.style, { colorScheme: 'light', overflow: 'hidden', height: '100%', touchAction: 'none' })
+  Object.assign(body.style, { overflow: 'hidden', margin: '0', width: '100%', height: '100%', background: '#fff' })
+  Object.assign(card.style, { boxSizing: 'border-box', position: 'relative', width: '100%', maxWidth: 'none' })
+  doc.querySelector('meta[name="viewport"]')?.setAttribute?.('content', 'width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no')
+  const listeners = new Set<any>(), cleanups: Array<() => void> = [], pointers = new Map<any, string>()
+  let engine: any, scheduled = 0, destroyed = false, multiple = false, cancelled = false
+  let rendered: { x: number; y: number; scale: number } | undefined
+  const inertia = kinetic(() => engine.getPan(), (x: number, y: number) => { if (!destroyed) engine.pan(x, y) }, {
+    amplitude: .342, minVelocity: 5,
+    requestAnimationFrame: (fn: any) => win.requestAnimationFrame(fn), cancelAnimationFrame: (id: any) => win.cancelAnimationFrame(id)
   })
-  function resize() { width = Math.max(1, root.clientWidth || win.innerWidth); schedule() }
-  win.addEventListener("resize", resize)
-  doc.addEventListener("load", schedule, true)
-  const observer = typeof win.ResizeObserver === "function" ? new win.ResizeObserver(schedule) : null
+  function bounded(value: number, size: number, viewport: number, scale: number) {
+    const origin = size * (1 - scale) / 2, limit = viewport - size * scale, position = origin + value * scale
+    return ((limit >= 0 ? limit / 2 : Math.max(limit, Math.min(0, position))) - origin) / scale
+  }
+  function paint() {
+    if (destroyed || !engine) return
+    const scale = engine.getScale(), pan = engine.getPan()
+    if (rendered && rendered.x === pan.x && rendered.y === pan.y && rendered.scale === scale) return
+    const x = bounded(pan.x, card.offsetWidth, root.clientWidth || win.innerWidth, scale)
+    const y = bounded(pan.y, card.offsetHeight, root.clientHeight || win.innerHeight, scale)
+    if (Math.abs(x - pan.x) > .001 || Math.abs(y - pan.y) > .001) engine.pan(x, y, { silent: true })
+    Panzoom.defaultOptions.setTransform(card, { x, y, scale, isSVG: false })
+    if (!rendered || rendered.scale !== scale) root.dataset.previewScale = scale.toFixed(2)
+    rendered = { x, y, scale }
+  }
+  function layout() { scheduled = 0; inertia.cancel(); rendered = undefined; paint() }
+  function schedule() { if (!destroyed && !scheduled) scheduled = win.setTimeout(layout, 0) }
+  function listen(target: any, names: string, handler: any, options?: any) {
+    names.split(' ').forEach(name => {
+      target.addEventListener(name, handler, options); cleanups.push(() => target.removeEventListener(name, handler, options))
+    })
+  }
+  engine = Panzoom(card, { minScale: .6, maxScale: 3, step: .75, canvas: true, pinchAndPan: false,
+    noBind: true, animate: false, touchAction: 'none', setTransform: paint,
+    exclude: Array.from(doc.querySelectorAll('a,button,input,select,textarea,summary')) })
+  function cancelPointers() {
+    cancelled = true
+    for (const pointerId of pointers.keys()) engine.handleUp({ pointerId, type: 'pointercancel' })
+    pointers.clear(); inertia.cancel()
+  }
+  listen(body, engine.eventNames.down, (event: any) => {
+    if (event.target?.closest?.('a,button,input,select,textarea,summary')) return
+    const kind = event.pointerType || (event.pointerId != null ? 'touch' : 'mouse')
+    if (kind === 'pen') cancelPointers()
+    else if ([...pointers.values()].some(value => value !== kind)) return
+    inertia.cancel()
+    if (!pointers.size) { multiple = false; cancelled = false }
+    pointers.set(event.pointerId ?? 'mouse', kind)
+    if (pointers.size > 1 || event.touches?.length > 1) multiple = true
+    engine.handleDown(event)
+    if (event.pointerId != null) {
+      try { body.setPointerCapture?.(event.pointerId) } catch { /* Synthetic or ended pointer. */ }
+    }
+  })
+  listen(doc, engine.eventNames.move, (event: any) => {
+    if (!pointers.has(event.pointerId ?? 'mouse')) return
+    if (event.pointerType === 'pen' && event.buttons === 0 && event.pressure === 0) { cancelPointers(); return }
+    engine.handleMove(event)
+    // Only focal zoom needs synchronous geometry; ordinary pan uses the library's frame.
+    if (pointers.size > 1 || event.touches?.length > 1) paint()
+  }, { passive: true })
+  listen(doc, engine.eventNames.up + ' lostpointercapture', (event: any) => {
+    if (!pointers.has(event.pointerId ?? 'mouse')) return
+    cancelled = /cancel|leave|lostpointercapture/.test(event.type)
+    engine.handleUp(event)
+    if (!event.touches?.length) pointers.delete(event.pointerId ?? 'mouse')
+    if (cancelled) inertia.cancel()
+  }, { passive: true })
+  listen(win, 'blur', cancelPointers)
+  listen(doc, 'visibilitychange', () => { if (doc.hidden) cancelPointers() })
+  listen(card, 'panzoomstart', () => { if (!multiple) inertia.start() })
+  listen(card, 'panzoomend', () => {
+    if (!multiple && !cancelled && !win.matchMedia?.('(prefers-reduced-motion: reduce)').matches) inertia.stop()
+    else inertia.cancel()
+  })
+  listen(doc, 'gesturestart gesturechange gestureend', (event: any) => event.preventDefault(), { passive: false })
+  const announce = () => { if (!destroyed) listeners.forEach(listener => listener(engine.getScale())) }
+  listen(card, 'panzoomend panzoomzoom', announce)
+  listen(body, 'wheel', (event: any) => {
+    event.preventDefault(); inertia.cancel()
+    if (event.ctrlKey || event.metaKey) { engine.zoomWithWheel(event, { step: .3 }); paint(); return }
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? win.innerHeight : 1
+    engine.pan(-event.deltaX * unit / engine.getScale(), -event.deltaY * unit / engine.getScale(), { relative: true })
+  }, { passive: false })
+  const handwriting = doc.querySelector('[data-bound-handwriting]:not([data-bound-handwriting="always"])')
+  let toggle: any
+  if (handwriting) {
+    toggle = doc.createElement('button'); toggle.type = 'button'
+    const update = () => {
+      toggle.textContent = handwriting.hidden ? '显示脑图手写' : '隐藏脑图手写'; toggle.setAttribute('aria-expanded', String(!handwriting.hidden))
+    }
+    toggle.onclick = () => { handwriting.hidden = !handwriting.hidden; update(); layout() }
+    update(); handwriting.before(toggle)
+  }
+  listen(win, 'resize', schedule); listen(doc, 'load toggle', schedule, true)
+  const observer = typeof win.ResizeObserver === 'function' ? new win.ResizeObserver(schedule) : null
   observer?.observe(card)
   const controller = {
-    getScale: () => scale, setScale,
+    getScale: () => engine.getScale(),
+    setScale(value: number) {
+      const requested = Math.max(.6, Math.min(3, Number(value) || 1))
+      if (Math.round(requested * 100) === Math.round(engine.getScale() * 100)) return
+      inertia.cancel(); engine.zoomToPoint(requested, { clientX: win.innerWidth / 2, clientY: win.innerHeight / 2 }); paint()
+    },
     naturalHeight: () => card.scrollHeight,
     subscribe(listener: any) { listeners.add(listener); return () => listeners.delete(listener) },
     destroy() {
-      unbind?.(); observer?.disconnect(); win.clearTimeout(scheduled)
-      if (pinchFrame) win.cancelAnimationFrame(pinchFrame)
-      pendingPinch = null
-      win.removeEventListener("resize", resize); doc.removeEventListener("load", schedule, true)
-      doc.removeEventListener("dblclick", doubleClick)
-      doc.removeEventListener("touchstart", tapBegin); doc.removeEventListener("touchmove", tapMove)
-      doc.removeEventListener("touchend", tapEnd); doc.removeEventListener("touchcancel", tapCancel)
-      listeners.clear(); if (win.__mnCardPreview === controller) delete win.__mnCardPreview
+      destroyed = true; inertia.cancel(); pointers.clear(); cleanups.forEach(cleanup => cleanup())
+      engine.destroy(); observer?.disconnect(); win.clearTimeout(scheduled); toggle?.remove(); listeners.clear()
+      if (win.__mnCardPreview === controller) delete win.__mnCardPreview
     }
   }
-  win.__mnCardPreview = controller
-  layout()
-  return controller
+  win.__mnCardPreview = controller; layout(); return controller
 }

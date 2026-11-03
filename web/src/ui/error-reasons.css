@@ -1,0 +1,15 @@
+.previewTimelineBody { position: relative; }
+.previewTimelineReason {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  display: block;
+  max-width: 76px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  line-height: 13px;
+  color: var(--rd-muted);
+}

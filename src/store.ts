@@ -1,5 +1,6 @@
 import { getLocalDataByKey, setLocalDataByKey } from "marginnote"
-import { Bindings } from "./binding"
+import { Bindings, getBindingForMode as resolveBinding } from "./binding"
+import { loadMatcherSettings } from "./settings"
 
 export * from "./binding"
 
@@ -34,4 +35,11 @@ export function saveBindings(bindings: Bindings): void {
 
 export function backupBindings(): void {
   saveBindings(loadBindings())
+}
+
+/** Global colors apply to every binding in addition to its local colors. */
+export function getBindingForMode(bindings: Bindings, notebookId: string, rootNodeId: string | undefined, scoped: boolean) {
+  const target = resolveBinding(bindings, notebookId, rootNodeId, scoped)
+  const colors = loadMatcherSettings().globalQuestionColors
+  return target && colors?.length ? { ...target, questionColors: [...new Set([...colors, ...(target.questionColors || [])])] } : target
 }

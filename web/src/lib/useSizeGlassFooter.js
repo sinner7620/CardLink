@@ -7,23 +7,25 @@ import { makeButton } from "../../vendor/liquid-glass-webgl/src/components/liqui
 
 // The original renderer draws one wallpaper for the whole panel, so footer
 // buttons sample that same background instead of independently rescaling it.
-export function useSizeGlassFooter(onResize, onClose, layoutRevision) {
+export function useSizeGlassFooter(onReset, onClose, layoutRevision, doneLabel = "完成") {
   const surface = useRef(null), form = useRef(null), canvasRef = useRef(null)
   const reset = useRef(null), done = useRef(null), rendererRefInternal = useRef(null)
   const elementsRef = useRef([]), interactionsRef = useRef({}), gesturesRef = useRef(new Map()), prevPinchRef = useRef(null)
   const pendingFrame = useRef(0), viewport = useRef({ width: 0, height: 0 })
   const [failure, setFailure] = useState("")
-  interactionsRef.current = { reset: { onTap: () => onResize(640, 620) }, done: { onTap: onClose } }
+  interactionsRef.current = { reset: { onTap: onReset }, done: { onTap: onClose } }
   const measure = useCallback(() => {
     const renderer = rendererRefInternal.current
     if (!renderer || !surface.current || !canvasRef.current) return
     const bounds = surface.current.getBoundingClientRect()
+    // A hidden/unmounting surface cannot allocate a valid WebGL framebuffer.
+    if (bounds.width < 1 || bounds.height < 1) return
     if (bounds.width !== viewport.current.width || bounds.height !== viewport.current.height) {
       viewport.current = { width: bounds.width, height: bounds.height }
       renderer.resize(bounds.width, bounds.height)
       renderer.setContentHeight(bounds.height)
     }
-    const controls = [["reset", "恢复默认", reset.current], ["done", "完成", done.current]].filter(([, , node]) => node).map(([id, label, node]) => {
+    const controls = [["reset", "恢复默认", reset.current], ["done", doneLabel, done.current]].filter(([, , node]) => node).map(([id, label, node]) => {
       const rect = node.getBoundingClientRect()
       const control = makeButton(id, { x: rect.left - bounds.left, y: rect.top - bounds.top, w: rect.width, h: rect.height }, {
         label, tintColor: [0x00 / 255, 0x88 / 255, 0xff / 255, 0.45],
@@ -35,7 +37,7 @@ export function useSizeGlassFooter(onResize, onClose, layoutRevision) {
     })
     elementsRef.current = controls
     renderer.setElements(controls)
-  }, [])
+  }, [doneLabel])
   const queueMeasure = useCallback(() => {
     if (!pendingFrame.current) pendingFrame.current = requestAnimationFrame(() => { pendingFrame.current = 0; measure() })
   }, [measure])

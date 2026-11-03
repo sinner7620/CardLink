@@ -1,10 +1,10 @@
 import { getLocalDataByKey, setLocalDataByKey, isfileExists, readJSON, writeTextFile, MN } from "marginnote"
 import { loadMatcherSettings } from "./settings"
 import { loadMistakeState } from "./mistake-store"
-import { isolatedReviewContent } from "./mistake-manager"
+import { isolatedReviewContent, syncMistakeReasonTags } from "./mistake-manager"
 import { cardLinkDocumentPath, ensureStorageDirectory } from "./storage-paths"
 import { createFsrsStore, FSRS_STORAGE_KEY } from "./fsrs-store"
-import { applyFeedback, amendErrorDetails, correctLastFeedback, importProgress, previewFeedback, validateOptions, type Feedback } from "./fsrs-domain"
+import { applyFeedback, amendErrorDetails, correctLastFeedback, importProgress, previewFeedback, validateOptions, ERROR_REASONS, type Feedback } from "./fsrs-domain"
 
 function assertEnabled(requireActive = true): void {
   const settings = loadMatcherSettings()
@@ -75,6 +75,14 @@ export function fsrsCommand(command: string, payload: any): any {
     if (payload?.revision !== progress.revision || typeof payload?.paused !== "boolean") throw new Error("状态已变化，请刷新后重试")
     next = { ...progress, paused: payload.paused, revision: progress.revision + 1 }
   } else throw new Error("未知智能复习命令")
-  if (next !== progress) store.save({ ...state, records: { ...state.records, [id]: next } })
+  if (next !== progress) {
+    if (command !== 'fsrsPause') {
+      const last = next.history[next.history.length - 1]
+      const reasons: Array<{ key: string; label: string }> = (last?.errorReasons || []).map(key => ({ key, label: ERROR_REASONS[key] }))
+      if (last?.errorNote?.startsWith('错因：') && !reasons.length) reasons.push({ key: 'custom', label: last.errorNote.slice(3) })
+      syncMistakeReasonTags(id, reasons)
+    }
+    store.save({ ...state, records: { ...state.records, [id]: next } })
+  }
   return next
 }

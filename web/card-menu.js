@@ -35,6 +35,7 @@
           }
           return;
         }
+        try { if (sdk.call) Promise.resolve(sdk.call('sceneLog', {event:'cardMenu.received',detail:'id='+event.id+' keys='+Object.keys(event).join(',')})).catch(function () {}); } catch (_) {}
         queue.push(command); flush();
       });
     },

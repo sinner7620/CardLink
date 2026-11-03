@@ -2,7 +2,70 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import test from "node:test"
 import { runInNewContext } from "node:vm"
-import { transpileModule } from "typescript"
+import { transpileModule, createSourceFile, ScriptTarget, isMethodDeclaration, forEachChild, type Node } from "typescript"
+
+function nativePluginMethod(name: string, scope: any): (...args: any[]) => any {
+  const source = readFileSync('src/plugin.ts', 'utf8'), ast = createSourceFile('plugin.ts', source, ScriptTarget.Latest, true)
+  let method = ''
+  function visit(node: Node): void {
+    if (isMethodDeclaration(node) && node.name.getText(ast) === name) method = node.getText(ast)
+    forEachChild(node, visit)
+  }
+  visit(ast)
+  assert.ok(method, `missing native method ${name}`)
+  runInNewContext(transpileModule(`exports.handler = ({ ${method} }).${name}`, { compilerOptions: { module: 1, target: 7 } }).outputText, scope)
+  return scope.exports.handler
+}
+
+test('自动侧边按钮关闭时仍保留命令卡片锚点；重新选卡取消旧反馈页', () => {
+  const owner: any = { window: {}, cardMistakePanel: {} }, calls: string[] = []
+  const scope: any = { exports: {}, self: owner, MN: { currentWindow: owner.window },
+    closeCardMistakePanel: (value: any) => { assert.equal(value, owner); calls.push('cancel'); value.cardMistakePanel = undefined },
+    isCardToolbarEnabled: () => false, parsePopupWinRect: (value: any) => value }
+  const popup = nativePluginMethod('onPopupMenuOnNote', scope)
+  const rect = { x: 100, y: 80, width: 90, height: 60 }
+  popup({ userInfo: { note: { noteId: 'new-card' }, winRect: rect } })
+  assert.deepEqual(calls, ['cancel'])
+  assert.equal(owner.answerToolbarNoteId, 'new-card')
+  assert.equal(owner.answerToolbarTargetRect, rect)
+  assert.equal(owner.cardMistakePanel, undefined)
+  scope.MN.currentWindow = {}
+  popup({ userInfo: { note: { noteId: 'other-window' } } })
+  assert.equal(owner.answerToolbarNoteId, 'new-card')
+})
+
+test('宿主卡片菜单关闭不移除反馈页，新卡片的迟到关闭事件也不清理锚点', async () => {
+  const owner: any = { window: {}, answerToolbarShownAt: 1, cardMistakePanel: {}, answerToolbarNoteId: 'event-card' }
+  let release!: () => void, hides = 0
+  const scope: any = { exports: {}, self: owner, MN: { currentWindow: owner.window },
+    delay: () => new Promise<void>(resolve => { release = resolve }),
+    isCurrentNotePopupStillVisible: () => false, hideAnswerToolbar: () => hides++ }
+  const close = nativePluginMethod('onClosePopupMenuOnNote', scope)
+  let closing = close(); release(); await closing
+  assert.equal(hides, 0)
+  assert.equal(owner.answerToolbarNoteId, 'event-card')
+  owner.cardMistakePanel = undefined
+  closing = close(); owner.answerToolbarShownAt = 2; release(); await closing
+  assert.equal(hides, 0)
+  closing = close(); release(); await closing
+  assert.equal(hides, 1)
+  assert.equal(owner.answerToolbarNoteId, undefined)
+})
+
+test('学习集、场景、插件退出都注销原生侧边反馈页', () => {
+  const plugin = readFileSync('src/plugin.ts', 'utf8')
+  for (const name of ['notebookWillClose', 'sceneDidDisconnect', 'addonWillDisconnect']) {
+    const scope: any = { exports: {} }
+    const ast = createSourceFile('plugin.ts', plugin, ScriptTarget.Latest, true)
+    let body = ''
+    function visit(node: Node): void {
+      if (isMethodDeclaration(node) && node.name.getText(ast) === name) body = node.getText(ast)
+      forEachChild(node, visit)
+    }
+    visit(ast)
+    assert.match(body, /closeCardMistakePanel\(self\)/, name)
+  }
+})
 
 test("定位原题设置由原生选择器处理，取消时保留原选项", () => {
   const core = readFileSync("src/rails-core.ts", "utf8")
@@ -57,7 +120,7 @@ test("选择卡片触发相同布局时，不重复赋面板 frame 或重置根�
   assert.ok(body)
   let assignments = 0
   let frame = { x: 16, y: 16, width: 720, height: 560 }
-  const controller = { sessionFrame: { ...frame }, view: {
+  const controller = { sessionFrame: { ...frame }, panelSurface: {
     hidden: false,
     get frame() { return frame },
     set frame(value) { assignments++; frame = value }
@@ -356,7 +419,8 @@ test("MN Utils 可用时使用 MNButton 创建带插件图标的第二入口", (
   assert.match(entrance, /function nearestDock/)
   assert.match(entrance, /ENTRANCE_DOCK_KEY/)
   assert.match(entrance, /storedDock\(\)/)
-  assert.match(entrance, /rememberDock\(dock\)/)
+  assert.match(entrance, /sender\.translationInView\(window\)/)
+  assert.match(entrance, /sender\.setTranslationInView\(/)
   assert.match(entrance, /MNUtil\.animate\(update/)
   assert.match(plugin, /notebookWillOpen[\s\S]*ensureMnutilsEntrance\(\)/)
   assert.match(plugin, /sceneDidDisconnect[\s\S]*removeMnutilsEntrance\(\)/)

@@ -1,6 +1,6 @@
 {
   "name": "cardlink",
-  "version": "2.4.5",
+  "version": "2.4.6",
   "mnChannel": "stable",
   "private": true,
   "description": "MarginNote 4 跨脑图答案匹配插件",
@@ -18,6 +18,9 @@
     "test": "tsx --experimental-test-module-mocks --test tests/ai-subsystem.test.ts tests/ai-input-behavior.test.ts tests/answer-card-creation.test.ts tests/bridge-schema.test.ts tests/content-fingerprint.test.ts tests/domain.test.ts tests/mistake-export.test.ts tests/mistake-performance.test.ts tests/mistake-write-behavior.test.ts tests/plugin-events.test.ts tests/telemetry.test.ts tests/updater-behavior.test.ts tests/updater.test.ts tests/web-bridge.test.ts tests/web-render-smoke.test.ts tests/index-store-behavior.test.ts tests/card-preview.test.ts tests/review-detail-cache.test.ts tests/manual-review-queue.test.ts"
   },
   "dependencies": {
+    "@panzoom/panzoom": "4.6.2",
+    "canvas-confetti": "1.9.4",
+    "fflate": "0.8.3",
     "html2canvas": "1.4.1",
     "jspdf": "3.0.3",
     "katex": "0.18.4",
@@ -25,6 +28,8 @@
     "marginnote": "0.9.30",
     "marked": "18.0.11",
     "morphicons": "1.7.1",
+    "panzoom": "9.4.3",
+    "perfect-freehand": "1.2.3",
     "ts-fsrs": "5.4.2"
   },
   "devDependencies": {

@@ -177,7 +177,7 @@ export function buildMindMapOptions(records: SourceInsightRecord[]): MindMapOpti
 }
 
 /** Normalize ancestor titles to root -> ... -> direct-parent order, excluding the mind-map root itself. */
-function parentBranchPath(record: SourceInsightRecord): string[] {
+export function parentBranchPath(record: SourceInsightRecord): string[] {
   let path = (record.sourcePathTitles ?? []).map(clean).filter(Boolean)
   if (!path.length) {
     path = (record.categoryPath ?? []).map(clean).filter(Boolean)

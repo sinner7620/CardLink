@@ -1,6 +1,4 @@
 import React, { useEffect, useRef } from "react"
-import { mountCardPreview } from "../../src/card-preview"
-import { wireFramePinchZoom } from "../../src/pinch-zoom"
 import { PreviewFrame } from "./SceneResources"
 
 const commentOpenStates = new Map()
@@ -22,7 +20,7 @@ function HtmlCardPreview({ html, title, zoom = 100, onZoom, onInteract, initialA
     cleanupRef.current()
     const frame = frameRef.current, win = frame?.contentWindow
     if (!win) return
-    const controller = mountCardPreview(win, wireFramePinchZoom)
+    const controller = win.__mnMountCardPreview()
     if (!controller) return
     const comments = Array.from(win.document.querySelectorAll("details.card-comment[data-comment-key]"))
     const unsubComments = comments.map((comment, index) => {
@@ -57,5 +55,5 @@ function HtmlCardPreview({ html, title, zoom = 100, onZoom, onInteract, initialA
       controller.destroy()
     }
   }
-  return <PreviewFrame title={title} aria-description={html?.includes("data-bound-handwriting hidden") ? "双击预览区域显示或隐藏脑图绑定手写" : undefined} html={html} scrolling="auto" onLoad={event => { frameRef.current = event.currentTarget; loaded() }} style={{ colorScheme: "light" }} />
+  return <PreviewFrame title={title} aria-description={html?.includes("data-bound-handwriting hidden") ? "使用显示脑图手写按钮查看绑定手写" : undefined} html={html} scrolling="auto" onLoad={event => { frameRef.current = event.currentTarget; loaded() }} style={{ colorScheme: "light" }} />
 }

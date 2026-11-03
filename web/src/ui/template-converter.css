@@ -1,0 +1,24 @@
+.settingsGroup > .templateConverter {
+  padding: 12px 18px;
+  font-size: 14px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.settingsGroup > .templateConverter > button {
+  display: block;
+  grid-template-columns: none;
+  width: 100%;
+  min-height: 42px;
+  padding: 10px 14px;
+  text-align: center;
+  color: white;
+  background: #1478dc;
+  border-radius: 10px;
+  font: inherit;
+  white-space: normal;
+}
+.settingsGroup > .templateConverter > button::after { content: none; }
+.settingsGroup > .templateConverter > button:disabled { opacity: .45; cursor: default; }
+.settingsGroup > .templateConverter input { font: inherit; width: 100%; }
+.settingsGroup > .templateConverter [role="status"] { margin-bottom: 0; }
+.settingsGroup > .templateConverter > a { display: inline-block; margin-top: 12px; color: #1478dc; }

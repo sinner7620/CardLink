@@ -186,8 +186,8 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
   }
 
   function saveFrame(controller) {
-    if (!controller || !controller.view) return;
-    var frame = controller.view.frame;
+    if (!controller || !controller.panelSurface) return;
+    var frame = controller.panelSurface.frame;
     controller.sessionFrame = {
       x: Number(frame.x),
       y: Number(frame.y),
@@ -199,10 +199,10 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
   }
 
   function resetFrame(controller) {
-    if (!controller || !controller.view) return { reset: false };
+    if (!controller || !controller.panelSurface) return { reset: false };
     var frame = defaultFrame(controller);
-    controller.view.autoresizingMask = 0;
-    controller.view.frame = frame;
+    controller.panelSurface.autoresizingMask = 0;
+    controller.panelSurface.frame = frame;
     layoutCloseButton(controller, panelCloseButtonSide());
     saveFrame(controller);
     return { reset: true, frame: frame };
@@ -210,6 +210,11 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
 
   function closePanel(controller, remember) {
     if (!controller) return;
+    controller.activeFrameGesture = null;
+    controller.panStart = null;
+    controller.resizeStart = null;
+    controller.headerPanActive = false;
+    controller.userAdjustingFrame = false;
     if (!controller.webView) {
       if (remember !== false) NSUserDefaults.standardUserDefaults().setObjectForKey(false, OPEN_KEY);
       return;
@@ -217,49 +222,49 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
     // Do not save here. MarginNote may be in the middle of resizing its study
     // view while a notebook is closing; sampling that transient frame causes
     // cumulative panel growth across notebook switches.
-    controller.view.hidden = true;
-    if (controller.view.superview) controller.view.removeFromSuperview();
+    controller.panelSurface.hidden = true;
+    if (controller.panelSurface.superview) controller.panelSurface.removeFromSuperview();
     if (remember !== false) NSUserDefaults.standardUserDefaults().setObjectForKey(false, OPEN_KEY);
   }
 
   function preservePanelForNotebookSwitch(controller) {
     if (!controller || !controller.webView) return;
     controller.preserveAcrossNotebookSwitch = true;
-    controller.view.autoresizingMask = 0;
+    controller.panelSurface.autoresizingMask = 0;
     // Reapply only the stable session frame. Never learn a new size from the
     // notebook transition itself.
-    controller.view.frame = savedFrame(controller);
+    controller.panelSurface.frame = savedFrame(controller);
   }
 
   function restorePanelAfterNotebookSwitch(controller) {
     if (!controller) return;
     var host = panelHost(controller);
     var frame = savedFrame(controller);
-    controller.view.autoresizingMask = 0;
-    if (controller.view.superview !== host) {
-      if (controller.view.superview) controller.view.removeFromSuperview();
-      host.addSubview(controller.view);
+    controller.panelSurface.autoresizingMask = 0;
+    if (controller.panelSurface.superview !== host) {
+      if (controller.panelSurface.superview) controller.panelSurface.removeFromSuperview();
+      host.addSubview(controller.panelSurface);
     }
-    controller.view.frame = frame;
+    controller.panelSurface.frame = frame;
     layoutCloseButton(controller, panelCloseButtonSide());
-    controller.view.hidden = false;
+    controller.panelSurface.hidden = false;
     controller.preserveAcrossNotebookSwitch = false;
   }
 
   function ensureLayout(controller) {
-    if (!controller || !controller.view || controller.userAdjustingFrame) return;
-    if (!controller.sessionFrame || controller.view.hidden) return;
+    if (!controller || !controller.panelSurface || controller.userAdjustingFrame) return;
+    if (!controller.sessionFrame || controller.panelSurface.hidden) return;
     var bounds = panelHost(controller).bounds;
     if (controller.hostSize && controller.hostSize.width === Number(bounds.width) && controller.hostSize.height === Number(bounds.height)) return;
     controller.hostSize = { width: Number(bounds.width), height: Number(bounds.height) };
     var frame = savedFrame(controller);
-    var current = controller.view.frame;
+    var current = controller.panelSurface.frame;
     // 卡片选择也会触发布局回调。几何未变化时不重新赋 frame/重置滚动。
     if (current && ["x", "y", "width", "height"].every(function (key) {
       return Math.abs(Number(current[key]) - Number(frame[key])) < 0.5;
     })) return;
-    controller.view.autoresizingMask = 0;
-    controller.view.frame = frame;
+    controller.panelSurface.autoresizingMask = 0;
+    controller.panelSurface.frame = frame;
     layoutCloseButton(controller, panelCloseButtonSide());
   }
 
@@ -270,7 +275,7 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
   }
 
   function layoutCloseButton(controller, side) {
-    if (!controller || !controller.view) return;
+    if (!controller || !controller.panelSurface) return;
     controller.panelCloseSide = side === "right" ? "right" : "left";
   }
 
@@ -290,15 +295,16 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
 
   function setup(controller) {
     var frame = { x: 0, y: 0, width: 900, height: 640 };
-    controller.view.autoresizingMask = 0;
-    controller.view.frame = frame;
-    controller.view.backgroundColor = UIColor.clearColor();
-    controller.view.layer.cornerRadius = 14;
-    controller.view.layer.masksToBounds = false;
-    controller.view.layer.shadowColor = UIColor.blackColor();
-    controller.view.layer.shadowOffset = { width: 0, height: 3 };
-    controller.view.layer.shadowRadius = 12;
-    controller.view.layer.shadowOpacity = 0.16;
+    controller.panelSurface = __MN_ANSWER_CORE_GLOBAL__.createWindowSurface(frame);
+    controller.panelSurface.autoresizingMask = 0;
+    controller.panelSurface.frame = frame;
+    controller.panelSurface.backgroundColor = UIColor.clearColor();
+    controller.panelSurface.layer.cornerRadius = 14;
+    controller.panelSurface.layer.masksToBounds = false;
+    controller.panelSurface.layer.shadowColor = UIColor.blackColor();
+    controller.panelSurface.layer.shadowOffset = { width: 0, height: 3 };
+    controller.panelSurface.layer.shadowRadius = 12;
+    controller.panelSurface.layer.shadowOpacity = 0.16;
 
     controller.webReady = false;
     controller.webView = new UIWebView({
@@ -325,13 +331,13 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
     try { controller.webView.scrollView.contentInset = { top: 0, left: 0, bottom: 0, right: 0 }; } catch (error) {}
     try { controller.webView.scrollView.scrollIndicatorInsets = { top: 0, left: 0, bottom: 0, right: 0 }; } catch (error) {}
     controller.webView.delegate = controller;
-    controller.view.addSubview(controller.webView);
+    controller.panelSurface.addSubview(controller.webView);
     var bootLabel = new UILabel({ x: 20, y: 60, width: frame.width - 40, height: 36 });
     bootLabel.text = "正在载入错题工作台…";
     // 运行时不暴露 UIFont 全局：此处引用会抛错并中断 setup（启动提示因此从未显示过）。
     bootLabel.textColor = UIColor.grayColor();
     bootLabel.autoresizingMask = 1 << 1;
-    controller.view.addSubview(bootLabel);
+    controller.panelSurface.addSubview(bootLabel);
     controller.bootLabel = bootLabel;
     controller.headerPan = new UIPanGestureRecognizer(controller, "handleHeaderPan:");
     controller.headerPan.cancelsTouchesInView = false;
@@ -352,11 +358,12 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
     resize.userInteractionEnabled = true;
     resize.autoresizingMask = (1 << 0) | (1 << 3);
     var resizePan = new UIPanGestureRecognizer(controller, "handleResize:");
+    resizePan.delegate = controller;
     try { resizePan.allowedTouchTypes = [0, 4]; } catch (error) {}
     try { resizePan.allowedScrollTypesMask = 3; } catch (error) {}
     resize.addGestureRecognizer(resizePan);
     controller.resizePan = resizePan;
-    controller.view.addSubview(resize);
+    controller.panelSurface.addSubview(resize);
 
     var entry = NSURL.fileURLWithPath(controller.mainPath + "/web-dist/index.html");
     controller.webView.loadRequest(NSURLRequest.requestWithURL(entry));
@@ -394,9 +401,10 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
     {
       viewDidLoad: function () { setup(self); },
       gestureRecognizerShouldBegin: function (gesture) {
+        if (self.activeFrameGesture && self.activeFrameGesture !== gesture) return false;
         if (gesture !== self.headerPan) return true;
-        var start = gesture.locationInView(self.view);
-        var width = Number(self.view.bounds.width || self.view.frame.width || 0);
+        var start = gesture.locationInView(self.panelSurface);
+        var width = Number(self.panelSurface.bounds.width || self.panelSurface.frame.width || 0);
         var controlsOnRight = self.panelCloseSide === "right";
         var insideHeader = Number(start.y) >= 0 && Number(start.y) <= TITLE_HEIGHT;
         var insideControls = controlsOnRight
@@ -406,49 +414,55 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
         return self.headerPanActive;
       },
       handleHeaderPan: function (gesture) {
+        if (self.activeFrameGesture && self.activeFrameGesture !== gesture) return;
         if (gesture.state === 1) {
-          if (self.headerPanActive) self.userAdjustingFrame = true;
+          if (self.headerPanActive) {
+            self.userAdjustingFrame = true;
+            self.activeFrameGesture = gesture;
+            self.panStart = self.panelSurface.frame;
+          }
         }
-        if (!self.headerPanActive) {
-          gesture.setTranslationInView({ x: 0, y: 0 }, self.view.superview);
-          return;
-        }
-        var translation = gesture.translationInView(self.view.superview);
-        var frame = self.view.frame;
+        if (!self.headerPanActive || !self.panStart) return;
+        var translation = gesture.translationInView(self.panelSurface.superview);
+        var frame = self.panStart;
         // 位置自由，仅顶边受 clampFrameTop 约束：浮窗顶部不越入窗口安全区，
         // UIKit 就不会调整 UIWebView 的 inset/contentOffset，旧版 UIWebView
         // 对 position:fixed 的错误锚定（顶栏下移白条）无从触发。
-        self.view.frame = clampFrameTop(self, {
+        __MN_ANSWER_CORE_GLOBAL__.setWindowFrame(self.panelSurface, clampFrameTop(self, {
           x: Number(frame.x) + Number(translation.x),
           y: Number(frame.y) + Number(translation.y),
           width: Number(frame.width),
           height: Number(frame.height)
-        });
-        gesture.setTranslationInView({ x: 0, y: 0 }, self.view.superview);
+        }));
         if (gesture.state === 3 || gesture.state === 4 || gesture.state === 5) {
           saveFrame(self);
           self.userAdjustingFrame = false;
           self.headerPanActive = false;
+          self.activeFrameGesture = null;
+          self.panStart = null;
         }
       },
       handleResize: function (gesture) {
+        if (self.activeFrameGesture && self.activeFrameGesture !== gesture) return;
         if (gesture.state === 1) {
+          self.activeFrameGesture = gesture;
           self.userAdjustingFrame = true;
-        self.resizeStart = { location: gesture.locationInView(self.view.superview), frame: self.view.frame };
+        self.resizeStart = { location: gesture.locationInView(self.panelSurface.superview), frame: self.panelSurface.frame };
         }
         if (!self.resizeStart) return;
-        var point = gesture.locationInView(self.view.superview);
-        self.view.frame = {
+        var point = gesture.locationInView(self.panelSurface.superview);
+        __MN_ANSWER_CORE_GLOBAL__.setWindowFrame(self.panelSurface, {
           x: self.resizeStart.frame.x,
           y: self.resizeStart.frame.y,
           width: Math.max(MIN_WIDTH, self.resizeStart.frame.width + point.x - self.resizeStart.location.x),
           height: Math.max(MIN_HEIGHT, self.resizeStart.frame.height + point.y - self.resizeStart.location.y)
-        };
+        });
         layoutCloseButton(self, panelCloseButtonSide());
         if (gesture.state === 3 || gesture.state === 4 || gesture.state === 5) {
           saveFrame(self);
           self.resizeStart = null;
           self.userAdjustingFrame = false;
+          self.activeFrameGesture = null;
         }
       },
       webViewShouldStartLoadWithRequestNavigationType: function (webView, request) {
@@ -509,7 +523,9 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
     controller.mainPath = mainPath;
     controller.addon = addon;
     // 提前装载同一 WebView，隐藏期间也可解析脚本；不打开窗口、不发送重复 dashboard。
+    // Load the delegate controller without replacing its UIKit-owned root view.
     controller.view.hidden = true;
+    controller.panelSurface.hidden = true;
     return controller;
   }
 
@@ -523,17 +539,17 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
     var host = panelHost(controller);
     if (!host) return;
     var frame = savedFrame(controller);
-    controller.view.autoresizingMask = 0;
-    if (controller.view.superview !== host) {
-      if (controller.view.superview) controller.view.removeFromSuperview();
-      host.addSubview(controller.view);
+    controller.panelSurface.autoresizingMask = 0;
+    if (controller.panelSurface.superview !== host) {
+      if (controller.panelSurface.superview) controller.panelSurface.removeFromSuperview();
+      host.addSubview(controller.panelSurface);
     }
-    controller.view.frame = frame;
+    controller.panelSurface.frame = frame;
     layoutCloseButton(controller, panelCloseButtonSide());
     // Establish a stable frame at a controlled point. Only explicit user
     // movement/resizing or resetFrame may change sessionFrame afterwards.
     saveFrame(controller);
-    controller.view.hidden = false;
+    controller.panelSurface.hidden = false;
     NSUserDefaults.standardUserDefaults().setObjectForKey(true, OPEN_KEY);
     // 首次创建由 React 挂载后的单次初始加载负责 dashboard；仅在后续
     // 已完成页面加载的面板重新显示时刷新，避免冷启动双请求阻塞首帧。
@@ -578,7 +594,7 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
     hidePanel: closePanel,
     destroyPanel: destroyPanel,
     shouldRestorePanel: function () { return NSUserDefaults.standardUserDefaults().objectForKey(OPEN_KEY) === true; },
-    isVisible: function (controller) { return !!(controller && controller.view && controller.view.superview && !controller.view.hidden); },
+    isVisible: function (controller) { return !!(controller && controller.panelSurface && controller.panelSurface.superview && !controller.panelSurface.hidden); },
     ensureLayout: ensureLayout,
     // v64：把现有实现导出给悬浮球快捷菜单复用；持久化与布局仍由原函数完成
     panelCloseButtonSide: panelCloseButtonSide,

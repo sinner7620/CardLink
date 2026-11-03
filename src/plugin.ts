@@ -1,3 +1,8 @@
+import { reviewResultHint } from './mistake-domain'
+import { closeCardMistakePanel, showCardMistakePanel } from './card-mistake-panel'
+export { onCardMistakePanelLevel, onCardMistakePanelReason, onCardMistakePanelSkip, onCardMistakePanelOutsideTap, onCardMistakePanelClose } from './card-mistake-panel'
+import { saveAttemptAnswerChecked } from './practice-attempts'
+import { chooseErrorReason, type ErrorReason } from './error-reasons'
 import {
   delay,
   defineEventHandlers,
@@ -18,6 +23,7 @@ import { preferredAnswer, rememberAnswer } from "./answer-preference"
 import { onProcessNewExcerpt } from "./question-clipper"
 import { findAnswersForQuestion } from "./answer-lookup"
 import {
+  cardMistakeAnchor,
   createAnswerToolbar,
   destroyAnswerToolbar,
   hideAnswerToolbar,
@@ -104,6 +110,7 @@ import {
 } from "./level-picker"
 import {
   discardReviewMode,
+  onReviewModeWrite,
   onReviewModeExit,
   onReviewModeIndex,
   onReviewModeNext,
@@ -111,10 +118,10 @@ import {
   onReviewModeControlPress,
   onReviewModeControlRelease,
   onReviewModeControlHover,
-  onReviewModePan,
   onReviewModeResult,
-  onReviewModeExpand, onReviewModeBranch, onReviewModeQueuePick, onReviewModeToolbarResult,
+  onReviewModeHistory, onReviewModeMark, onReviewModeExpand, onReviewModeBranch, onReviewModeQueuePick, onReviewModeToolbarResult, onReviewModeReason,
   restoreReviewModeToolbar,
+  suspendReviewModeToolbar,
   startReviewMode
 } from "./review-mode"
 import {
@@ -123,6 +130,8 @@ import {
   rememberLegacyMistakeTagMigration,
   markQuestionAsMistake,
   markQuestionsAsMistakes,
+  mistakeReasonHistoryId,
+  supplementMistakeReasonById,
   mistakeAnswerContext,
   mistakeRecordForSourceQuestion,
   openLinkedMistakeOrSource,
@@ -334,7 +343,7 @@ function matchingModeLabel(target?: BindingTarget): string {
 }
 
 /**
- * 统一选择器：Mac 走系统选择器（chooseNotebook），iPad 走编号 select。
+ * Mac/iPad 共用有界、可搜索的纵向选择器，避免系统动作表横向溢出。
  * 三处绑定/候选选择此前各写一遍双分支样板，收敛到此。
  */
 async function pickFromList<T>(items: T[], options: {
@@ -343,21 +352,10 @@ async function pickFromList<T>(items: T[], options: {
   selectMessage: string
 }): Promise<T | undefined> {
   if (!items.length) return undefined
-  if (MN.isMac) {
-    const selected = await chooseNotebook(items.map((item, index) => ({
-      id: String(index),
-      title: options.title(item, index)
-    })))
-    if (!selected) return undefined
-    return items[Number(selected.id)]
-  }
-  const result = await select(
-    items.map((item, index) => `${index + 1}. ${options.title(item, index)}`),
-    options.selectTitle,
-    options.selectMessage,
-    true
-  )
-  return result.index >= 0 ? items[result.index] : undefined
+  const selected = await chooseNotebook(items.map((item, index) => ({
+    id: String(index), title: options.title(item, index)
+  })), options.selectTitle, options.selectMessage)
+  return selected ? items[Number(selected.id)] : undefined
 }
 
 async function bindAnswerStudySet(questionNotebookId: string): Promise<void> {
@@ -549,6 +547,7 @@ export interface AnswerMatchingSettingsData {
   regexRules: RegexMatchingRules
   sceneWorkbenchEnabled: boolean
   debugModeEnabled: boolean
+  debugAnswerPreviewMode?: "custom" | "native"
   debugUpdateDownloadsEnabled: boolean
   sourceLocateMode: "locate" | "focus"
   subcardAnswerDisplay: "reveal" | "window"
@@ -558,8 +557,10 @@ export interface AnswerMatchingSettingsData {
   answerMaskStyle: "dark" | "light"
   answerMaskColor: string
   maskImageConfigured: boolean
+  globalQuestionColors: number[]
   autoCollapseComments: boolean
   reviewExpandedCommentCount: number
+  reviewCompletionConfetti: boolean
 }
 
 export function answerMatchingSettingsData(): AnswerMatchingSettingsData {
@@ -589,6 +590,7 @@ export function answerMatchingSettingsData(): AnswerMatchingSettingsData {
     },
     sceneWorkbenchEnabled: settings.sceneWorkbenchEnabled,
     debugModeEnabled: settings.debugModeEnabled,
+    debugAnswerPreviewMode: settings.debugAnswerPreviewMode ?? "custom",
     debugUpdateDownloadsEnabled: settings.debugUpdateDownloadsEnabled,
     sourceLocateMode: settings.sourceLocateMode,
     subcardAnswerDisplay: settings.subcardAnswerDisplay,
@@ -598,8 +600,10 @@ export function answerMatchingSettingsData(): AnswerMatchingSettingsData {
     answerMaskStyle: settings.answerMaskStyle,
     answerMaskColor: settings.answerMaskColor,
     maskImageConfigured: Boolean(settings.answerMaskImage),
+    globalQuestionColors: settings.globalQuestionColors ?? [],
     autoCollapseComments: settings.autoCollapseComments,
-    reviewExpandedCommentCount: settings.reviewExpandedCommentCount
+    reviewExpandedCommentCount: settings.reviewExpandedCommentCount,
+    reviewCompletionConfetti: settings.reviewCompletionConfetti
   }
 }
 
@@ -633,6 +637,15 @@ export function managedAnswerBindings(): ManagedAnswerBinding[] {
       questionColors: target.questionColors ?? []
     }]
   })
+}
+
+export function addGlobalAnswerBindingColor(): { color: number } {
+  const selected = MN.notebookController?.mindmapView ? NodeNote.getSelectedNodes() : []
+  if (selected.length !== 1) throw new Error("请在当前脑图中只选中一张题目卡片")
+  const color = selected[0].note?.colorIndex
+  if (!Number.isInteger(color) || color < 0 || color > 15) throw new Error("所选卡片没有可用颜色")
+  saveMatcherSettings({ globalQuestionColors: [...new Set([...(loadMatcherSettings().globalQuestionColors || []), color])] })
+  return { color }
 }
 
 export function addManagedAnswerBindingColor(key: string): { color: number } {
@@ -1142,8 +1155,8 @@ interface AnswerLookupContext {
  * 错题上下文解析 → 存储目标解析（含错题记录回退）→ 标题/路径归一。
  * 此前两处各写一遍，规则漂移会导致"工具栏能查到、工作台查不到"。
  */
-function resolveAnswerLookupContext(questionOverride?: NodeNote): ({ error: string; context?: undefined } | { error?: undefined } & AnswerLookupContext) {
-  const questionNotebookId = currentNotebookId()
+function resolveAnswerLookupContext(questionOverride?: NodeNote, sourceOverride?: { notebookId: string; rootNodeId?: string }): ({ error: string; context?: undefined } | { error?: undefined } & AnswerLookupContext) {
+  const questionNotebookId = sourceOverride?.notebookId ?? currentNotebookId()
   if (!questionNotebookId) return { error: "请先打开题目脑图" }
   const question = questionOverride ?? selectedQuestion()
   if (!question) return { error: "请先选中一张题目卡片" }
@@ -1151,8 +1164,8 @@ function resolveAnswerLookupContext(questionOverride?: NodeNote): ({ error: stri
   const lookupQuestion = mistakeContext?.sourceQuestion ?? question
   const lookupQuestionNoteId = String(lookupQuestion.note?.noteId ?? "").trim()
   if (!lookupQuestionNoteId) return { error: "所选题目卡片没有有效的 noteId，请重新选择" }
-  const sourceNotebookId = mistakeContext?.record.sourceNotebookId ?? questionNotebookId
-  const sourceRootNodeId = sourceMindMapId(sourceNotebookId, lookupQuestion)
+  const sourceNotebookId = sourceOverride?.notebookId ?? mistakeContext?.record.sourceNotebookId ?? questionNotebookId
+  const sourceRootNodeId = sourceOverride?.rootNodeId ?? sourceMindMapId(sourceNotebookId, lookupQuestion)
   const storedTarget = bindingForSource(sourceNotebookId, sourceRootNodeId) ??
     (mistakeContext?.record.answerNotebookId
       ? {
@@ -1402,9 +1415,10 @@ export async function findCurrentAnswer(
   allowIndexRetry = true,
   questionOverride?: NodeNote,
   openInEditor = false,
-  owner: any = self
+  owner: any = self,
+  sourceOverride?: { notebookId: string; rootNodeId?: string }
 ): Promise<void> {
-  const resolved = resolveAnswerLookupContext(questionOverride)
+  const resolved = resolveAnswerLookupContext(questionOverride, sourceOverride)
   if (resolved.error !== undefined) return showHUD(resolved.error)
   const { questionNotebookId, lookupQuestion, mistakeContext } = resolved
   const bindingSourceNotebookId = resolved.sourceNotebookId
@@ -1444,8 +1458,8 @@ export async function findCurrentAnswer(
     })
     if (recovery === undefined) throw error
     if (recovery === "refreshed") {
-      if (currentNotebookId() !== resolved.questionNotebookId) return showHUD("索引已刷新，学习集已切换，请回到原题重新查找", 4)
-      return findCurrentAnswer(false, resolved.question, openInEditor, owner)
+      if (!sourceOverride && currentNotebookId() !== resolved.questionNotebookId) return showHUD("索引已刷新，学习集已切换，请回到原题重新查找", 4)
+      return findCurrentAnswer(false, resolved.question, openInEditor, owner, sourceOverride)
     }
     return
   }
@@ -1492,20 +1506,27 @@ export async function findCurrentAnswer(
     } finally {
       HUDController.hidden()
     }
-    return findCurrentAnswer(false, questionOverride, openInEditor, owner)
+    return findCurrentAnswer(false, questionOverride, openInEditor, owner, sourceOverride)
   }
   // 只改变默认展示项，候选清单顺序及序号保持不变。
   const answer = preferredAnswer(bindingSourceNotebookId, questionNoteId, matches)
   if (answer) {
     recordRuntimeState("答案匹配", "最终选择答案", `answerNoteId=${answer.noteId} answerNodeId=${answer.id} candidates=${matches.length}`)
     if (openInEditor) await openAnswerEditor(answer.noteId, answer.notebookId)
-    else if ((answerTarget.designatedAnswer === "subcard" || answerTarget.selectionMode === "mixed") &&
+      else if (owner?.cardLinkReviewMode?.writingMode !== "annotation" && owner?.cardLinkReviewMode?.writingMode !== "handwriting" &&
+        (answerTarget.designatedAnswer === "subcard" || answerTarget.selectionMode === "mixed") &&
       Array.from(lookupQuestion.childNodes ?? []).some(child => String(child.note?.noteId ?? "") === answer.noteId) &&
       loadMatcherSettings().subcardAnswerDisplay === "reveal") {
       const revealed = revealSameMapQuestion(questionNoteId)
       if (revealed) showHUD("已显示当前题目的子卡片答案", 3)
       else await showAnswer(questionTitle, answer, matches, { notebookId: bindingSourceNotebookId, noteId: questionNoteId }, owner)
     } else await showAnswer(questionTitle, answer, matches, { notebookId: bindingSourceNotebookId, noteId: questionNoteId }, owner)
+    const review = owner?.cardLinkReviewMode, item = review?.items?.[review.index]
+    if (item?.sourceNoteId === questionNoteId) {
+      ;(review.answerChecked ||= {})[item.recordId] = true
+      const paper = review.papers?.[item.recordId]
+      if (paper) saveAttemptAnswerChecked(item.sourceNoteId, paper, true)
+    }
   }
 }
 
@@ -1524,6 +1545,18 @@ async function runSafely(action: () => Promise<void>): Promise<void> {
 export async function onAnswerToolbarClick(): Promise<void> {
   hideAnswerToolbar()
   await runSafely(findCurrentAnswer)
+}
+
+export function onReviewModeAnswer(): void {
+  const owner = self
+  const current = owner.cardLinkReviewMode
+  const item = current?.items?.[current.index]
+  if (!item || current.submitting || current.navigating) return
+  const note = MN.db.getNoteById(item.sourceNoteId)
+  if (!note) { showHUD("当前复习题卡已不存在", 3); return }
+  void runSafely(() => findCurrentAnswer(true, new NodeNote(note, item.sourceNotebookId), false, owner, {
+    notebookId: item.sourceNotebookId, rootNodeId: item.sourceRootNodeId
+  }))
 }
 
 /** 单击立即查找并打开 CardLink 答案窗口，不再等待双击判定窗口。 */
@@ -1554,11 +1587,14 @@ async function markSelectedQuestions(level?: number): Promise<void> {
       ? await chooseMistakeLevel(previous?.level, questions.length)
       : level as 0 | 1 | 2
     if (selectedLevel === undefined) return
+    const preserveReason = level !== undefined
+    const selection: { cancelled?: boolean; reason?: ErrorReason } = preserveReason ? {} : await chooseErrorReason(selectedLevel)
+    if (selection.cancelled) return
     if (questions.length === 1) {
-      const record = await markQuestionAsMistake(questions[0], notebookId, selectedLevel)
+      const record = await markQuestionAsMistake(questions[0], notebookId, selectedLevel, selection.reason, preserveReason)
       if (!record) return
     } else {
-      const result = await markQuestionsAsMistakes(questions, notebookId, selectedLevel)
+      const result = await markQuestionsAsMistakes(questions, notebookId, selectedLevel, selection.reason, preserveReason)
       const summary = [`新增 ${result.added} 道`, `更新 ${result.updated} 道`]
       if (result.failed) summary.push(`失败 ${result.failed} 道`)
       showHUD(`批量标记完成：${summary.join("，")}`, 5)
@@ -1582,7 +1618,10 @@ export async function onMistakeToolbarClick(): Promise<void> {
 }
 
 export async function executeCardMenuCommand(command: CardMenuCommandId, noteID: string, owner: any = self): Promise<{ cancelled?: boolean }> {
-  hideAnswerToolbar()
+  const studyView = Application.sharedInstance().studyController(owner.window)?.view
+  const host = (studyView as any)?.window || studyView
+  const anchor = command === 'markMistake' && host ? cardMistakeAnchor(owner, noteID, host) : undefined
+  hideAnswerToolbar(owner)
   const resolveNode = (target: CardMenuTarget): NodeNote => {
     const note = MN.db.getNoteById(target.noteID)
     if (!note) throw new Error("目标卡片已不存在")
@@ -1613,9 +1652,22 @@ export async function executeCardMenuCommand(command: CardMenuCommandId, noteID:
     },
     findAnswer: target => findCurrentAnswer(true, resolveNode(target), false, owner),
     currentLevel: target => mistakeRecordForSourceQuestion(resolveNode(target), target.notebookID)?.level,
-    chooseLevel: level => chooseMistakeLevel(level, 1),
-    async mark(target, level) {
-      if (!await markQuestionAsMistake(resolveNode(target), target.notebookID, level)) throw new Error("该卡片未能标记为错题")
+    async showFeedback(target, level, submit) {
+      if (!host || !anchor) throw new Error('无法取得目标卡片的位置，请重新点选该卡片后打开标错命令')
+      const question = resolveNode(target)
+      return showCardMistakePanel(owner, host, anchor, question.title?.trim() || '未命名卡片', level, submit,
+        nextLevel => reviewResultHint(mistakeRecordForSourceQuestion(question, target.notebookID), nextLevel, loadMatcherSettings().mistakeReviewCurves))
+    },
+    async mark(target, feedback) {
+      const record = await markQuestionAsMistake(resolveNode(target), target.notebookID, feedback.level, undefined, true)
+      if (!record) throw new Error("该卡片未能标记为错题")
+      const historyId = mistakeReasonHistoryId(record)
+      if (!historyId) throw new Error("错题反馈记录缺失，请重新选择等级")
+      notifyWorkbenchDataChanged()
+      return { recordId: record.recordId, historyId, level: feedback.level }
+    },
+    async supplementReason(_target, reason, receipt) {
+      await supplementMistakeReasonById(receipt.recordId, reason, receipt.historyId)
       notifyWorkbenchDataChanged()
     }
   })
@@ -1890,12 +1942,16 @@ export const lifecycle = defineLifecycleHandlers({
       }
       ensureMnutilsEntrance()
       void completePendingNoteNavigation(notebookId)
-      void delay(0.15).then(restoreReviewModeToolbar)
+      const generation = self.cardLinkReviewNotebookGeneration = Number(self.cardLinkReviewNotebookGeneration || 0) + 1
+      void delay(0.15).then(() => { if (self.cardLinkReviewNotebookGeneration === generation) restoreReviewModeToolbar() })
       recordRuntimeState("生命周期", "notebookWillOpen 调度完成", `openedNotebookId=${notebookId}`)
     },
     notebookWillClose() {
       recordRuntimeState("生命周期", "notebookWillClose 开始")
+      self.cardLinkReviewNotebookGeneration = Number(self.cardLinkReviewNotebookGeneration || 0) + 1
+      suspendReviewModeToolbar()
       closeMnutilsQuickMenu()
+      removeMnutilsEntrance()
       eventObservers.remove()
       self.lastClickedNote = undefined
       self.answerToolbarNoteId = undefined
@@ -1904,6 +1960,7 @@ export const lifecycle = defineLifecycleHandlers({
       closeAnswerCard()
       closeNotebookPicker()
       closeMistakeLevelPicker()
+      closeCardMistakePanel(self)
       recordRuntimeState("生命周期", "notebookWillClose 完成")
     },
     sceneDidDisconnect() {
@@ -1915,6 +1972,7 @@ export const lifecycle = defineLifecycleHandlers({
       closeAnswerCard()
       closeNotebookPicker()
       closeMistakeLevelPicker()
+      closeCardMistakePanel(self)
       discardReviewMode()
       stopMistakeReminderTimer()
       recordRuntimeState("生命周期", "sceneDidDisconnect 完成")
@@ -1930,6 +1988,7 @@ export const lifecycle = defineLifecycleHandlers({
       recordRuntimeState("生命周期", "applicationWillEnterForeground 完成")
     },
     addonWillDisconnect() {
+      closeCardMistakePanel(self)
       removeMnutilsEntrance()
       destroyAnswerToolbar()
       clearIndex()
@@ -1946,11 +2005,11 @@ export {
 }
 export {
   onReviewModeControlPress,
+  onReviewModeWrite,
   onReviewModeControlRelease,
   onReviewModeControlHover,
-  onReviewModePan,
   onReviewModeResult,
-  onReviewModeExpand, onReviewModeBranch, onReviewModeQueuePick, onReviewModeToolbarResult,
+  onReviewModeHistory, onReviewModeMark, onReviewModeExpand, onReviewModeBranch, onReviewModeQueuePick, onReviewModeToolbarResult, onReviewModeReason,
   onReviewModeExit,
   onReviewModeIndex,
   onReviewModeNext,
@@ -1962,12 +2021,13 @@ export const handlers = defineEventHandlers<(typeof events)[number]>({
   onProcessNewExcerpt,
   onPopupMenuOnNote(sender) {
     if (self.window !== MN.currentWindow) return
-    if (!isCardToolbarEnabled()) return
     const note = sender.userInfo?.note
     const winRect = (sender.userInfo as any).winRect
+    closeCardMistakePanel(self)
     self.lastClickedNote = note
     self.answerToolbarNoteId = note?.noteId
     self.answerToolbarTargetRect = parsePopupWinRect(winRect)
+    if (!isCardToolbarEnabled()) return
     const notebookId = currentNotebookId()
     const existingMistake = note && notebookId
       ? mistakeRecordForSourceQuestion(new NodeNote(note, notebookId), notebookId)
@@ -1980,6 +2040,7 @@ export const handlers = defineEventHandlers<(typeof events)[number]>({
     const shownAt = self.answerToolbarShownAt
     await delay(0.15)
     if (shownAt !== self.answerToolbarShownAt) return
+    if (self.cardMistakePanel) return
     if (self.mistakeLevelDropdown && !self.mistakeLevelDropdown.hidden) return
     // 第一次按钮轻点可能关闭宿主卡片菜单；给长按识别器保留完整按压窗口。
     if (Date.now() - Number(self.answerToolbarTapStartedAt || 0) < 500) return

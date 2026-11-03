@@ -15,6 +15,7 @@ interface SurfaceEntry {
   suspended: boolean
   recoveryAttempted: boolean
   revision: number
+  applied?: string
 }
 
 const surfaces = new WeakMap<object, SurfaceEntry>()
@@ -25,6 +26,7 @@ function canUpdate(entry: SurfaceEntry): boolean {
 }
 
 function loadSurface(entry: SurfaceEntry): void {
+  entry.applied = undefined
   entry.loading = true
   entry.revision++
   try {
@@ -45,12 +47,15 @@ function applyState(entry: SurfaceEntry): void {
   if (!canUpdate(entry) || entry.loading || entry.view.loading) return
   const revision = ++entry.revision
   const { method, args, rootId } = entry.state
+  const payload = JSON.stringify([method, args, rootId])
+  if (entry.applied === payload) return
   // 返回明确的确认值：函数/DOM 不存在不能被当作同步成功。
   const script = `(function(){var fn=window[${JSON.stringify(method)}];if(typeof fn!=='function'||!document.getElementById(${JSON.stringify(rootId)}))return 'missing';fn.apply(window,${JSON.stringify(args)});return 'cardlink-control-ready';})()`
   try {
     entry.view.evaluateJavaScript(script, (result: unknown) => {
       if (revision !== entry.revision || !canUpdate(entry)) return
       if (result !== "cardlink-control-ready") return recoverSurface(entry)
+      entry.applied = payload
       entry.state.onReady()
       entry.view.setNeedsLayout?.()
       entry.view.setNeedsDisplay?.()

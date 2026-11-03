@@ -1,4 +1,7 @@
+import { createWindowSurface, setWindowFrame } from "./window-opacity"
 import { MN } from "marginnote"
+import { loadMatcherSettings } from "./settings"
+import { loadAnswerPreview } from "./answer-preview-mode"
 import { answerReviewControlsHtml, REVIEW_CONTROL_WIDTH, REVIEW_CONTROL_HEIGHT, REVIEW_COLLAPSED_WIDTH, REVIEW_VISUAL_INSET, REVIEW_LEVEL_NAMES } from "./answer-review-controls"
 import { defaultAnswerFrame, freePositionFrame, isFrameFullyOutside } from "./answer-card-layout"
 import { pauseControlSurface, syncControlSurface } from "./native-control-surface"
@@ -17,6 +20,10 @@ import {
 
 const ANSWER_WINDOW_Z_POSITION = 100000
 const ANSWER_WINDOW_FRONT_INTERVAL = 0.25
+
+function loadAnswerCardDocument(owner: any): void {
+  loadAnswerPreview(owner.answerCardWebView, owner.answerCardHtml, "native")
+}
 
 /** UIWebView 加载后可能重置内部内容层底色，只清理评分绘制层，不改答案正文。 */
 function clearAnswerReviewBackground(owner: any = self): void {
@@ -47,6 +54,8 @@ export function collapseAnswerReviewSelection(): void {
 
 /** Expand the entire capsule first; the next feedback choice commits immediately. */
 export function selectAnswerReviewLevel(level: number): boolean {
+  if (self.cardLinkReviewMode?.purpose === 'practice') return false
+  if (self.cardLinkReviewMode?.writingMode === 'annotation' || self.cardLinkReviewMode?.writingMode === 'handwriting') return false
   if (self.answerReviewExpanded && level >= 0 && level <= (self.cardLinkReviewMode?.algorithm === "fsrs" ? 3 : 2)) return true
   self.answerReviewExpanded = true
   syncAnswerReviewControls()
@@ -68,6 +77,18 @@ export function syncAnswerReviewControls(owner: any = self): void {
   const view = owner.answerCardView
   if (!view) return
   const current = owner.cardLinkReviewMode
+  if ((current?.purpose === 'practice' || current?.writingMode === 'annotation' || current?.writingMode === 'handwriting')) {
+    owner.answerReviewExpanded = false
+    owner.answerReviewSelectionContext = undefined
+    pauseControlSurface(owner.answerCardReviewControls)
+    if (owner.answerCardReviewControls) owner.answerCardReviewControls.hidden = true
+    for (const button of [owner.answerCardReviewToggleButton, ...(owner.answerCardReviewButtons || [])]) {
+      if (button) { button.hidden = true; button.enabled = false }
+    }
+    detachAnswerReviewDismiss(owner)
+    if (owner.answerCardWebView) owner.answerCardWebView.frame = { x: 0, y: 0, width: view.frame.width, height: view.frame.height }
+    return
+  }
   const intelligent = current?.algorithm === "fsrs"
   const feedbackNames = intelligent ? ["不会", "不熟", "良好", "掌握"] : REVIEW_LEVEL_NAMES
   if (owner.answerCardReviewControls && owner.answerReviewAlgorithm !== intelligent) {
@@ -138,16 +159,17 @@ export function syncAnswerReviewControls(owner: any = self): void {
   toggle.frame = { x: hitLeft, y: top, width: REVIEW_COLLAPSED_WIDTH, height: REVIEW_CONTROL_HEIGHT }
   toggle.hidden = !visible || expanded
   toggle.enabled = enabled
+  const hints = feedbackNames.map(() => '')
   owner.answerCardReviewButtons.forEach((button: any, level: number) => {
     button.frame = { x: left + level * controlWidth / feedbackNames.length, y: top, width: controlWidth / feedbackNames.length, height: REVIEW_CONTROL_HEIGHT }
     button.hidden = !visible || !expanded
     button.enabled = enabled && expanded
-    button.accessibilityLabel = '复习结果：' + feedbackNames[level]
+    button.accessibilityLabel = '复习结果：' + feedbackNames[level] + hints[level]
   })
   if (visible && !view.hidden) syncControlSurface(owner.answerCardReviewControls, {
     html: () => answerReviewControlsHtml(storedWindowControlSide() === "right", intelligent),
     method: "setReviewSelection", rootId: "capsule",
-    args: [expanded, Boolean(enabled), controlWidth, storedWindowControlSide() === "right"],
+    args: [expanded, Boolean(enabled), controlWidth, storedWindowControlSide() === "right", hints],
     active: () => Boolean(view.superview) && !view.hidden && !owner.answerCardReviewControls.hidden,
     onReady: () => clearAnswerReviewBackground(owner)
   })
@@ -294,7 +316,7 @@ export function showAnswerCard(html: string, owner: any = self): void {
   const defaultWidth = defaultFrame.width, defaultHeight = defaultFrame.height
 
   if (!owner.answerCardView) {
-    const container = new UIView(defaultFrame)
+    const container = createWindowSurface(defaultFrame)
     container.backgroundColor = UIColor.whiteColor()
     container.layer.cornerRadius = 12
     container.layer.masksToBounds = false
@@ -383,7 +405,7 @@ export function showAnswerCard(html: string, owner: any = self): void {
   layoutAnswerCardWindowControls(width, undefined, owner)
   owner.answerCardResizeHandle.frame = { x: width - 52, y: height - 52, width: 44, height: 44 }
   owner.answerCardHtml = html
-  ;(owner.answerCardWebView as any).loadHTMLStringBaseURL(html, null)
+  loadAnswerCardDocument(owner)
   owner.answerCardView.hidden = false
   if (!owner.answerCardView.superview) host.addSubview(owner.answerCardView)
   syncAnswerReviewControls(owner)
@@ -411,7 +433,7 @@ function layoutAnswerCard(frame: any): void {
   // Position is intentionally unrestricted, so the answer can be parked away
   // from the writing area. Only the minimum usable size is retained.
   const next = freePositionFrame(frame)
-  self.answerCardView.frame = next
+  setWindowFrame(self.answerCardView, next)
   self.answerCardWebView.frame = { x: 0, y: 0, width: next.width, height: next.height }
   layoutAnswerCardWindowControls(next.width)
   self.answerCardResizeHandle.frame = {
@@ -424,43 +446,26 @@ function layoutAnswerCard(frame: any): void {
 
 export function onAnswerCardPan(sender: UIPanGestureRecognizer): void {
   const host = MN.studyController.view
-  if (sender.state === 1) {
-    const location = sender.locationInView(host)
-    const frame = self.answerCardView.frame
-    self.answerCardDragOffset = { x: location.x - frame.x, y: location.y - frame.y }
-  }
-  const offset = self.answerCardDragOffset
-  if (!offset) return
-  const location = sender.locationInView(host)
+  if (!self.answerCardView) return
+  const translation = (sender as any).translationInView(host)
+  ;(sender as any).setTranslationInView({ x: 0, y: 0 }, host)
   layoutAnswerCard({
     ...self.answerCardView.frame,
-    x: location.x - offset.x,
-    y: location.y - offset.y
+    x: self.answerCardView.frame.x + translation.x,
+    y: self.answerCardView.frame.y + translation.y
   })
-  if (sender.state === 3 || sender.state === 4 || sender.state === 5) {
-    self.answerCardDragOffset = undefined
-  }
 }
 
 export function onAnswerCardResize(sender: UIPanGestureRecognizer): void {
   const host = MN.studyController.view
-  if (sender.state === 1) {
-    self.answerCardResizeStart = {
-      location: sender.locationInView(host),
-      frame: { ...self.answerCardView.frame }
-    }
-  }
-  const start = self.answerCardResizeStart
-  if (!start) return
-  const location = sender.locationInView(host)
+  if (!self.answerCardView) return
+  const translation = (sender as any).translationInView(host)
+  ;(sender as any).setTranslationInView({ x: 0, y: 0 }, host)
   layoutAnswerCard({
-    ...start.frame,
-    width: start.frame.width + location.x - start.location.x,
-    height: start.frame.height + location.y - start.location.y
+    ...self.answerCardView.frame,
+    width: self.answerCardView.frame.width + translation.x,
+    height: self.answerCardView.frame.height + translation.y
   })
-  if (sender.state === 3 || sender.state === 4 || sender.state === 5) {
-    self.answerCardResizeStart = undefined
-  }
 }
 
 /** 答案查询窗口位置复原：回到 showAnswerCard 的居中默认帧。 */
@@ -487,6 +492,6 @@ export function refreshAnswerCard(): void {
   if (!self.answerCardView) return
   resetAnswerCardPosition()
   if (self.answerCardHtml) {
-    ;(self.answerCardWebView as any).loadHTMLStringBaseURL(self.answerCardHtml, null)
+    loadAnswerCardDocument(self)
   }
 }

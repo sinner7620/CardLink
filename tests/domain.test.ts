@@ -801,6 +801,15 @@ test("旧六级及合并式错题标签可检测并迁移为独立的新等级�
   })
 })
 
+test('错因标签随最新反馈替换，跳过清除；不充当错题身份或用户分类', () => {
+  assert.deepEqual(mistakeSourceTags(['重点', '错因_审题遗漏', '错题_不会'], 1, undefined, undefined, { key: 'calculation', label: '计算失误' }), ['重点', '错题_不熟', '错因_计算失误'])
+  assert.deepEqual(mistakeSourceTags(['重点', '错因_计算失误', '错题_不熟'], 2), ['重点', '错题_掌握'])
+  assert.deepEqual(customMistakeTagsFromSource(['重点', '错因_计算失误', '错题_不会']), ['重点'])
+  assert.equal(mistakeStateFromSourceTags(['错因_计算失误']).isMistake, false)
+  assert.deepEqual(withoutMistakeSourceTags(['重点', '错因_计算失误', '错题_不会']), ['重点'])
+  assert.deepEqual(mistakeSourceTags([], 0, undefined, undefined, { key: 'custom', label: '自定义 #错因\n名称' }), ['错题_不会', '错因_自定义_错因_名称'])
+})
+
 test("裸不会/不熟/掌握始终属于用户标签，不能恢复错题或在取消错题时删除", () => {
   for (const tag of ["不会", "不熟", "掌握"]) {
     assert.deepEqual(mistakeStateFromSourceTags([tag, "普通标签"]), {

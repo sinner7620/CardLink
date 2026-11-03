@@ -46,6 +46,27 @@ if (/<\/script/i.test(pkdrawingCoreScript)) {
   throw new Error("PKDrawing core 脚本包含 </script> 序列，无法安全嵌入 HTML")
 }
 
+const previewBuild = await esbuild({
+  entryPoints: [path.join(root, "src", "card-preview-webview.ts")],
+  bundle: true, minify: true, platform: "browser", target: "safari13", format: "iife", write: false
+})
+const cardPreviewScript = previewBuild.outputFiles[0].text.trim()
+if (/<\/script/i.test(cardPreviewScript)) throw new Error("Card preview script contains a closing script tag")
+
+const inkBuild = await esbuild({
+  entryPoints: [path.join(root, "web", "plugin-ink.js")],
+  loader: { '.css': 'text' },
+  bundle: true, minify: true, platform: "browser", target: "safari13", format: "iife", write: false
+})
+const pluginInkScript = inkBuild.outputFiles[0].text.trim().replace(/<\/script/gi, "<\\/script")
+
+const completionBuild = await esbuild({
+  entryPoints: [path.join(root, "web", "review-completion-effect.js")],
+  bundle: true, minify: true, platform: "browser", target: "safari13", format: "iife", write: false
+})
+const reviewCompletionScript = completionBuild.outputFiles[0].text.trim()
+if (/<\/script/i.test(reviewCompletionScript)) throw new Error("Review completion script contains a closing script tag")
+
 await esbuild({
   entryPoints: [path.join(root, "src", "rails-core.ts")],
   outfile: path.join(addonRoot, "AnswerMatcherCore.js"),
@@ -57,7 +78,10 @@ await esbuild({
       __APP_VERSION__: JSON.stringify(pkg.version),
       __MN_CHANNEL__: JSON.stringify(betaChannel ? "beta" : "stable"),
       __GITHUB_REPOSITORY__: JSON.stringify(repository),
-      __PKDRAWING_CORE_SCRIPT__: JSON.stringify(pkdrawingCoreScript)
+      __PKDRAWING_CORE_SCRIPT__: JSON.stringify(pkdrawingCoreScript),
+      __CARD_PREVIEW_SCRIPT__: JSON.stringify(cardPreviewScript),
+      __PLUGIN_INK_SCRIPT__: JSON.stringify(pluginInkScript),
+      __REVIEW_COMPLETION_SCRIPT__: JSON.stringify(reviewCompletionScript)
     },
   banner: { js: "try {" },
   footer: { js: '} catch (e) { Application.sharedInstance().alert("答案匹配-" + String(e)) }' }
@@ -75,7 +99,7 @@ const rendererBuild = await esbuild({
 const rendererExports = { exports: {} }
 const { runInNewContext } = await import("node:vm")
 runInNewContext(rendererBuild.outputFiles[0].text, { module: rendererExports, exports: rendererExports.exports })
-await writeFile(path.join(webDist, "preview-runtime.js"), pkdrawingCoreScript + "\nwindow.__mnRenderDrawings=function(){" + rendererExports.exports.pkDrawingRendererBody + "};\n")
+await writeFile(path.join(webDist, "preview-runtime.js"), cardPreviewScript + "\n" + pkdrawingCoreScript + "\nwindow.__mnRenderDrawings=function(){" + rendererExports.exports.pkDrawingRendererBody + "};\n")
 for (const name of ["preview.html", "preview.css"]) await copyFile(path.join(root, "web", name), path.join(webDist, name))
 await writeFile(path.join(webDist, "index.html"), `<!doctype html>
 <html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>答案与错题工作台</title><link rel="icon" href="./logo.png"><link rel="stylesheet" href="./app.css"></head><body><div id="root"><p id="boot-message" role="status" style="padding:24px;font:15px system-ui;color:#666">正在载入错题工作台…</p></div><script src="./host-policy.js"></script><script src="./annotation-client.js"></script><script src="./boot.js"></script></body></html>\n`)
@@ -121,6 +145,7 @@ await cp(webDist, path.join(addonRoot, "web-dist"), { recursive: true })
 // Keep the file:// classic entry under web-dist unchanged.
 await copyFile(path.join(root, "web", "scene-index.html"), path.join(addonRoot, "index.html"))
 await copyFile(path.join(root, "assets", "logo.png"), path.join(addonRoot, "logo.png"))
+await cp(path.join(root, "assets", "review-toolbar"), path.join(addonRoot, "review-toolbar"), { recursive: true })
 await copyFile(path.join(root, "THIRD_PARTY_NOTICES.txt"), path.join(addonRoot, "THIRD_PARTY_NOTICES.txt"))
 await copyFile(path.join(root,"LICENSE"),path.join(addonRoot,"LICENSE"))
 
@@ -137,8 +162,8 @@ const manifest = {
   panelMaxHeight: 1000,
   events: ["practice", "comments"],
   cardCommands: [
-    { id:"findAnswer", title:{"zh-Hans":"查找答案","zh-Hant":"尋找答案",en:"Find answer"} },
-    { id:"markMistake", title:{"zh-Hans":"标记错题","zh-Hant":"標記錯題",en:"Mark mistake"} }
+    { id:"findAnswer", title:{"zh-Hans":"答案","zh-Hant":"答案",en:"Find answer"} },
+    { id:"markMistake", title:{"zh-Hans":"标错","zh-Hant":"標錯",en:"Mark mistake"} }
   ],
   cert_key: ""
 }

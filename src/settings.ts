@@ -7,12 +7,14 @@ export { normalizeMistakeReviewCurves } from "./mistake-review-settings"
 const SETTINGS_KEY = "mn4-answer-matcher.settings.v1"
 
 export interface MatcherSettings {
+  globalQuestionColors?: number[]
   allowSameStudySetMindMap: boolean
   mistakeReviewCurves: MistakeReviewCurves
   mistakeCustomCategories: string[]
   sceneWorkbenchEnabled: boolean
   debugModeEnabled: boolean
   debugReviewAlgorithm?: "fixed" | "fsrs"
+  debugAnswerPreviewMode?: "custom" | "native"
   debugUpdateDownloadsEnabled: boolean
   debugAutoInstallUpdatesEnabled: boolean
   cardToolbarEnabled: boolean
@@ -26,6 +28,7 @@ export interface MatcherSettings {
   answerMaskImage: string
   autoCollapseComments: boolean
   reviewExpandedCommentCount: number
+  reviewCompletionConfetti: boolean
 }
 
 export function normalizeMistakeCustomCategories(value: unknown): string[] {
@@ -44,12 +47,14 @@ export function loadMatcherSettings(): MatcherSettings {
   if (settingsCache) return settingsCache
   const value = getLocalDataByKey(SETTINGS_KEY) as Partial<MatcherSettings> | undefined
   settingsCache = {
+    globalQuestionColors: normalizeQuestionColors(value?.globalQuestionColors),
     allowSameStudySetMindMap: value?.allowSameStudySetMindMap !== false,
     mistakeReviewCurves: normalizeMistakeReviewCurves(value?.mistakeReviewCurves),
     mistakeCustomCategories: normalizeMistakeCustomCategories(value?.mistakeCustomCategories),
     sceneWorkbenchEnabled: value?.sceneWorkbenchEnabled === true,
     debugModeEnabled: value?.debugModeEnabled === true,
     debugReviewAlgorithm: value?.debugReviewAlgorithm === "fsrs" ? "fsrs" : "fixed",
+    debugAnswerPreviewMode: value?.debugAnswerPreviewMode === "native" ? "native" : "custom",
     debugUpdateDownloadsEnabled: value?.debugModeEnabled === true && value?.debugUpdateDownloadsEnabled === true,
     debugAutoInstallUpdatesEnabled: value?.debugModeEnabled === true && value?.debugAutoInstallUpdatesEnabled === true,
     cardToolbarEnabled: value?.cardToolbarEnabled !== false,
@@ -62,7 +67,8 @@ export function loadMatcherSettings(): MatcherSettings {
     answerMaskColor: /^#[0-9a-f]{6}$/i.test(value?.answerMaskColor ?? "") ? String(value?.answerMaskColor) : value?.answerMaskStyle === "light" ? "#d9e4f2" : "#141922",
     answerMaskImage: typeof value?.answerMaskImage === "string" && value.answerMaskImage.startsWith("data:image/") ? value.answerMaskImage : "",
     autoCollapseComments: value?.autoCollapseComments === true,
-    reviewExpandedCommentCount: Number.isInteger(value?.reviewExpandedCommentCount) ? Math.max(0, Math.min(10, Number(value?.reviewExpandedCommentCount))) : 2
+    reviewExpandedCommentCount: Number.isInteger(value?.reviewExpandedCommentCount) ? Math.max(0, Math.min(10, Number(value?.reviewExpandedCommentCount))) : 2,
+    reviewCompletionConfetti: value?.reviewCompletionConfetti !== false
   }
   return settingsCache
 }
@@ -73,6 +79,8 @@ export function saveMatcherSettings(settings: Partial<MatcherSettings>): void {
   const next = {
     ...current,
     ...settings,
+    globalQuestionColors: normalizeQuestionColors(settings.globalQuestionColors ?? current.globalQuestionColors),
+    debugAnswerPreviewMode: settings.debugAnswerPreviewMode === "native" || settings.debugAnswerPreviewMode === "custom" ? settings.debugAnswerPreviewMode : current.debugAnswerPreviewMode,
     debugUpdateDownloadsEnabled: (settings.debugModeEnabled ?? current.debugModeEnabled) === true && (settings.debugUpdateDownloadsEnabled ?? current.debugUpdateDownloadsEnabled) === true,
     debugAutoInstallUpdatesEnabled: (settings.debugModeEnabled ?? current.debugModeEnabled) === true && (settings.debugAutoInstallUpdatesEnabled ?? current.debugAutoInstallUpdatesEnabled) === true,
     sceneWorkbenchEnabled: typeof settings.sceneWorkbenchEnabled === "boolean" ? settings.sceneWorkbenchEnabled : current.sceneWorkbenchEnabled,
@@ -87,8 +95,13 @@ export function saveMatcherSettings(settings: Partial<MatcherSettings>): void {
     answerMaskColor: /^#[0-9a-f]{6}$/i.test(settings.answerMaskColor ?? "") ? settings.answerMaskColor! : current.answerMaskColor,
     answerMaskImage: settings.answerMaskImage === undefined ? current.answerMaskImage : settings.answerMaskImage,
     autoCollapseComments: settings.autoCollapseComments === undefined ? current.autoCollapseComments : settings.autoCollapseComments === true,
-    reviewExpandedCommentCount: Number.isInteger(settings.reviewExpandedCommentCount) ? Math.max(0, Math.min(10, settings.reviewExpandedCommentCount!)) : current.reviewExpandedCommentCount
+    reviewExpandedCommentCount: Number.isInteger(settings.reviewExpandedCommentCount) ? Math.max(0, Math.min(10, settings.reviewExpandedCommentCount!)) : current.reviewExpandedCommentCount,
+    reviewCompletionConfetti: typeof settings.reviewCompletionConfetti === 'boolean' ? settings.reviewCompletionConfetti : current.reviewCompletionConfetti
   }
   setLocalDataByKey(next, SETTINGS_KEY)
   settingsCache = next
+}
+
+export function normalizeQuestionColors(value: unknown): number[] {
+  return Array.isArray(value) ? [...new Set(value.filter(v => Number.isInteger(v) && v >= 0 && v < 16))] : []
 }

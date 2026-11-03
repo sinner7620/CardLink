@@ -1,7 +1,21 @@
 import { LEVEL_DESCRIPTIONS, MistakeLevel } from "./mistake-domain"
+import type { ErrorReason } from './error-reasons'
 
 /** v3 标签方案：三档标签统一带「错题_」前缀，不再写入单独的「错题」标签。 */
 export const MISTAKE_LEVEL_TAG_PREFIX = "错题_"
+export const MISTAKE_REASON_TAG_PREFIX = '错因_'
+
+export function mistakeReasonTag(reason?: ErrorReason): string | undefined {
+  if (!reason || !String(reason.label || '').trim()) return undefined
+  return cleanMistakeCategoryTag(MISTAKE_REASON_TAG_PREFIX + reason.label).replace(/\s+/g, '_')
+}
+
+export function mistakeReasonSourceTags(tags: string[], reasons: ErrorReason[] = []): string[] {
+  return cleanMistakeTags([
+    ...tags.filter(tag => !cleanMistakeCategoryTag(tag).startsWith(MISTAKE_REASON_TAG_PREFIX)),
+    ...reasons.map(mistakeReasonTag).filter((tag): tag is string => !!tag)
+  ])
+}
 
 const NEW_LEVEL_TAGS: Record<string, MistakeLevel> = {
   "错题_不会": 0,
@@ -54,6 +68,7 @@ export function cleanMistakeTags(value: string | string[] | undefined | null): s
 export function isManagedMistakeTag(value: string): boolean {
   const tag = cleanMistakeCategoryTag(value)
   return tag === "错题" || // 已退役的旧版托管标签，仍需被识别以便迁移和清除
+    tag.startsWith(MISTAKE_REASON_TAG_PREFIX) ||
     /^错题(?:不会|不熟|掌握)$/.test(tag) || // 旧版
     /^错题_(?:不会|不熟|掌握)$/.test(tag) || // 当前方案
     /^错题[0-5]级$/.test(tag) ||
@@ -126,7 +141,8 @@ export function mistakeSourceTags(
   tags: string[],
   level: MistakeLevel,
   categories?: string | string[],
-  previousCategories?: string | string[]
+  previousCategories?: string | string[],
+  reason?: ErrorReason
 ): string[] {
   const clean = cleanMistakeTags(categories)
   const managed = cleanMistakeTags([
@@ -136,6 +152,7 @@ export function mistakeSourceTags(
   return Array.from(new Set([
     ...withoutManagedTags(tags, managed),
     mistakeLevelTag(level),
+    ...(mistakeReasonTag(reason) ? [mistakeReasonTag(reason)!] : []),
     ...clean
   ]))
 }

@@ -1,12 +1,16 @@
-import { showHUD } from "marginnote"
+import { createWindowSurface, setWindowFrame } from "./window-opacity"
+import { reviewToolbarHorizontal, reviewToolbarTrackingFrame, reviewToolbarLayout, reviewToolbarCount, clampReviewToolbarCore, reviewToolbarDragGeometry, reviewToolbarDropFrame, type ReviewToolbarEdge } from "./review-toolbar-layout"
+import { select, showHUD } from "marginnote"
+import { startPracticeMode, onReviewModeExit, goToPracticeQuestion } from "./review-mode"
 import { resetAnswerCardPosition } from "./answer-card-view"
 import { UI_COLORS } from "./ui-tokens"
+import { styleQuickMenuSurface, styleAnnotationReviewSurface } from "./quick-menu-surface"
 import { loadMatcherSettings } from "./settings"
 import { recordRuntimeState } from "./note-navigation"
 import { collectQuestionTree, questionIdsInTree, type QuestionTreeNode } from "./quick-menu-selection"
 import { MN, NodeNote } from "marginnote"
 import { MAIN_MINDMAP_SCOPE_ID, mindMapScopeIdForNote } from "./mindmap-candidate"
-import { navigateSameMapPractice, sameMapPracticeActive, sameMapPracticeQuestionIds, startSameMapPractice, stopSameMapPractice } from "./same-map-practice"
+import { navigateSameMapPractice, sameMapPracticeActive, sameMapPracticeQuestionIds, sameMapPracticeCurrentQuestionId, stopSameMapPractice } from "./same-map-practice"
 import { quickMenuGeometry, type QuickMenuGeometry } from "./quick-menu-geometry"
 import { loadBindings } from "./store"
 import { getBindingForMode, usesSubcardAnswers } from "./binding"
@@ -18,6 +22,7 @@ const ENTRANCE_SIZE = 44
 const EDGE_MARGIN = 18
 const INITIAL_TOP = 64
 const ENTRANCE_DOCK_KEY = "marginnote.extension.mn4-answer-matcher.entrance-dock.v1"
+const TREE_EXPANSION_KEY = "marginnote.extension.mn4-answer-matcher.question-tree-expansion.v1."
 const QUICK_MENU_WIDTH = 272
 const QUICK_MENU_HEIGHT = 122
 const QUICK_MENU_LIST_MAX_HEIGHT = 520
@@ -28,6 +33,7 @@ const QUICK_MENU_TRANSITION_SECONDS = 0.38
 // MNUtil.animate uses UIKit's default ease-in-out curve.
 const QUICK_MENU_SHELL_TRANSITION_SECONDS = 0.24
 const QUICK_MENU_BALL_TRANSITION_SECONDS = 0.08
+const REVIEW_TOOLBAR_DRAG_MIN_DISTANCE = 44
 
 type ViewFrame = { x: number; y: number; width: number; height: number }
 
@@ -49,6 +55,7 @@ interface QuickMenu {
   tree: QuestionTreeNode[]
   selectedIds: Set<string>
   expandedIds: Set<string>
+  expansionScope?: string
   rowIds: string[]
   visibleRows: QuestionTreeNode[]
   scroll?: UIScrollView
@@ -70,9 +77,36 @@ interface QuickMenu {
   clipEnd?: UIButton
   clipMother?: UIButton
   clipReset?: UIButton
+  reviewDrag?: { point: { x: number; y: number }; displacement: { x: number; y: number }; transformed: boolean; edge: ReviewToolbarEdge; nearEdge: boolean; phase: 'tracking' | 'settling'; hoverTimer?: { invalidate(): void }; hovering?: boolean; preview: UIView; grip: UIButton; generation: number; revision: number; lastMoveAt: number; slowSamples: number; transition?: Promise<void>; full: ViewFrame; homeCore: ViewFrame; homeHorizontal: boolean }
+  reviewOpening?: boolean
+  reviewAnimation?: { finish(): void }
+  reviewControls?: UIView
+  reviewOrigin?: { x: number; y: number }
+  reviewCore?: ViewFrame
+  reviewHorizontal?: boolean
 }
 
-let practiceQueueSnapshot: { tree: QuestionTreeNode[]; questionIds: string[] } | undefined
+let practiceQueueSnapshot: { tree: QuestionTreeNode[]; questionIds: string[]; expansionScope: string } | undefined
+
+function restoreTreeExpansion(menu: QuickMenu, scope: string): void {
+  if (menu.expansionScope === scope) return
+  menu.expansionScope = scope
+  let saved: unknown
+  try {
+    const raw = NSUserDefaults.standardUserDefaults().objectForKey(TREE_EXPANSION_KEY + scope)
+    if (typeof raw === "string") saved = JSON.parse(raw)
+  } catch {}
+  // 空数组代表用户全部收起，不能与尚无保存记录混为一谈。
+  menu.expandedIds = new Set(Array.isArray(saved) && saved.every(id => typeof id === "string")
+    ? saved : menu.tree.map(root => root.id))
+}
+
+function rememberTreeExpansion(menu: QuickMenu): void {
+  if (!menu.expansionScope) return
+  const defaults = NSUserDefaults.standardUserDefaults()
+  defaults.setObjectForKey(JSON.stringify([...menu.expandedIds]), TREE_EXPANSION_KEY + menu.expansionScope)
+  defaults.synchronize()
+}
 
 type DockEdge = "left" | "right" | "top" | "bottom"
 
@@ -198,7 +232,21 @@ function reducedMotionEnabled(): boolean {
 
 function geometryFor(ball: ViewFrame, window: any, desiredWidth: number, desiredHeight: number, owner: any = self): QuickMenuGeometry {
   const edge = (owner.mnutilsEntranceDock as EntranceDock | undefined)?.edge ?? nearestDock({ frame: ball }, window).edge
-  return quickMenuGeometry(ball, windowSize(window), { width: desiredWidth, height: desiredHeight }, edge)
+  const size = windowSize(window), desired = { width: desiredWidth, height: desiredHeight }
+  let geometry = quickMenuGeometry(ball, size, desired, edge)
+  if (owner.cardLinkReviewEntranceRender && geometry.maxHeight < desiredHeight && ball.y > size.height - ball.y - ball.height) {
+    geometry = quickMenuGeometry(ball, size, desired, "bottom")
+  }
+  if (owner.cardLinkReviewEntranceRender) {
+    // Keep all seven controls reachable when the anchor is near a screen edge.
+    const width = Math.min(desiredWidth, size.width - 12), height = Math.min(desiredHeight, size.height - 12)
+    geometry.frame = {
+      x: Math.max(6, Math.min(geometry.expandLeft ? ball.x + ball.width + 12 - width : ball.x - 12, size.width - width - 6)),
+      y: Math.max(6, Math.min(geometry.expandUp ? ball.y + ball.height + 12 - height : ball.y - 12, size.height - height - 6)),
+      width, height
+    }
+  }
+  return geometry
 }
 
 function menuLabel(title: string, frame: any, size: number, color: string): UILabel {
@@ -261,12 +309,28 @@ function quickMenuSegmentVisual(width: number, mode: "all" | "queue"): UIWebView
   return view
 }
 
+// cancelsTouchesInView alone does not prevent another recognizer from defeating
+// this tap. Observe canvas taps alongside the host's native drawing gestures.
+let quickMenuTapDelegate: any
+function quickMenuDismissDelegate(): any {
+  if (!quickMenuTapDelegate) {
+    const Delegate = JSB.defineClass("CardLinkQuickMenuTapDelegate : UIViewController <UIGestureRecognizerDelegate>", {
+      gestureRecognizerShouldRecognizeSimultaneouslyWithGestureRecognizer(_gesture: any, _other: any) { return true }
+    }, {})
+    quickMenuTapDelegate = Delegate.new()
+  }
+  return quickMenuTapDelegate
+}
+
 function createQuickMenu(ball: any, window: any, collapsedFrame: ViewFrame, geometry: QuickMenuGeometry, owner: any = self): QuickMenu {
   const expandedFrame = geometry.frame
   const dismissTap = new UITapGestureRecognizer(owner, "onMnutilsQuickMenuWindowTap:")
   dismissTap.cancelsTouchesInView = false
+  dismissTap.delaysTouchesBegan = false
+  dismissTap.delaysTouchesEnded = false
+  dismissTap.delegate = quickMenuDismissDelegate()
   window.addGestureRecognizer(dismissTap)
-  const content = new UIView(collapsedFrame)
+  const content = createWindowSurface(collapsedFrame)
   content.backgroundColor = UIColor.clearColor()
   content.layer.cornerRadius = ENTRANCE_SIZE / 2
   content.layer.masksToBounds = true
@@ -357,6 +421,7 @@ function activeMindMapNotes(): { notebookId: string; scopeId: string; notes: any
 function readQuickMenuQuestions(menu: QuickMenu): boolean {
   if (sameMapPracticeActive() && practiceQueueSnapshot) {
     menu.tree = practiceQueueSnapshot.tree
+    restoreTreeExpansion(menu, practiceQueueSnapshot.expansionScope)
     menu.selectedIds = new Set(practiceQueueSnapshot.questionIds)
     updateStartTitle(menu)
     return true
@@ -370,16 +435,17 @@ function readQuickMenuQuestions(menu: QuickMenu): boolean {
   }
   const bindings = loadBindings()
   const binding = getBindingForMode(bindings, context.notebookId, context.scopeId, loadMatcherSettings().allowSameStudySetMindMap)
-  const colors = binding?.questionColors ?? []
-  if (!colors.length && !sameMapPracticeActive()) {
+  const colors = [...new Set([...(loadMatcherSettings().globalQuestionColors ?? []), ...(binding?.questionColors ?? [])])]
+  if (!colors.length && !sameMapPracticeActive() && (binding?.designatedAnswer === "subcard" || binding?.selectionMode === "mixed")) {
     recordRuntimeState("悬浮菜单", "questions.unavailable", `scope=${context.scopeId} reason=no-question-colors`)
     showHUD("请先在答案配置中筛选题目卡片颜色", 3)
     return false
   }
   menu.questionColorIndex = colors[0]
-  menu.maskAnswers = usesSubcardAnswers(binding, colors[0])
+  menu.maskAnswers = usesSubcardAnswers(binding ? { ...binding, questionColors: colors } : binding, colors[0])
   const inCurrentMap = new Set(context.notes.map(note => String(note.noteId ?? "").trim()))
-  menu.tree = collectQuestionTree(context.notes, sameMapPracticeActive() ? undefined : colors, note => inCurrentMap.has(String(note.noteId ?? "").trim()))
+  menu.tree = collectQuestionTree(context.notes, sameMapPracticeActive() || !colors.length ? undefined : colors, note => inCurrentMap.has(String(note.noteId ?? "").trim()))
+  restoreTreeExpansion(menu, JSON.stringify([context.notebookId, context.scopeId]))
   const available = new Set(questionIdsInTree(menu.tree))
   menu.selectedIds = sameMapPracticeActive()
     ? new Set(sameMapPracticeQuestionIds().filter(id => available.has(id)))
@@ -416,11 +482,12 @@ function updateSegmentSelection(menu: QuickMenu): void {
 
 function layoutQuickMenu(menu: QuickMenu, geometry: QuickMenuGeometry, resizeShell = true): void {
   const frame = geometry.frame
+  if (menu.reviewControls && !menu.reviewDrag) styleReviewMenuShell(menu)
   const width = Math.max(0, frame.width - QUICK_MENU_INSET * 2)
   const listHeight = Math.max(0, frame.height - QUICK_MENU_LIST_CHROME)
   const listY = geometry.expandUp ? QUICK_MENU_INSET : QUICK_MENU_LIST_TOP
   const headerY = geometry.expandUp ? frame.height - 56 : QUICK_MENU_INSET
-  if (resizeShell) setQuickMenuShell(menu, frame, 18)
+  if (resizeShell) setQuickMenuShell(menu, frame, menu.reviewControls ? 20 : 18)
   menu.controls.frame = { x: frame.x - menu.content.frame.x, y: frame.y - menu.content.frame.y, width: frame.width, height: frame.height }
   menu.startButton.frame = { x: 64, y: headerY, width: Math.max(0, frame.width - 128), height: 44 }
   menu.closeButton.frame = { x: geometry.expandLeft ? QUICK_MENU_INSET : frame.width - 56, y: headerY, width: 44, height: 44 }
@@ -436,6 +503,10 @@ function layoutQuickMenu(menu: QuickMenu, geometry: QuickMenuGeometry, resizeShe
     menu.scroll.contentSize = { width, height: Math.max(listHeight, menu.visibleRows.length * 42) }
   }
   if (menu.clipControls) layoutClipperMenu(menu)
+  if (menu.reviewControls) {
+    menu.reviewControls.frame = { x: 4, y: 4, width: Math.max(0, frame.width - 8), height: Math.max(0, frame.height - 8) }
+    menu.owner.cardLinkReviewEntranceRender?.(menu.reviewControls)
+  }
 }
 
 function layoutClipperMenu(menu: QuickMenu): void {
@@ -587,8 +658,16 @@ function resizeQuickMenu(menu: QuickMenu, width: number, height: number, nextLis
   void animateQuickMenuUpdate(update, 0.4).then(() => (previousList as any)?.removeFromSuperview())
 }
 
-function renderQuestionTree(menu: QuickMenu): void {
+function renderQuestionTree(menu: QuickMenu, focusCurrent = false): void {
   const previousOffset = Number(menu.scroll?.contentOffset?.y ?? 0)
+  const currentId = menu.mode === "queue" ? sameMapPracticeCurrentQuestionId() : undefined
+  if (focusCurrent && currentId) {
+    const reveal = (nodes: QuestionTreeNode[]) => nodes.forEach(node => {
+      if (!node.questionIds.includes(currentId)) return
+      if (node.children.length) { menu.expandedIds.add(node.id); reveal(node.children) }
+    })
+    reveal(menu.tree)
+  }
   if (menu.mode === "all") {
     resizeQuickMenu(menu, QUICK_MENU_WIDTH, QUICK_MENU_HEIGHT)
     menu.visibleRows = []
@@ -636,7 +715,9 @@ function renderQuestionTree(menu: QuickMenu): void {
     }
   }
   container.addSubview(scroll)
-  scroll.contentOffset = { x: 0, y: Math.min(previousOffset, Math.max(0, rows.length * 42 - height)) }
+  const currentIndex = currentId ? rows.findIndex(row => row.node.id === currentId) : -1
+  const offset = focusCurrent && currentIndex >= 0 ? currentIndex * 42 + 21 - height / 2 : previousOffset
+  scroll.contentOffset = { x: 0, y: Math.max(0, Math.min(offset, Math.max(0, rows.length * 42 - height))) }
   resizeQuickMenu(menu, QUICK_MENU_WIDTH, desiredHeight, container, scroll)
 }
 
@@ -645,10 +726,13 @@ function setQuickMenuShell(menu: QuickMenu, frame: ViewFrame, cornerRadius: numb
   menu.content.layer.cornerRadius = cornerRadius
   // Keep the controls fixed in window space while the shell reveals them
   // outward from the ball, or clips them back into it on close.
-  menu.controls.frame = {
+  // Update the compensating child offset without an inherited UIKit tween.
+  // Otherwise shell expansion and the inverse child movement render as two
+  // independent animations, leaving a second row flying in from the right.
+  setWindowFrame(menu.controls, {
     x: menu.expandedFrame.x - frame.x, y: menu.expandedFrame.y - frame.y,
     width: menu.expandedFrame.width, height: menu.expandedFrame.height
-  }
+  })
 }
 
 function animateQuickMenuUpdate(update: () => void, seconds: number): Promise<void> {
@@ -659,16 +743,77 @@ function animateQuickMenuUpdate(update: () => void, seconds: number): Promise<vo
   return Promise.resolve(MNUtil.animate(update, seconds)).then(() => undefined)
 }
 
+function withoutReviewAnimations(update: () => void): void {
+  const native = UIView as any, transaction = (globalThis as any).CATransaction
+  const canDisable = typeof native.areAnimationsEnabled === 'function' && typeof native.setAnimationsEnabled === 'function'
+  const enabled = canDisable ? native.areAnimationsEnabled() : undefined
+  const transact = typeof transaction?.begin === 'function' && typeof transaction?.setDisableActions === 'function' && typeof transaction?.commit === 'function'
+  if (transact) { transaction.begin(); transaction.setDisableActions(true) }
+  try { if (canDisable) native.setAnimationsEnabled(false); update() }
+  finally { if (canDisable) native.setAnimationsEnabled(enabled); if (transact) transaction.commit() }
+}
+
+function interpolateReviewFrame(from: ViewFrame, to: ViewFrame, progress: number): ViewFrame {
+  return { x: from.x + (to.x - from.x) * progress, y: from.y + (to.y - from.y) * progress,
+    width: from.width + (to.width - from.width) * progress, height: from.height + (to.height - from.height) * progress }
+}
+
+/** One clock writes the outline and compensating content coordinates together.
+ * No nested UIKit frame/bounds/opacity animations or completion-time reveal. */
+function animateReviewGeometry(menu: QuickMenu, seconds: number, update: (progress: number) => void): Promise<void> {
+  menu.reviewAnimation?.finish()
+  const generation = menu.generation, open = menu.open
+  if (reducedMotionEnabled()) { withoutReviewAnimations(() => update(1)); return Promise.resolve() }
+  return new Promise(resolve => {
+    let timer: { invalidate(): void } | undefined, ended = false
+    const animation = { finish() {
+      if (ended) return
+      ended = true; timer?.invalidate()
+      if (menu.reviewAnimation === animation) menu.reviewAnimation = undefined
+      resolve()
+    } }
+    menu.reviewAnimation = animation
+    const started = Date.now()
+    withoutReviewAnimations(() => update(0))
+    timer = NSTimer.scheduledTimerWithTimeInterval(1 / 60, true, () => {
+      if (menu.open !== open || menu.generation !== generation) { animation.finish(); return }
+      const progress = Math.min(1, Math.max(0, (Date.now() - started) / (seconds * 1000)))
+      withoutReviewAnimations(() => update(progress * progress * (3 - 2 * progress)))
+      if (progress === 1) animation.finish()
+    })
+    try {
+      const loopType = (globalThis as any).NSRunLoop
+      const loop = loopType?.mainRunLoop?.() || loopType?.currentRunLoop?.()
+      loop?.addTimerForMode?.(timer, (globalThis as any).NSRunLoopCommonModes || 'kCFRunLoopCommonModes')
+    } catch { /* Default run-loop still completes the transition after tracking. */ }
+  })
+}
+
 function finishQuickMenu(menu: QuickMenu): void {
+  menu.reviewAnimation?.finish()
+  menu.reviewDrag?.hoverTimer?.invalidate()
+  if (menu.reviewControls && menu.owner.cardLinkReviewEntranceHost === menu.reviewControls) {
+    menu.owner.cardLinkReviewEntranceHost = undefined
+    menu.owner.cardLinkReviewEntranceResize = undefined
+    menu.owner.cardLinkReviewEntranceCommit = undefined
+    menu.owner.cardLinkReviewEntranceLimits = undefined
+    menu.owner.cardLinkReviewEntrancePlacement = undefined
+    ;(menu.ball.button ?? menu.ball).hidden = false
+  }
   dismissModePicker(menu)
   ;(menu.content as any).removeFromSuperview()
   menu.window.removeGestureRecognizer(menu.dismissTap)
   if (menu.owner.mnutilsQuickMenu === menu) menu.owner.mnutilsQuickMenu = undefined
 }
 
+function styleReviewMenuShell(menu: QuickMenu): void {
+  styleAnnotationReviewSurface(menu.content, "shell")
+}
+
 function settleQuickMenu(menu: QuickMenu): void {
-  menu.content.backgroundColor = UIColor.colorWithHexString(UI_COLORS.surface).colorWithAlphaComponent(0.94)
-  setQuickMenuShell(menu, menu.expandedFrame, 18)
+  if (menu.reviewControls) styleReviewMenuShell(menu)
+  else styleQuickMenuSurface(menu.content)
+  setQuickMenuShell(menu, menu.expandedFrame, menu.reviewControls ? 20 : 18)
   ;(menu.content as any).userInteractionEnabled = true
   ;(menu.controls as any).userInteractionEnabled = true
   recordRuntimeState("悬浮菜单", "ready", `frame=${JSON.stringify(menu.content.frame)}`)
@@ -676,7 +821,19 @@ function settleQuickMenu(menu: QuickMenu): void {
 
 async function animateQuickMenu(menu: QuickMenu, opening: boolean): Promise<void> {
   const generation = ++menu.generation
+  if (menu.reviewControls) {
+    const from = { ...menu.content.frame }, to = { ...(opening ? menu.expandedFrame : menu.collapsedFrame) }
+    withoutReviewAnimations(() => { styleReviewMenuShell(menu); menu.content.layer.masksToBounds = true })
+    await animateReviewGeometry(menu, QUICK_MENU_SHELL_TRANSITION_SECONDS, progress => {
+      setQuickMenuShell(menu, interpolateReviewFrame(from, to, progress), 20 + (opening ? 1 - progress : progress) * 2)
+    })
+    if (menu.generation !== generation || menu.open !== opening) return
+    menu.reviewOpening = false
+    withoutReviewAnimations(() => { if (opening) settleQuickMenu(menu); else finishQuickMenu(menu) })
+    return
+  }
   if (reducedMotionEnabled()) {
+    menu.reviewOpening = false
     if (opening) {
       layoutQuickMenu(menu, menu.geometry)
       settleQuickMenu(menu)
@@ -684,24 +841,29 @@ async function animateQuickMenu(menu: QuickMenu, opening: boolean): Promise<void
     return
   }
   if (opening) {
-    // Fade only the ball-sized backing before revealing the full panel.
     await animateQuickMenuUpdate(() => {
-      menu.content.backgroundColor = UIColor.colorWithHexString(UI_COLORS.surface).colorWithAlphaComponent(0.94)
+      if (menu.reviewControls) {
+        styleReviewMenuShell(menu)
+        menu.content.layer.masksToBounds = true
+        ;(menu.content.layer as any).shadowOpacity = 0
+      } else styleQuickMenuSurface(menu.content)
     }, QUICK_MENU_BALL_TRANSITION_SECONDS)
     if (menu.generation !== generation || !menu.open) return
+    menu.reviewOpening = false
     await animateQuickMenuUpdate(() => {
-      setQuickMenuShell(menu, menu.expandedFrame, 18)
+      setQuickMenuShell(menu, menu.expandedFrame, menu.reviewControls ? 20 : 18)
     }, QUICK_MENU_SHELL_TRANSITION_SECONDS)
     if (menu.generation === generation && menu.open) settleQuickMenu(menu)
     return
   }
   ;(menu.content as any).userInteractionEnabled = false
   ;(menu.controls as any).userInteractionEnabled = false
+  menu.content.layer.masksToBounds = true
+  ;(menu.content.layer as any).shadowOpacity = 0
   await animateQuickMenuUpdate(() => {
     setQuickMenuShell(menu, menu.collapsedFrame, ENTRANCE_SIZE / 2)
   }, QUICK_MENU_SHELL_TRANSITION_SECONDS)
   if (menu.generation !== generation || menu.open) return
-  // At this point the shell is back under the ball; remove its backing smoothly.
   await animateQuickMenuUpdate(() => {
     menu.content.backgroundColor = UIColor.clearColor()
   }, QUICK_MENU_BALL_TRANSITION_SECONDS)
@@ -711,6 +873,14 @@ async function animateQuickMenu(menu: QuickMenu, opening: boolean): Promise<void
 function closeQuickMenu(animated = true, owner: any = self, reason = "lifecycle"): void {
   const menu = owner.mnutilsQuickMenu as QuickMenu | undefined
   if (!menu) return
+  // The native writing-mode picker is outside this view. Its option taps must
+  // not dismiss the menu whose selected queue is waiting for the result.
+  if (reason === "outside-tap" && owner.cardLinkPracticeChoosing) return
+  if (menu.reviewControls && typeof owner.cardLinkReviewEntranceRender === "function" &&
+    ["outside-tap", "close-button", "open-panel", "entrance-long-press", "collapse"].includes(reason)) {
+    if (reason === "outside-tap") owner.cardLinkReviewDismissClassification?.()
+    return
+  }
   recordRuntimeState("悬浮菜单", "close", `reason=${reason} mode=${menu.mode} selected=${menu.selectedIds.size}`)
   dismissModePicker(menu)
   menu.open = false
@@ -722,6 +892,7 @@ function closeQuickMenu(animated = true, owner: any = self, reason = "lifecycle"
 }
 
 export function closeMnutilsQuickMenu(): void {
+  if (self.mnutilsQuickMenu?.reviewControls && self.cardLinkReviewEntranceRender) return
   exitClipperMode()
   closeQuickMenu(false)
   stopSameMapPractice()
@@ -731,21 +902,133 @@ export function closeMnutilsQuickMenu(): void {
 function openQuickMenu(button: any, window: any, owner: any = self): void {
   closeQuickMenu(false, owner)
   const collapsedFrame = { ...button.frame } as ViewFrame
-  const desiredWidth = QUICK_MENU_WIDTH
-  const desiredHeight = clipperModeActive(owner) ? 168 : QUICK_MENU_HEIGHT
+  const review = typeof owner.cardLinkReviewEntranceRender === "function"
+  const current = owner.cardLinkReviewMode
+  if (review && current) {
+    const size = windowSize(window)
+    current.annotationHorizontal = reviewToolbarHorizontal(collapsedFrame.x + collapsedFrame.width / 2, collapsedFrame.y + collapsedFrame.height / 2, size.width, size.height)
+  }
+  const horizontal = !!current?.annotationHorizontal
+  const size = windowSize(window)
+  const initialCore = review ? reviewToolbarLayout(horizontal, false, 0, { width: Math.max(0, size.width - 20), height: Math.max(0, size.height - 20) }, reviewToolbarCount(current || {})) : undefined
+  const desiredWidth = review ? initialCore!.mainWidth + 8 : QUICK_MENU_WIDTH
+  const desiredHeight = review ? initialCore!.height + 8 : clipperModeActive(owner) ? 168 : QUICK_MENU_HEIGHT
   const geometry = geometryFor(collapsedFrame, window, desiredWidth, desiredHeight, owner)
+  if (review) geometry.frame = clampReviewToolbarCore(geometry.frame, size, horizontal)
   const menu = createQuickMenu(button, window, collapsedFrame, geometry, owner)
   owner.mnutilsQuickMenu = menu
   menu.open = true
   recordRuntimeState("悬浮菜单", "open", `frame=${JSON.stringify(menu.expandedFrame)}`)
   menu.desiredWidth = desiredWidth; menu.desiredHeight = desiredHeight
-  if (clipperModeActive(owner)) prepareClipperMenu(menu)
+  if (review) {
+    menu.reviewOpening = true
+    menu.content.layer.borderWidth = 0
+    menu.content.backgroundColor = UIColor.clearColor()
+    menu.startButton.hidden = true
+    menu.segment.hidden = true
+    menu.closeButton.hidden = true
+    ;(button.button ?? button).hidden = true
+    menu.reviewControls = new UIView({ x: 4, y: 4, width: Math.max(0, geometry.frame.width - 8), height: Math.max(0, geometry.frame.height - 8) })
+    menu.reviewControls.backgroundColor = UIColor.clearColor()
+    menu.controls.layer.cornerRadius = 20
+    menu.controls.layer.masksToBounds = true
+    menu.controls.addSubview(menu.reviewControls)
+    // Keep a main-control anchor independent of classification/list extents.
+    menu.reviewOrigin = { x: 0, y: 0 }
+    menu.reviewCore = { ...geometry.frame }
+    menu.reviewHorizontal = horizontal
+    const coreFrame = () => {
+      const bounds = windowSize(window), horizontal = !!owner.cardLinkReviewMode?.annotationHorizontal
+      const layout = reviewToolbarLayout(horizontal, false, 0, { width: Math.max(0, bounds.width - 20), height: Math.max(0, bounds.height - 20) }, reviewToolbarCount(owner.cardLinkReviewMode || {}))
+      const next = { width: layout.mainWidth + 8, height: layout.height + 8 }
+      let frame = { ...menu.reviewCore!, ...next }
+      if (horizontal !== menu.reviewHorizontal && owner.mnutilsEntranceDragging && owner.cardLinkReviewDragAnchor) {
+        frame = reviewToolbarTrackingFrame(menu.reviewCore!, next, owner.cardLinkReviewDragAnchor.point, bounds)
+      }
+      return clampReviewToolbarCore(frame, bounds, horizontal)
+    }
+    let requestedSize: { width: number; height: number; origin: { x: number; y: number } } | undefined
+    owner.cardLinkReviewEntrancePlacement = () => {
+      const frame = menu.reviewCore!
+      return { point: { x: frame.x + frame.width / 2, y: frame.y + frame.height / 2 }, bounds: windowSize(window) }
+    }
+    owner.cardLinkReviewEntranceLimits = () => {
+      const size = windowSize(window), core = coreFrame(), horizontal = !!owner.cardLinkReviewMode?.annotationHorizontal
+      return { width: Math.max(0, horizontal ? size.width - core.x - 12 : size.width - 20),
+        height: Math.max(0, size.height - core.y - 12), coreWidth: core.width - 8,
+        left: Math.max(0, core.x - 2), right: Math.max(0, size.width - core.x - core.width - 2),
+        above: Math.max(0, core.y - 2), below: Math.max(0, size.height - core.y - core.height - 2) }
+    }
+    owner.cardLinkReviewEntranceResize = (bodyHeight: number, bodyWidth: number, origin = { x: 0, y: 0 }) => {
+      requestedSize = { height: bodyHeight + 8, width: bodyWidth + 8, origin }
+    }
+    owner.cardLinkReviewEntranceCommit = (animated = false) => {
+      if (!requestedSize || menu.reviewDrag?.phase === 'tracking') return
+      const { height, width, origin } = requestedSize
+      requestedSize = undefined
+      const core = coreFrame(), horizontal = !!owner.cardLinkReviewMode?.annotationHorizontal
+      const frame = { x: core.x + origin.x, y: core.y + origin.y, width, height }
+      const previous = menu.expandedFrame
+      if (!menu.reviewDrag && previous.x === frame.x && previous.y === frame.y && previous.width === width && previous.height === height &&
+          menu.reviewOrigin?.x === origin.x && menu.reviewOrigin?.y === origin.y) return
+      menu.desiredHeight = height; menu.desiredWidth = width
+      menu.reviewCore = core; menu.reviewOrigin = origin; menu.reviewHorizontal = horizontal
+      menu.geometry = { ...menu.geometry, frame }
+      menu.expandedFrame = frame
+      const apply = () => {
+        const render = owner.cardLinkReviewEntranceRender
+        owner.cardLinkReviewEntranceRender = undefined
+        try {
+          layoutQuickMenu(menu, menu.geometry, !menu.reviewOpening && !menu.reviewDrag)
+          menu.reviewControls!.bounds = { x: origin.x, y: origin.y, width: width - 8, height: height - 8 }
+          // The hidden ball follows only the stable main controls.
+          const ball = { ...menu.ball.frame, x: core.x + 12, y: core.y + 12 }
+          setWindowFrame(menu.ball.button, ball)
+          menu.collapsedFrame = ball
+          owner.mnutilsEntranceNativeFrame = { ...ball }
+          if (owner.mnutilsEntranceDragging && !menu.reviewDrag) setWindowFrame(menu.content, frame)
+          if (menu.reviewOpening && !menu.reviewDrag) setQuickMenuShell(menu, menu.collapsedFrame, ENTRANCE_SIZE / 2)
+        } finally { owner.cardLinkReviewEntranceRender = render }
+      }
+      if (animated && !owner.mnutilsEntranceDragging && !menu.reviewDrag) void animateQuickMenuUpdate(apply, 0.2)
+      else apply()
+    }
+    owner.cardLinkReviewEntranceRender(menu.reviewControls)
+    setQuickMenuShell(menu, menu.collapsedFrame, ENTRANCE_SIZE / 2)
+  } else if (clipperModeActive(owner)) prepareClipperMenu(menu)
   else if (sameMapPracticeActive() && readQuickMenuQuestions(menu)) {
-    for (const root of menu.tree) menu.expandedIds.add(root.id)
-    renderQuestionTree(menu)
+    renderQuestionTree(menu, true)
     void updateSegmentSelection(menu)
   }
   void animateQuickMenu(menu, true)
+}
+
+export function openReviewQuickMenu(owner: any = self): boolean {
+  ensureMnutilsEntrance(owner)
+  const button = owner.mnutilsEntranceBall
+  const window = button?.button?.superview ?? button?.window
+  if (!button || !window) return false
+  openQuickMenu(button, window, owner)
+  return true
+}
+
+export function closeReviewQuickMenu(owner: any = self): void {
+  const menu = owner.mnutilsQuickMenu as QuickMenu | undefined
+  if (menu?.reviewControls) {
+    closeQuickMenu(false, owner, "review-exit")
+    const dock = nearestDock(menu.ball, menu.window)
+    owner.mnutilsEntranceDock = dock
+    owner.mnutilsEntranceNativeFrame = undefined
+    rememberDock(dock)
+    owner.mnutilsEntranceAnimating = true
+    void animateQuickMenuUpdate(() => { menu.ball.frame = dockedFrame(menu.window, dock) }, 0.24)
+      .finally(() => { owner.mnutilsEntranceAnimating = false })
+  }
+  owner.cardLinkReviewEntranceHost = undefined
+  owner.cardLinkReviewEntranceResize = undefined
+  owner.cardLinkReviewEntranceCommit = undefined
+  owner.cardLinkReviewEntranceLimits = undefined
+  owner.cardLinkReviewEntrancePlacement = undefined
 }
 
 /** MN Utils 可用时，在当前窗口右上方创建独立的插件入口；缺失时静默跳过。 */
@@ -771,7 +1054,8 @@ export function ensureMnutilsEntrance(owner: any = self): void {
         }
       } else if (!owner.mnutilsEntranceDragging && !owner.mnutilsEntranceAnimating) {
         const dock = owner.mnutilsEntranceDock as EntranceDock | undefined
-        dock ? applyDock(existing, window, dock, false) : clampEntranceFrame(existing)
+        if (owner.mnutilsEntranceNativeFrame) { existing.frame = owner.mnutilsEntranceNativeFrame; clampEntranceFrame(existing) }
+        else dock ? applyDock(existing, window, dock, false) : clampEntranceFrame(existing)
       }
       return
     }
@@ -810,7 +1094,8 @@ export function ensureMnutilsEntrance(owner: any = self): void {
       edge: "right",
       ratio: clampRatio((Number(button.frame.y) - EDGE_MARGIN) / Math.max(1, height - ENTRANCE_SIZE - EDGE_MARGIN * 2))
     }
-    applyDock(button, window, owner.mnutilsEntranceDock, false)
+    if (owner.mnutilsEntranceNativeFrame) { button.frame = owner.mnutilsEntranceNativeFrame; clampEntranceFrame(button) }
+    else applyDock(button, window, owner.mnutilsEntranceDock, false)
   } catch (error) {
     try { console.log("MNButton 第二入口创建失败:", String(error)) } catch { /* optional */ }
   }
@@ -841,7 +1126,7 @@ export function onMnutilsEntranceClick(_sender: any): void {
       const button = self.mnutilsEntranceBall
       const window = button?.button?.superview ?? button?.window
       if (button && window) {
-        if (!clipperModeActive() && !sameMapPracticeActive() && loadMatcherSettings().entranceDefaultMode === "clipper") openClipperQuickMenu()
+        if (!self.cardLinkReviewEntranceRender && !clipperModeActive() && !sameMapPracticeActive() && loadMatcherSettings().entranceDefaultMode === "clipper") openClipperQuickMenu()
         else openQuickMenu(button, window)
       }
     }
@@ -881,7 +1166,6 @@ export function onMnutilsQuickMenuFilter(): void {
   if (menu.mode === "all" && !sameMapPracticeActive()) menu.selectedIds.clear()
   menu.mode = "filter"
   if (!readQuickMenuQuestions(menu)) return
-  if (!menu.expandedIds.size) for (const root of menu.tree) menu.expandedIds.add(root.id)
   renderQuestionTree(menu)
   void updateSegmentSelection(menu)
 }
@@ -906,7 +1190,8 @@ export function onMnutilsQuickMenuToggleQuestion(sender: any): void {
       ? node.id : node.questionIds.find(id => menu.selectedIds.has(id))
     if (target) {
       closeQuickMenu()
-      void navigateSameMapPractice(target)
+      if (menu.owner.cardLinkReviewMode?.purpose === "practice") void goToPracticeQuestion(target, menu.owner)
+      else void navigateSameMapPractice(target)
     }
     return
   }
@@ -925,6 +1210,7 @@ export function onMnutilsQuickMenuToggleBranch(sender: any): void {
   if (!menu?.open || !node?.children.length) return
   if (menu.expandedIds.has(node.id)) menu.expandedIds.delete(node.id)
   else menu.expandedIds.add(node.id)
+  rememberTreeExpansion(menu)
   renderQuestionTree(menu)
 }
 
@@ -944,7 +1230,7 @@ export function onMnutilsQuickMenuModePress(sender: any): void {
     const origin = { x: menu.expandedFrame.x + button.x, y: menu.expandedFrame.y + button.y, width: button.width, height: button.height }
     const frame = { x: Math.max(8, Math.min(origin.x + origin.width / 2 - 72, menu.windowSize.width - 152)),
       y: Math.max(8, Math.min(origin.y + origin.height / 2 - 44, menu.windowSize.height - 96)), width: 144, height: 88 }
-    const view = new UIView(origin)
+    const view = createWindowSurface(origin)
     view.backgroundColor = UIColor.clearColor()
     view.layer.cornerRadius = 22; view.layer.masksToBounds = true
     ;(view as any).userInteractionEnabled = false
@@ -991,6 +1277,11 @@ export async function onMnutilsQuickMenuStart(): Promise<void> {
   const menu = self.mnutilsQuickMenu as QuickMenu | undefined
   if (!menu?.open) return
   if (clipperModeActive()) { toggleClipperRunning(menu.owner); return }
+  if (menu.owner.cardLinkReviewMode?.purpose === "practice") {
+    onReviewModeExit(undefined, menu.owner)
+    if (!menu.owner.cardLinkReviewMode) closeQuickMenu(false, menu.owner, "practice-exit")
+    return
+  }
   if (sameMapPracticeActive()) {
     stopSameMapPractice()
     practiceQueueSnapshot = undefined
@@ -1006,28 +1297,31 @@ export async function onMnutilsQuickMenuStart(): Promise<void> {
   const notebookId = String(MN.currnetNotebookId ?? "").trim()
   const queue = questionIdsInTree(menu.tree).filter(id => menu.selectedIds.has(id))
   recordRuntimeState("悬浮菜单", "start.queue", `count=${queue.length}`)
-  let result: Awaited<ReturnType<typeof startSameMapPractice>>
+  if (!queue.length) { showHUD("请先选择做题题目", 2); return }
+  if (menu.owner.cardLinkPracticeChoosing) return
+  menu.owner.cardLinkPracticeChoosing = true
   try {
-    result = await startSameMapPractice(notebookId, queue, { maskAnswers: menu.maskAnswers === true })
+    const choice = await select(["脑图内书写", "批注窗口书写"], "做题方式", "批注书写需要模板配置", true)
+    if (![0, 1].includes(choice.index)) return
+    if (!menu.open || menu.owner.mnutilsQuickMenu !== menu || String(MN.currnetNotebookId ?? "").trim() !== notebookId) {
+      showHUD("做题范围已关闭或切换，请重新选择题目", 3)
+      return
+    }
+    const scopeId = JSON.parse(menu.expansionScope!)[1]
+    const result = await startPracticeMode(notebookId, queue, scopeId === MAIN_MINDMAP_SCOPE_ID ? undefined : scopeId, menu.maskAnswers === true, choice.index === 0 ? "mindmap" : "annotation", menu.owner)
+    if (!result.started) {
+      const reason = result.reason || "没有可开始的题目"
+      recordRuntimeState("悬浮菜单", "start.failed", reason)
+      showHUD(`无法开始做题：${reason}`, 5)
+      return
+    }
+    practiceQueueSnapshot = { tree: menu.tree, questionIds: queue, expansionScope: menu.expansionScope! }
+    showHUD("已开始做题", 2)
   } catch (error) {
     const message = String((error as Error)?.message || error)
     recordRuntimeState("悬浮菜单", "start.error", message)
     showHUD(`无法开始做题：${message}`, 3)
-    return
-  }
-  recordRuntimeState("悬浮菜单", "start.result", `started=${result.started} answerCount=${result.answerCount ?? 0} reason=${result.reason ?? ""}`)
-  if (!result.started) {
-    showHUD(result.reason ?? "无法开始做题", 3)
-    return
-  }
-  showHUD(result.maskAnswers === false ? "已开始做题，按队列定位聚焦" : `已开始做题，遮盖 ${result.answerCount ?? 0} 张答案卡片`, 2)
-  practiceQueueSnapshot = { tree: menu.tree, questionIds: queue }
-  menu.mode = "queue"
-  if (readQuickMenuQuestions(menu)) {
-    for (const root of menu.tree) menu.expandedIds.add(root.id)
-    renderQuestionTree(menu)
-    void updateSegmentSelection(menu)
-  }
+  } finally { menu.owner.cardLinkPracticeChoosing = false }
 }
 
 export function onMnutilsQuickMenuOpenPanel(): void {
@@ -1084,69 +1378,299 @@ export function onMnutilsEntranceLongPress(sender: any): void {
   }
 }
 
+/** Clip the real controls against the same animated outline as the shell.
+ * Bounds offsets hold each control in window space while revealing both sides. */
+function revealReviewToolbarDrag(menu: QuickMenu, visible: ViewFrame, full: ViewFrame): void {
+  const drag = menu.reviewDrag!
+  drag.preview.frame = visible
+  drag.preview.layer.cornerRadius = Math.min(22, visible.width / 2, visible.height / 2)
+  // The preview owns the expanding outline. UIKit's independent frame/bounds
+  // interpolation on the real controls otherwise adds a second sideways flight.
+  const native = UIView as any
+  const canDisable = typeof native.areAnimationsEnabled === 'function' && typeof native.setAnimationsEnabled === 'function'
+  const enabled = canDisable ? native.areAnimationsEnabled() : undefined
+  try {
+    if (canDisable) native.setAnimationsEnabled(false)
+    setWindowFrame(menu.controls, visible)
+    menu.controls.bounds = { x: visible.x - full.x, y: visible.y - full.y, width: visible.width, height: visible.height }
+  } finally { if (canDisable) native.setAnimationsEnabled(enabled) }
+  menu.controls.layer.cornerRadius = drag.preview.layer.cornerRadius
+  menu.controls.layer.masksToBounds = true
+}
+
+function collapseReviewToolbarDrag(menu: QuickMenu): void {
+  const drag = menu.reviewDrag!
+  drag.transformed = true
+  drag.preview.hidden = false
+  drag.grip.hidden = false
+  menu.content.backgroundColor = UIColor.clearColor()
+  menu.content.layer.borderWidth = 0
+  ;(menu.content.layer as any).shadowOpacity = 0
+  menu.content.layer.masksToBounds = false
+  drag.revision++
+  const geometry = reviewToolbarDragGeometry(drag.point, windowSize(menu.window), drag.edge, drag.nearEdge)
+  drag.hovering = false
+  const old = menu.content.frame, next = geometry.container
+  // Retain the current window-space outline before moving its tracking parent.
+  for (const view of [drag.preview, drag.grip, menu.controls]) {
+    const f = view.frame
+    setWindowFrame(view, { ...f, x: f.x + old.x - next.x, y: f.y + old.y - next.y })
+  }
+  drag.full = { ...menu.expandedFrame, x: menu.expandedFrame.x - next.x, y: menu.expandedFrame.y - next.y }
+  setWindowFrame(menu.content, next)
+  const plugin = menu.owner.cardLinkReviewAnnotationButtons?.[0]
+  if (plugin) plugin.layer.opacity = 0
+  ;(drag.grip as any).alpha = 1
+  const from = { ...drag.preview.frame }, grip = { ...drag.grip.frame }, to = { x: 14, y: 14, width: 44, height: 44 }
+  drag.transition = animateReviewGeometry(menu, .34, progress => {
+    revealReviewToolbarDrag(menu, interpolateReviewFrame(from, to, progress), drag.full)
+    ;(menu.controls.layer as any).opacity = progress === 1 ? 0 : 1
+    drag.grip.frame = interpolateReviewFrame(grip, to, progress)
+  })
+}
+
+function expandReviewToolbarDrag(menu: QuickMenu, cancelled = false): void {
+  const drag = menu.reviewDrag, owner = menu.owner, current = owner.cardLinkReviewMode
+  if (!drag || !current || drag.hovering) return
+  drag.hoverTimer?.invalidate()
+  drag.hovering = true
+  const revision = ++drag.revision
+  const target = cancelled ? { frame: drag.homeCore, horizontal: drag.homeHorizontal }
+    : reviewToolbarDropFrame(drag.point, windowSize(menu.window), reviewToolbarCount(current), drag.edge)
+  menu.reviewCore = { ...target.frame }; menu.reviewHorizontal = target.horizontal
+  current.annotationHorizontal = target.horizontal
+  // Permit exactly one final layout, including the already-open classification.
+  const phase = drag.phase
+  drag.phase = 'settling'
+  owner.cardLinkReviewDetailKey = undefined
+  withoutReviewAnimations(() => owner.cardLinkReviewEntranceRender?.(menu.reviewControls))
+  drag.phase = phase
+  const root = menu.content.frame, end = menu.expandedFrame
+  const full = { x: end.x - root.x, y: end.y - root.y, width: end.width, height: end.height }
+  drag.full = full
+  const start = { ...drag.preview.frame }
+  revealReviewToolbarDrag(menu, start, full)
+  ;(menu.controls.layer as any).opacity = 1
+  const plugin = owner.cardLinkReviewAnnotationButtons?.[0]
+  if (plugin) plugin.layer.opacity = 0
+  const gripFrom = { ...drag.grip.frame }, core = menu.reviewCore!
+  const gripTo = { x: core.x + 4 - root.x, y: core.y + 4 - root.y, width: 44, height: 44 }
+  drag.transition = animateReviewGeometry(menu, .46, progress => {
+    revealReviewToolbarDrag(menu, interpolateReviewFrame(start, full, progress), full)
+    drag.grip.frame = interpolateReviewFrame(gripFrom, gripTo, progress)
+  }).then(() => {
+    if (menu.reviewDrag !== drag || drag.revision !== revision || !drag.hovering) return
+    withoutReviewAnimations(() => {
+      if (plugin) plugin.layer.opacity = 1
+      ;(drag.grip as any).alpha = 0
+    })
+  })
+}
+
+function beginReviewToolbarDrag(menu: QuickMenu, point: { x: number; y: number }): void {
+  menu.reviewAnimation?.finish()
+  if (menu.reviewDrag) {
+    menu.reviewDrag.hoverTimer?.invalidate()
+    ;(menu.reviewDrag.preview as any).removeFromSuperview()
+    ;(menu.reviewDrag.grip as any).removeFromSuperview()
+    menu.reviewDrag = undefined
+  }
+  menu.generation++
+  menu.reviewOpening = false
+  withoutReviewAnimations(() => {
+    settleQuickMenu(menu)
+    menu.controls.frame = { x: 0, y: 0, width: menu.expandedFrame.width, height: menu.expandedFrame.height }
+    menu.controls.bounds = { ...menu.controls.frame }
+    ;(menu.controls.layer as any).opacity = 1
+    const plugin = menu.owner.cardLinkReviewAnnotationButtons?.[0]
+    if (plugin) plugin.layer.opacity = 1
+  })
+  const geometry = reviewToolbarDragGeometry(point, windowSize(menu.window))
+  const original = { ...menu.content.frame }
+  const preview = new UIView({ x: 0, y: 0, width: original.width, height: original.height })
+  styleAnnotationReviewSurface(preview, 'shell')
+  ;(preview as any).userInteractionEnabled = false
+  const core = menu.reviewCore!
+  const grip = UIButton.buttonWithType(0)
+  grip.frame = { x: core.x + 4 - original.x, y: core.y + 4 - original.y, width: 44, height: 44 }
+  ;(grip as any).setImageForState(menu.owner.cardLinkReviewNativeImages?.plugin || UIImage.imageWithDataScale(NSData.dataWithContentsOfFile(`${menu.owner.mainPath}/logo.png`), 2), 0)
+  ;(grip as any).contentEdgeInsets = { top: 10, left: 10, bottom: 10, right: 10 }
+  ;(grip as any).userInteractionEnabled = false
+  menu.content.addSubview(preview)
+  ;(menu.content as any).bringSubviewToFront(menu.controls)
+  menu.content.addSubview(grip)
+  preview.hidden = true
+  grip.hidden = true
+  menu.reviewDrag = { point: geometry.point, displacement: { x: 0, y: 0 }, transformed: false, edge: geometry.edge, nearEdge: geometry.nearEdge, phase: 'tracking', preview, grip, generation: menu.generation, revision: 0, lastMoveAt: Date.now(), slowSamples: 0, full: original, homeCore: { ...core }, homeHorizontal: !!menu.reviewHorizontal }
+  ;(menu.controls as any).alpha = 1
+  ;(menu.controls.layer as any).removeAnimationForKey?.('opacity')
+}
+
+function scheduleReviewToolbarHover(menu: QuickMenu): void {
+  const drag = menu.reviewDrag
+  if (!drag || !drag.transformed || drag.phase !== 'tracking' || drag.hovering) return
+  drag.hoverTimer?.invalidate()
+  drag.hoverTimer = NSTimer.scheduledTimerWithTimeInterval(.09, false, () => {
+    if (!menu.open || menu.reviewDrag !== drag || drag.phase !== 'tracking' || menu.generation !== drag.generation) return
+    expandReviewToolbarDrag(menu)
+  })
+}
+
+function translateReviewToolbarDrag(menu: QuickMenu, delta: { x: number; y: number }): void {
+  const core = menu.reviewCore!, root = menu.content.frame
+  const next = clampReviewToolbarCore({ ...core, x: core.x + delta.x, y: core.y + delta.y }, windowSize(menu.window), !!menu.reviewHorizontal)
+  const dx = next.x - core.x, dy = next.y - core.y
+  setWindowFrame(menu.content, { ...root, x: root.x + dx, y: root.y + dy })
+  menu.reviewCore = next
+  menu.expandedFrame = { ...menu.expandedFrame, x: menu.expandedFrame.x + dx, y: menu.expandedFrame.y + dy }
+  menu.geometry = { ...menu.geometry, frame: menu.expandedFrame }
+  setWindowFrame(menu.ball.button, { ...menu.ball.frame, x: next.x + 12, y: next.y + 12 })
+  menu.collapsedFrame = { ...menu.ball.frame }
+}
+
+function trackReviewToolbarDrag(menu: QuickMenu, delta: { x: number; y: number }): void {
+  const drag = menu.reviewDrag
+  if (!drag || drag.phase !== 'tracking' || (!delta.x && !delta.y)) return
+  const now = Date.now(), speed = Math.hypot(delta.x, delta.y) / Math.max(8, now - drag.lastMoveAt)
+  drag.lastMoveAt = now
+  drag.displacement.x += delta.x
+  drag.displacement.y += delta.y
+  const travelled = Math.hypot(drag.displacement.x, drag.displacement.y) >= REVIEW_TOOLBAR_DRAG_MIN_DISTANCE
+  const next = reviewToolbarDragGeometry({ x: drag.point.x + delta.x, y: drag.point.y + delta.y }, windowSize(menu.window), drag.edge, drag.nearEdge)
+  drag.point = next.point; drag.edge = next.edge; drag.nearEdge = next.nearEdge
+  drag.slowSamples = speed < .16 ? drag.slowSamples + 1 : 0
+  if (!drag.transformed) {
+    translateReviewToolbarDrag(menu, delta)
+    if (!travelled || speed <= .32) return
+    collapseReviewToolbarDrag(menu)
+  } else if (drag.hovering && travelled && (speed > .32 || next.horizontal !== menu.reviewHorizontal)) collapseReviewToolbarDrag(menu)
+  if (drag.hovering) {
+    const target = reviewToolbarDropFrame(next.point, windowSize(menu.window), reviewToolbarCount(menu.owner.cardLinkReviewMode || {}), drag.edge)
+    const dx = target.frame.x - menu.reviewCore!.x, dy = target.frame.y - menu.reviewCore!.y
+    const root = menu.content.frame
+    setWindowFrame(menu.content, { ...root, x: root.x + dx, y: root.y + dy })
+    menu.reviewCore = target.frame
+    menu.expandedFrame = { ...menu.expandedFrame, x: menu.expandedFrame.x + dx, y: menu.expandedFrame.y + dy }
+    menu.geometry = { ...menu.geometry, frame: menu.expandedFrame }
+    return
+  }
+  setWindowFrame(menu.content, next.container)
+  if (drag.slowSamples >= 2) expandReviewToolbarDrag(menu)
+  else scheduleReviewToolbarHover(menu)
+}
+
+function finishReviewToolbarDrag(menu: QuickMenu, cancelled: boolean): void {
+  const drag = menu.reviewDrag, owner = menu.owner
+  if (!drag || drag.phase !== 'tracking') return
+  drag.hoverTimer?.invalidate()
+  if (!drag.transformed) {
+    if (cancelled) translateReviewToolbarDrag(menu, { x: drag.homeCore.x - menu.reviewCore!.x, y: drag.homeCore.y - menu.reviewCore!.y })
+  } else {
+    if (cancelled && drag.hovering) drag.hovering = false
+    if (!drag.hovering) expandReviewToolbarDrag(menu, cancelled)
+  }
+  drag.phase = 'settling'
+  // If a slowdown already revealed controls, release only completes the handoff.
+  void Promise.resolve(drag.transition).then(() => {
+    if (!menu.open || menu.generation !== drag.generation || menu.reviewDrag !== drag) return
+    // UIKit can retain presentation animations after the model outline reaches
+    // its target. Swap the shell and reset bounds atomically, with no inherited
+    // animation on the controls that would draw a second offset presentation.
+    withoutReviewAnimations(() => {
+      for (const view of [menu.content, menu.controls, menu.reviewControls, owner.cardLinkReviewToolbar, ...(owner.cardLinkReviewAnnotationButtons || [])]) {
+        for (const key of ['position', 'bounds']) (view?.layer as any)?.removeAnimationForKey?.(key)
+      }
+      menu.reviewDrag = undefined
+      settleQuickMenu(menu)
+      menu.controls.bounds = { x: 0, y: 0, width: menu.expandedFrame.width, height: menu.expandedFrame.height }
+      menu.controls.layer.masksToBounds = true
+      ;(menu.controls.layer as any).opacity = 1
+      const plugin = owner.cardLinkReviewAnnotationButtons?.[0]
+      if (plugin) plugin.layer.opacity = 1
+      ;(drag.preview as any).removeFromSuperview()
+      ;(drag.grip as any).removeFromSuperview()
+      const core = menu.reviewCore!
+      setWindowFrame(menu.ball.button, { ...menu.ball.frame, x: core.x + 12, y: core.y + 12 })
+    })
+    const dock = nearestDock(menu.ball, menu.window)
+    owner.mnutilsEntranceDock = dock
+    rememberDock(dock)
+  })
+}
+
 export function onMnutilsEntrancePan(sender: any): void {
   const button = self.mnutilsEntranceBall
   if (!button) return
-  try {
-    const state = Number(sender?.state)
-    const window = button.button?.superview ?? button.window ?? self.window ?? MNUtil.currentWindow
-    if (!window) return
-    const location = sender.locationInView?.(window)
-    if (!location) return
-    const menu = self.mnutilsQuickMenu as QuickMenu | undefined
+  const window = button.button?.superview ?? button.window ?? self.window ?? MNUtil.currentWindow
+  if (!window) return
+  const menu = self.mnutilsQuickMenu as QuickMenu | undefined
+  const state = Number(sender.state)
+  if (menu?.open && menu.reviewControls) {
     if (state === 1) {
-      if (menu?.open) {
-        menu.generation++
-        settleQuickMenu(menu)
-        self.mnutilsEntranceSuppressClick = Date.now()
-        self.mnutilsEntranceMenuDragging = true
-      }
-      const frame = button.frame
       self.mnutilsEntranceDragging = true
-      self.mnutilsEntranceDragOffset = {
-        x: Number(location.x) - Number(frame.x),
-        y: Number(location.y) - Number(frame.y)
-      }
-      return
+      self.mnutilsEntranceSuppressClick = Date.now()
+      const frame = menu.reviewCore || menu.expandedFrame
+      beginReviewToolbarDrag(menu, sender.locationInView?.(window) ?? { x: frame.x + 22, y: frame.y + 22 })
     }
-    const offset = self.mnutilsEntranceDragOffset
-    if (!offset) return
-    button.frame = {
-      x: Number(location.x) - Number(offset.x),
-      y: Number(location.y) - Number(offset.y),
-      width: ENTRANCE_SIZE,
-      height: ENTRANCE_SIZE
-    }
-    clampEntranceFrame(button)
-    if (menu?.open) {
-      menu.collapsedFrame = { ...button.frame }
-      menu.geometry = geometryFor(menu.collapsedFrame, window, menu.desiredWidth, menu.desiredHeight)
-      menu.expandedFrame = menu.geometry.frame
-      layoutQuickMenu(menu, menu.geometry)
-    }
-    if (state === 3 || state === 4 || state === 5) {
+    const delta = sender.translationInView(window)
+    sender.setTranslationInView({ x: 0, y: 0 }, window)
+    if (state !== 1) trackReviewToolbarDrag(menu, delta)
+    if ([3, 4, 5].includes(state)) {
       self.mnutilsEntranceDragging = false
       self.mnutilsEntranceMenuDragging = false
-      self.mnutilsEntranceDragOffset = undefined
-      const dock = nearestDock(button, window)
-      self.mnutilsEntranceDock = dock
-      rememberDock(dock)
-      if (menu?.open) {
-        const target = dockedFrame(window, dock)
-        const geometry = geometryFor(target, window, menu.desiredWidth, menu.desiredHeight)
-        menu.collapsedFrame = target
-        menu.geometry = geometry
-        menu.expandedFrame = geometry.frame
-        void animateQuickMenuUpdate(() => {
-          button.frame = target
-          layoutQuickMenu(menu, geometry)
-        }, 0.2)
-      } else applyDock(button, window, dock, true)
+      self.mnutilsEntranceSuppressClick = Date.now()
+      finishReviewToolbarDrag(menu, state !== 3)
     }
-  } catch (error) {
+    return
+  }
+  if (state === 1) {
+    self.mnutilsEntranceDragging = true
+    self.mnutilsEntranceSuppressClick = Date.now()
+    if (menu?.open) { menu.generation++; settleQuickMenu(menu) }
+  }
+  const translation = sender.translationInView(window)
+  sender.setTranslationInView({ x: 0, y: 0 }, window)
+  if (menu?.open) {
+    const frame = menu.content.frame, bounds = windowSize(window)
+    const nextCore = menu.reviewCore ? clampReviewToolbarCore({ ...menu.reviewCore,
+      x: menu.reviewCore.x + translation.x, y: menu.reviewCore.y + translation.y }, bounds, !!menu.owner.cardLinkReviewMode?.annotationHorizontal) : undefined
+    const x = nextCore ? frame.x + nextCore.x - menu.reviewCore!.x : Math.max(0, Math.min(frame.x + translation.x, bounds.width - frame.width))
+    const y = nextCore ? frame.y + nextCore.y - menu.reviewCore!.y : Math.max(0, Math.min(frame.y + translation.y, bounds.height - frame.height))
+    const dx = x - frame.x, dy = y - frame.y
+    // Moving the native parent moves every child. No per-move render or layout.
+    setWindowFrame(menu.content, { ...frame, x, y })
+    if (menu.reviewCore) menu.reviewCore = { ...menu.reviewCore, x: menu.reviewCore.x + dx, y: menu.reviewCore.y + dy }
+    menu.expandedFrame = { ...menu.expandedFrame, x, y }
+    menu.geometry = { ...menu.geometry, frame: menu.expandedFrame }
+    setWindowFrame(button.button, { ...button.frame, x: button.frame.x + dx, y: button.frame.y + dy })
+    menu.collapsedFrame = { ...button.frame }
+  } else {
+    const bounds = windowSize(window), frame = button.frame
+    setWindowFrame(button.button, { ...frame,
+      x: Math.min(Math.max(frame.x + translation.x, EDGE_MARGIN), Math.max(EDGE_MARGIN, bounds.width - ENTRANCE_SIZE - EDGE_MARGIN)),
+      y: Math.min(Math.max(frame.y + translation.y, EDGE_MARGIN), Math.max(EDGE_MARGIN, bounds.height - ENTRANCE_SIZE - EDGE_MARGIN)) })
+  }
+  self.mnutilsEntranceNativeFrame = { ...button.frame }
+  if ([3, 4, 5].includes(state)) {
     self.mnutilsEntranceDragging = false
     self.mnutilsEntranceMenuDragging = false
-    self.mnutilsEntranceDragOffset = undefined
-    try { console.log("MNButton 第二入口拖动失败:", String(error)) } catch { /* optional */ }
+    if (!menu?.reviewControls) {
+      const dock = nearestDock(button, window)
+      self.mnutilsEntranceDock = dock
+      self.mnutilsEntranceNativeFrame = undefined
+      rememberDock(dock)
+      const target = dockedFrame(window, dock)
+      // Dragging only translates native views; settle and lay out once at release.
+      self.mnutilsEntranceAnimating = true
+      void animateQuickMenuUpdate(() => {
+        button.frame = target
+        if (menu?.open) {
+          menu.collapsedFrame = { ...target }
+          menu.geometry = geometryFor(target, window, menu.desiredWidth, menu.desiredHeight, menu.owner)
+          menu.expandedFrame = menu.geometry.frame
+          layoutQuickMenu(menu, menu.geometry)
+        }
+      }, 0.24).finally(() => { self.mnutilsEntranceAnimating = false })
+    }
   }
 }

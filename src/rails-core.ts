@@ -1,3 +1,7 @@
+import { closeCardMistakePanel } from './card-mistake-panel'
+import { exportSceneTemplate, openTemplateConverter } from './template-export'
+import { createWindowSurface, setWindowFrame } from "./window-opacity"
+import { chooseErrorReason } from './error-reasons'
 import { delay, MN, NodeNote, select, showHUD } from "marginnote"
 import { clipperSnapshot, recordClipperTool, saveClipperSetting, saveClipperAnswerSetting, configureClipperTitleFormat } from "./question-clipper"
 import { openClipperQuickMenu, onClipperEnd, onClipperBindMother, onClipperResetQuestion, onClipperEditTitle } from "./mnutils-entrance"
@@ -7,6 +11,7 @@ import {
   updateManagedAnswerBinding,
   deleteManagedAnswerBinding,
   addManagedAnswerBindingColor,
+  addGlobalAnswerBindingColor,
   refreshManagedAnswerBinding,
   chooseManagedAnswerMindMap,
   chooseCurrentAnswerBinding,
@@ -35,6 +40,7 @@ import {
   onRefreshAnswerCard,
   onPanelCloseButtonSideChanged,
   onMistakeLinkToolbarClick,
+  onCardMistakePanelLevel, onCardMistakePanelReason, onCardMistakePanelSkip, onCardMistakePanelOutsideTap, onCardMistakePanelClose,
   onMistakeToolbarClick,
   onMistakeLevel0Click,
   onMistakeLevel1Click,
@@ -60,6 +66,8 @@ import {
   saveRegexMatchingRules,
   setScopedBindingEnabled,
   startReviewMode,
+  onReviewModeWrite,
+  onReviewModeAnswer,
   onReviewModeIndex,
   onReviewModePrevious,
   onReviewModeNext,
@@ -67,9 +75,8 @@ import {
   onReviewModeControlPress,
   onReviewModeControlRelease,
   onReviewModeControlHover,
-  onReviewModePan,
   onReviewModeResult,
-  onReviewModeExpand, onReviewModeBranch, onReviewModeQueuePick, onReviewModeToolbarResult,
+  onReviewModeHistory, onReviewModeMark, onReviewModeExpand, onReviewModeBranch, onReviewModeQueuePick, onReviewModeToolbarResult, onReviewModeReason,
   unbindCurrent
 } from "./plugin"
 import {
@@ -79,7 +86,6 @@ import {
   getManualTodayIds,
   changeMistakeLevelById,
   continueMistakeWorkbenchTransfer,
-  legacyMistakeTagMigrationCompleted,
   markQuestionAsMistake,
   mistakeDetailById,
   mistakeHandwritingTarget,
@@ -91,7 +97,6 @@ import {
   removeMistakesByIds,
   removeMistakeById,
   repairAndOrganizeMistakes,
-  rememberLegacyMistakeTagMigration,
   reviewMistakeById,
   reviewMistakesByIds,
   resumeMistakeReviewById,
@@ -124,7 +129,19 @@ function sceneFeatures(owner?: any): { scenePanel: boolean; handwriting: boolean
   return { scenePanel: enabled, handwriting: enabled }
 }
 
+async function chooseReviewWritingMode(owner: any): Promise<"mindmap" | "annotation" | undefined> {
+  if (!sceneFeatures(owner).handwriting) await (globalThis as any).__MNAM_SCENE_WORKBENCH_GLOBAL__?.ensureReady?.(owner)
+  if (!sceneFeatures(owner).handwriting) return "mindmap"
+  const choice = await select(["脑图书写模式", "批注书写模式"], "复习方式", "批注书写需要模板配置", true)
+  return choice.index === 0 ? "mindmap" : choice.index === 1 ? "annotation" : undefined
+}
+
 async function bridgeInternal(command: string, payload: any, owner?: any): Promise<any> {
+  if (command === "chooseAnswerPreviewMode") {
+    if (!loadMatcherSettings().debugModeEnabled) throw new CardLinkError("debugModeRequired")
+    saveMatcherSettings({ debugAnswerPreviewMode: "native" })
+    return { debugAnswerPreviewMode: "native" }
+  }
   if (command === "setReviewAlgorithm") {
     if (!loadMatcherSettings().debugModeEnabled) throw new CardLinkError("debugModeRequired")
     if (!["fixed", "fsrs"].includes(payload?.algorithm)) throw new Error("无效的复习算法")
@@ -146,7 +163,10 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
     const items = snapshot.records.filter(item => ids.has(item.recordId) && !item.progress.paused).map(item => ({ ...item,
       level: item.progress.legacyLevel, reviewCount: item.historyCount, fsrsProgress: item.progress,
       lastReviewedAt: item.progress.card?.last_review }))
-    return startReviewMode(items, owner ?? self, "fsrs")
+    const writingMode = await chooseReviewWritingMode(owner ?? self)
+    if (!writingMode) return { started: false, count: 0 }
+    const byId = new Map(items.map(item => [item.recordId, item]))
+    return startReviewMode(writingMode !== "mindmap" ? [...ids].map(id => byId.get(id as string)).filter(Boolean) : items, owner ?? self, "fsrs", writingMode)
   }
   if (command === "cardMenuCommand") {
     if (!(globalThis as any).__MNAM_SCENE_WORKBENCH_GLOBAL__?.enabled(owner ?? self)) throw new Error("卡片菜单命令要求软件450及以上且处于场景页面")
@@ -177,7 +197,7 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
       reviewAlgorithm: loadMatcherSettings().debugModeEnabled && loadMatcherSettings().debugReviewAlgorithm === "fsrs" ? "fsrs" : "fixed",
       features: sceneFeatures(owner),
       locateHint: consumePendingLocateHint(),
-      mistakeRefreshConsentRequired: !legacyMistakeTagMigrationCompleted(),
+      mistakeRefreshConsentRequired: false,
       mistakes: beginMistakeWorkbenchTransfer(),
       manualTodayIds: getManualTodayIds(),
       matching: answerMatchingSettingsData(),
@@ -194,9 +214,8 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
   }
   if (command === "answer") return answerWorkbenchDataWithIndexRecovery()
   if (command === "acceptMistakeRefreshConsent") {
-    await repairAndOrganizeMistakes()
-    rememberLegacyMistakeTagMigration()
-    return { accepted: true }
+    // Retired first-install migration command: stale panels must not rewrite tags.
+    return { accepted: false, disabled: true }
   }
   if (command === "mistakes") return beginMistakeWorkbenchTransfer()
   if (command === "mistakesRevision") return { revision: mistakeWorkbenchRevision() }
@@ -209,7 +228,11 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
     return onMistakeToolbarClick()
   }
   if (command === "findCurrentAnswer") return onAnswerToolbarClick()
-  if (command === "startReviewMode") return startReviewMode(payload?.records, owner ?? self)
+  if (command === "startReviewMode") {
+    const writingMode = await chooseReviewWritingMode(owner ?? self)
+    return writingMode ? startReviewMode(payload?.records, owner ?? self, "fixed", writingMode) : { started: false, count: 0 }
+  }
+  if (command === "openTemplateConverter") return openTemplateConverter()
   if (command === "openPluginGuide") return openPluginGuide()
   if (command === "bindAnswerNotebook") return bindAnswerNotebook()
   if (command === "chooseCurrentAnswerBinding") return chooseCurrentAnswerBinding()
@@ -224,6 +247,7 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
   }
   if (command === "updateManagedAnswerBinding") return updateManagedAnswerBinding(String(payload?.key ?? ""), payload?.changes ?? {})
   if (command === "deleteManagedAnswerBinding") return deleteManagedAnswerBinding(String(payload?.key ?? ""))
+  if (command === "addGlobalAnswerBindingColor") return addGlobalAnswerBindingColor()
   if (command === "addManagedAnswerBindingColor") return addManagedAnswerBindingColor(String(payload?.key ?? ""))
   if (command === "refreshManagedAnswerBinding") return refreshManagedAnswerBinding(String(payload?.key ?? ""))
   if (command === "chooseManagedAnswerMindMap") return chooseManagedAnswerMindMap(String(payload?.key ?? ""), payload?.activateMixed === true)
@@ -237,7 +261,9 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
     else if (key === "answerMaskStyle" && ["dark", "light"].includes(payload?.value)) saveMatcherSettings({ answerMaskStyle: payload.value })
     else if (key === "answerMaskColor" && /^#[0-9a-f]{6}$/i.test(String(payload?.value ?? ""))) saveMatcherSettings({ answerMaskColor: payload.value, answerMaskImage: "" })
     else if (key === "answerMaskImage" && (payload?.value === "" || (typeof payload?.value === "string" && /^data:image\/(?:png|jpeg|webp);base64,/.test(payload.value) && payload.value.length <= 400000))) saveMatcherSettings({ answerMaskImage: payload.value })
+    else if (key === "globalQuestionColors" && Array.isArray(payload?.value) && payload.value.every((v: unknown) => Number.isInteger(v) && Number(v) >= 0 && Number(v) < 16)) saveMatcherSettings({ globalQuestionColors: payload.value })
     else if (key === "autoCollapseComments") saveMatcherSettings({ autoCollapseComments: payload?.value === true })
+    else if (key === "reviewCompletionConfetti" && typeof payload?.value === "boolean") saveMatcherSettings({ reviewCompletionConfetti: payload.value })
     else if (key === "reviewExpandedCommentCount" && Number.isInteger(payload?.value) && payload.value >= 0 && payload.value <= 10) saveMatcherSettings({ reviewExpandedCommentCount: payload.value })
     else throw new Error("无效的个性设置")
     return answerMatchingSettingsData()
@@ -312,9 +338,15 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
     if (mode !== current) saveMatcherSettings({ sourceLocateMode: mode })
     return { mode }
   }
-  if (command === "reviewMistake") return reviewMistakeById(String(payload?.recordId ?? ""), Number(payload?.level) as any)
-  if (command === "changeMistakeLevel") return changeMistakeLevelById(String(payload?.recordId ?? ""), Number(payload?.level) as any)
-  if (command === "reviewMistakes" || command === "changeMistakeLevels") return reviewMistakesByIds(payload?.recordIds, Number(payload?.level) as any)
+  if (['reviewMistake', 'changeMistakeLevel', 'reviewMistakes', 'changeMistakeLevels'].includes(command)) {
+    const level = Number(payload?.level)
+    if (![0, 1, 2].includes(level)) throw new Error('无效的反馈等级')
+    if (command === 'changeMistakeLevel') return changeMistakeLevelById(String(payload?.recordId ?? ''), level as any, undefined, true)
+    const selection = await chooseErrorReason(level)
+    if (selection.cancelled) return null
+    if (command === 'reviewMistake') return reviewMistakeById(String(payload?.recordId ?? ''), level as any, selection.reason)
+    return reviewMistakesByIds(payload?.recordIds, level as any, selection.reason)
+  }
   if (command === "resumeMistakeReview") return resumeMistakeReviewById(String(payload?.recordId ?? ""))
   if (command === "saveMistakeReviewCurves") return saveMistakeReviewCurves(payload?.curves)
   if (command === "setMistakeCategory") {
@@ -333,6 +365,10 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
   if (command === "exportMistakes") return exportMistakes(payload || { format: "md" })
   if (command === "previewMistakeExport") return previewMistakeExport(payload || { format: "pdf" })
   if (command === "cancelMistakeExportPreparation") return cancelMistakeExportPreparation()
+  if (command === "exportSceneTemplate") {
+    if (!loadMatcherSettings().sceneWorkbenchEnabled) throw new Error("请先开启场景功能")
+    return exportSceneTemplate(payload)
+  }
   if (command === "exportRuntimeLog") return exportNavigationRuntimeLog()
   if (command === "testTelemetryConnectivity") {
     if (!loadMatcherSettings().debugModeEnabled) throw new CardLinkError("debugModeRequired")
@@ -392,6 +428,9 @@ async function bridge(command: string, payload: any, owner?: any): Promise<any> 
 }
 
 ;(globalThis as any).__MN_ANSWER_CORE_GLOBAL__ = {
+  createWindowSurface,
+  setWindowFrame,
+  closeCardMistakePanel,
   configureUpdatePath,
   bridge,
   eventObservers,
@@ -407,7 +446,8 @@ async function bridge(command: string, payload: any, owner?: any): Promise<any> 
     onAnswerToolbarSingleTap,
     onAnswerToolbarLongPress,
     onChooseAnswerCandidate,
-    onMistakeToolbarClick,
+    onCardMistakePanelLevel, onCardMistakePanelReason, onCardMistakePanelSkip, onCardMistakePanelOutsideTap, onCardMistakePanelClose,
+  onMistakeToolbarClick,
     onMistakeLevel0Click,
     onMistakeLevel1Click,
     onMistakeLevel2Click,
@@ -438,14 +478,15 @@ async function bridge(command: string, payload: any, owner?: any): Promise<any> 
     onMnutilsQuickMenuStart,
   onMnutilsQuickMenuModePress,
     onReviewModeIndex,
+    onReviewModeWrite,
+    onReviewModeAnswer,
     onReviewModePrevious,
     onReviewModeNext,
     onReviewModeExit,
     onReviewModeControlPress,
     onReviewModeControlRelease,
     onReviewModeControlHover,
-    onReviewModePan,
-    onReviewModeResult,
-  onReviewModeExpand, onReviewModeBranch, onReviewModeQueuePick, onReviewModeToolbarResult,
+      onReviewModeResult,
+  onReviewModeHistory, onReviewModeMark, onReviewModeExpand, onReviewModeBranch, onReviewModeQueuePick, onReviewModeToolbarResult, onReviewModeReason,
   }
 }

@@ -1,78 +1,93 @@
+import { windowOpacityFixture } from "./window-opacity-fixture"
 import assert from "node:assert/strict"
 import test from "node:test"
 import { readFileSync } from "node:fs"
 import { runInNewContext } from "node:vm"
 import { build } from "esbuild"
 import { mountCardPreview } from "../src/card-preview"
-import { wireFramePinchZoom } from "../src/pinch-zoom"
 import { pkDrawingRendererScript } from "../src/pkdrawing-renderer"
 import { transpileModule } from "typescript"
 import { collectQuestionTree, mindMapScopeOf, questionIdsInTree, renderedMindMapNoteIds } from "../src/quick-menu-selection"
+import { reviewToolbarHorizontal } from "../src/review-toolbar-layout"
+import * as reviewToolbarLayoutApi from "../src/review-toolbar-layout"
 import { quickMenuGeometry } from "../src/quick-menu-geometry"
 import * as bindings from "../src/binding"
 
-function surface() {
-  const events = new Map<string, Set<any>>()
-  const target = {
-    addEventListener(name: string, handler: any) { if (!events.has(name)) events.set(name, new Set()); events.get(name)!.add(handler) },
-    removeEventListener(name: string, handler: any) { events.get(name)?.delete(handler) }
+function librarySurface(handwritingEnabled = false) {
+  function target(extra: any = {}) {
+    const events = new Map<string, Set<any>>()
+    return { ...extra, events,
+      addEventListener(name: string, fn: any) { if (!events.has(name)) events.set(name, new Set()); events.get(name)!.add(fn) },
+      removeEventListener(name: string, fn: any) { events.get(name)?.delete(fn) },
+      emit(name: string, event: any = {}) { events.get(name)?.forEach(fn => fn({ type: name, ...event })) }
+    }
   }
-  const card = { style: {} as any, scrollHeight: 800 }
-  const root = { style: {} as any, clientWidth: 400, dataset: {} as any }
-  const doc = { ...target, body: { style: {} as any }, documentElement: root, querySelector: () => card }
-  let scrollCalls = 0
-  const frames = new Map<number, any>()
-  let frameId = 0
-  const win: any = { ...target, document: doc, innerWidth: 400, innerHeight: 500, scrollX: 0, scrollY: 0, setTimeout, clearTimeout,
-    requestAnimationFrame(callback: any) { frames.set(++frameId, callback); return frameId },
-    cancelAnimationFrame(id: number) { frames.delete(id) },
-    scrollTo(x: number, y: number) { scrollCalls++; win.scrollX = x; win.scrollY = y } }
-  const draw = () => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(callback => callback()) }
-  return { win, card, root, events, draw, frames, scrollCalls: () => scrollCalls }
+  const card = target({ style: {}, scrollHeight: 1800, offsetWidth: 400, offsetHeight: 1800 })
+  const root: any = { style: {}, dataset: {}, clientWidth: 400, clientHeight: 500 }
+  const button: any = { setAttribute() {}, remove() { this.removed = true } }
+  const handwriting: any = { hidden: true, before() {} }
+  const meta: any = { setAttribute(_key: string, value: string) { this.content = value } }
+  const doc = target({ body: target({ style: {} }), documentElement: root, createElement: () => button, querySelectorAll: () => [],
+    querySelector: (selector: string) => selector === '.card' ? card : selector.startsWith('meta') ? meta : handwritingEnabled ? handwriting : null })
+  const win = target({ document: doc, innerWidth: 400, innerHeight: 500, setTimeout: () => 1, clearTimeout() {}, requestAnimationFrame: () => 1, cancelAnimationFrame() {} })
+  let scale = 1, pan = { x: 0, y: 0 }, options: any, zooms = 0, dead = false
+  const moves: any[] = [], downs: any[] = [], ups: any[] = []
+  const engine = { eventNames: { down: 'pointerdown', move: 'pointermove', up: 'pointerup pointercancel' },
+    getScale: () => scale, getPan: () => pan,
+    pan(x: number, y: number) { pan = { x, y } },
+    zoomToPoint(value: number) { scale = value; zooms++; card.emit('panzoomzoom') },
+    handleDown(event: any) { downs.push(event) }, handleMove(event: any) { moves.push(event) }, handleUp(event: any) { ups.push(event) },
+    destroy() { dead = true }, zoomWithWheel() {}
+  }
+  const Panzoom: any = (_card: any, settings: any) => { options = settings; return engine }
+  Panzoom.defaultOptions = { setTransform(_card: any, state: any) { card.style.transform = `scale(${state.scale}) translate(${state.x}px, ${state.y}px)` } }
+  return { win, root, card, doc, meta, button, handwriting, Panzoom, engine, moves, downs, ups, options: () => options, zooms: () => zooms, dead: () => dead }
 }
 
-test("缩小后短卡水平垂直居中，长卡仅水平居中且保留滚动高度", () => {
-  const { win, card } = surface()
-  card.scrollHeight = 500
-  const controller = mountCardPreview(win, wireFramePinchZoom)
-  controller.setScale(.6)
-  assert.equal(card.style.left, "80px")
-  assert.equal(card.style.top, "100px")
-  assert.equal(win.document.body.style.width, "400px")
-  assert.equal(win.document.body.style.height, "500px")
-  card.scrollHeight = 1000
-  controller.setScale(.7)
-  assert.equal(card.style.left, "60px")
-  assert.equal(card.style.top, "0px")
-  assert.equal(win.document.body.style.height, "700px")
+test("预览由原库变换正文，百分比回写不重复缩放，范围与边界生效", () => {
+  const s = librarySurface(), controller = mountCardPreview(s.win, s.Panzoom)
+  assert.equal(mountCardPreview(s.win, s.Panzoom), controller)
+  assert.equal(s.root.style.overflow, 'hidden')
+  assert.equal(s.root.style.touchAction, 'none')
+  assert.match(s.meta.content, /user-scalable=no/)
+  assert.equal(s.options().step, .75)
+  const changes: number[] = []
+  controller.subscribe((value: number) => { changes.push(value); controller.setScale(Math.round(value * 100) / 100) })
+  controller.setScale(1.754)
+  assert.equal(s.zooms(), 1)
+  assert.equal(changes[changes.length - 1], 1.754)
+  assert.match(s.card.style.transform, /scale\(1.754\)/)
+  assert.equal(s.card.style.zoom, undefined)
+  controller.setScale(8); assert.equal(controller.getScale(), 3)
+  controller.setScale(.1); assert.equal(controller.getScale(), .6)
+  s.engine.pan(10000, -10000); s.options().setTransform()
+  assert.ok(s.engine.getPan().x <= 200)
+  assert.ok(s.engine.getPan().y > -10000)
+  assert.equal(controller.naturalHeight(), 1800)
+  controller.destroy(); assert.equal(s.dead(), true); assert.equal(s.win.__mnCardPreview, undefined)
+  for (const target of [s.win, s.doc, s.doc.body, s.card]) for (const handlers of target.events.values()) assert.equal(handlers.size, 0)
+})
+
+test("库输入适配只转交已开始指针，笔独占且不接收悬停或手掌结束", () => {
+  const s = librarySurface(), controller = mountCardPreview(s.win, s.Panzoom)
+  const event = (pointerId: number, pointerType = 'touch') => ({ pointerId, pointerType, buttons: 1, pressure: .5 })
+  s.doc.emit('pointermove', event(9, 'pen')); assert.equal(s.moves.length, 0)
+  s.doc.body.emit('pointerdown', event(1)); s.doc.body.emit('pointerdown', event(9, 'pen'))
+  assert.equal(s.ups[0].pointerId, 1)
+  s.doc.body.emit('pointerdown', event(2)); s.doc.emit('pointermove', event(2)); s.doc.emit('pointerup', event(2))
+  s.doc.emit('pointermove', event(9, 'pen')); assert.equal(s.moves.length, 1)
+  s.doc.emit('pointermove', { ...event(9, 'pen'), buttons: 0, pressure: 0 })
+  s.doc.emit('pointermove', event(9, 'pen')); assert.equal(s.moves.length, 1)
   controller.destroy()
 })
 
-test("预览空白处双击切换绑定手写，单指拖动和双指缩放不触发切换", () => {
-  const { win, card, events } = surface()
-  const handwriting = { hidden: true }
-  win.document.querySelector = (selector: string) => selector === ".card" ? card : handwriting
-  const controller = mountCardPreview(win, wireFramePinchZoom)
-  const fire = (name: string, touches: any[] = []) => events.get(name)?.forEach(handler => handler({ touches, preventDefault() {} }))
-  fire("dblclick")
-  assert.equal(handwriting.hidden, false)
-  fire("dblclick")
-  assert.equal(handwriting.hidden, true)
-  fire("touchstart", [{ clientX: 10, clientY: 10 }])
-  fire("touchmove", [{ clientX: 10, clientY: 80 }])
-  fire("touchend")
-  assert.equal(handwriting.hidden, true)
-  for (let i = 0; i < 2; i++) {
-    fire("touchstart", [{ clientX: 10, clientY: 10 }])
-    fire("touchend")
-  }
-  assert.equal(handwriting.hidden, false)
-  fire("dblclick")
-  assert.equal(handwriting.hidden, false, "忽略双击触摸后的合成鼠标事件")
-  controller.destroy()
-  assert.equal(events.get("dblclick")?.size, 0)
+test("手写显式按钮保持可用且销毁移除", () => {
+  const s = librarySurface(true), controller = mountCardPreview(s.win, s.Panzoom)
+  assert.equal(s.button.textContent, '显示脑图手写')
+  s.button.onclick(); assert.equal(s.handwriting.hidden, false)
+  s.button.onclick(); assert.equal(s.handwriting.hidden, true)
+  controller.destroy(); assert.equal(s.button.removed, true)
 })
-
 test("图片笔迹叠加使用底图坐标，笔迹边界不能改变画布比例", () => {
   const transforms: any[] = []
   const img = { complete: true, naturalWidth: 400, naturalHeight: 200 }
@@ -90,99 +105,18 @@ test("图片笔迹叠加使用底图坐标，笔迹边界不能改变画布比�
   assert.deepEqual(transforms, [[2, 2]])
 })
 
-test("HTML与iframe重复接入时只安装一个预览控制器，跨100%保持变换坐标系，清理释放手势", () => {
-  const { win, card, events } = surface()
-  const controller = mountCardPreview(win, wireFramePinchZoom)
-  assert.equal(mountCardPreview(win, wireFramePinchZoom), controller)
-  assert.equal(events.get("touchmove")?.size, 2)
-  assert.equal(card.style.transform, "scale(1)")
-  controller.setScale(1.5)
-  assert.equal(card.style.transform, "scale(1.5)")
-  assert.equal(win.document.body.style.width, "600px")
-  assert.equal(win.document.body.style.height, "1200px")
-  controller.setScale(1)
-  assert.equal(card.style.transform, "scale(1)")
-  controller.destroy()
-  assert.equal(events.get("touchmove")?.size, 0)
-  assert.equal(win.__mnCardPreview, undefined)
-})
-
-test("相同比例回写不重复调整滚动锚点，避免工具条与手势双写抖动", () => {
-  const { win, scrollCalls } = surface()
-  const controller = mountCardPreview(win, wireFramePinchZoom)
-  controller.setScale(1.4, { x: 100, y: 100 })
-  assert.equal(scrollCalls(), 1)
-  controller.setScale(1.4)
-  assert.equal(scrollCalls(), 1)
-  controller.destroy()
-})
-
-test("单指上下移动不拦截，双指由唯一手势内核接管", () => {
-  const { win, events, draw } = surface()
-  mountCardPreview(win, wireFramePinchZoom)
-  let prevented = 0
-  const fire = (name: string, touches: any[]) => events.get(name)?.forEach(handler => handler({ touches, preventDefault: () => prevented++ }))
-  fire("touchstart", [{ clientX: 10, clientY: 10 }])
-  fire("touchmove", [{ clientX: 10, clientY: 100 }])
-  assert.equal(prevented, 0)
-  fire("touchstart", [{ clientX: 10, clientY: 10 }, { clientX: 20, clientY: 10 }])
-  fire("touchmove", [{ clientX: 10, clientY: 10 }, { clientX: 30, clientY: 10 }])
-  assert.equal(prevented, 2)
-  draw()
-  assert.equal(win.__mnCardPreview.getScale(), 2)
-  win.__mnCardPreview.destroy()
-})
-
-test("同帧缩放只提交最后位置，抬指刷新尾帧，销毁取消未绘制更新", () => {
-  const { win, events, draw, frames, scrollCalls } = surface()
-  const controller = mountCardPreview(win, wireFramePinchZoom)
-  const fire = (name: string, distance: number) => events.get(name)?.forEach(handler => handler({
-    touches: distance ? [{ clientX: 100, clientY: 100 }, { clientX: 100 + distance, clientY: 100 }] : [], preventDefault() {}
-  }))
-  fire("touchstart", 100)
-  fire("touchmove", 120); fire("touchmove", 150)
-  assert.equal(scrollCalls(), 0)
-  assert.equal(frames.size, 1)
-  draw()
-  assert.equal(controller.getScale(), 1.5)
-  assert.equal(scrollCalls(), 1)
-  fire("touchmove", 170); fire("touchend", 0)
-  assert.equal(controller.getScale(), 1.7)
-  assert.equal(frames.size, 0)
-  fire("touchstart", 100); fire("touchmove", 130)
-  controller.destroy(); draw()
-  assert.equal(controller.getScale(), 1.7)
-})
-
-test("双指等距移动也更新内容锚点", () => {
-  const { win, events, draw } = surface()
-  const controller = mountCardPreview(win, wireFramePinchZoom)
-  controller.setScale(2)
-  win.scrollX = 100; win.scrollY = 200
-  const fire = (name: string, x: number, y: number) => events.get(name)?.forEach(handler => handler({
-    touches: [{ clientX: x, clientY: y }, { clientX: x + 100, clientY: y }], preventDefault() {}
-  }))
-  fire("touchstart", 100, 100)
-  fire("touchmove", 120, 130); draw()
-  assert.equal(controller.getScale(), 2)
-  assert.equal(win.scrollX, 80); assert.equal(win.scrollY, 170)
-  controller.destroy()
-})
-
-test("原生打包后的预览脚本完全自包含且强制浅色", async () => {
-  const bundled = await build({ entryPoints: ["src/card-html.ts"], bundle: true, write: false, format: "iife", globalName: "renderer", minify: true, target: "safari13" })
-  const sandbox: any = { console }
-  runInNewContext(bundled.outputFiles[0].text, sandbox)
+test("HTML携带库预览运行时，场景页可延后挂载空文档", async () => {
+  const runtime = await build({ entryPoints: ["src/card-preview-webview.ts"], bundle: true, write: false, minify: true, format: "iife", target: "safari13" })
+  const script = runtime.outputFiles[0].text.trim()
+  assert.doesNotMatch(script, /<\/script/i)
+  const window: any = { document: { querySelector: () => null } }
+  runInNewContext(script, { window })
+  assert.equal(typeof window.__mnMountCardPreview, "function")
+  const renderer = await build({ entryPoints: ["src/card-html.ts"], bundle: true, write: false, format: "iife", globalName: "renderer", define: { __CARD_PREVIEW_SCRIPT__: JSON.stringify(script) } })
+  const sandbox: any = {}
+  runInNewContext(renderer.outputFiles[0].text, sandbox)
   const html = sandbox.renderer.renderCardHtml({ noteTitle: "测试", comments: [] }, "题目", () => null, () => null)
-  assert.match(html, /color-scheme:light/)
-  assert.doesNotMatch(html, /prefers-color-scheme:dark/)
-  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
-  const { win } = surface()
-  const previewScript = scripts.find(match => match[1].includes("__mnCardPreview"))
-  assert.ok(previewScript)
-  runInNewContext(previewScript[1], { window: win })
-  assert.equal(win.__mnCardPreview.getScale(), 1)
-  win.__mnCardPreview.destroy()
+  assert.ok(html.includes('<script id="cardlink-preview-runtime">' + script + "</script>"))
 })
 
 test("短笔迹不被拉满容器，DPR只影响位图清晰度不影响CSS比例", () => {
@@ -217,9 +151,12 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
   assert.equal(bottomEdge.frame.y + bottomEdge.frame.height, 762)
   class View {
     frame: any; layer: any = {}; children: any[] = []; superview: any; alpha = 1; enabled = true; imageView: any; backgroundColor: any; titleLabel: any = {}
-    get bounds() { return { x: 0, y: 0, width: this.frame?.width, height: this.frame?.height } }
+    storedBounds: any
+    get bounds() { return this.storedBounds || { x: 0, y: 0, width: this.frame?.width, height: this.frame?.height } }
+    set bounds(value: any) { this.storedBounds = value }
     constructor(frame?: any) { this.frame = frame }
     addSubview(view: any) { this.children.push(view); view.superview = this }
+    bringSubviewToFront(view: any) { const index = this.children.indexOf(view); if (index >= 0) this.children.push(...this.children.splice(index, 1)) }
     addGestureRecognizer() {}
     removeGestureRecognizer() {}
     removeFromSuperview() { this.superview?.children.splice(this.superview.children.indexOf(this), 1); this.superview = null }
@@ -249,6 +186,7 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
   let visible = false, shown = 0
   let startedSelection: string[] = []
   let startError = false
+  let practiceActive = false, practiceCurrentId: string | undefined
   let answerBinding: bindings.BindingTarget = { notebookId: "answers", designatedAnswer: "mindmap", questionColors: [1] }
   const startedModes: boolean[] = []
   const menuLogs: string[] = []
@@ -262,16 +200,33 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
     set alpha(value: number) { ball.alpha = value },
     set backgroundColor(value: any) { ball.backgroundColor = value }
   }
+  let globalColors: number[] = []
+  let writingChoice = 0
+  const writingModes: string[] = []
   const owner: any = { window, webController: {}, mnutilsEntranceBall: entrance }
   Object.defineProperty(owner, "isPluginEnabled", { get() { throw Error("不能访问宿主getter") } })
-  const color = { colorWithAlphaComponent() { return this } }
+  const color = { colorWithAlphaComponent(alpha: number) { return { ...this, alpha } } }
+  const preferences = new Map<string, string>()
+  const quickSurface: any = {}
+  let animationNow = Date.now()
   const sandbox: any = {
     self: owner, exports: {}, console,
+    Date: { now: () => animationNow },
+    NSTimer: { scheduledTimerWithTimeInterval(_seconds: number, _repeat: boolean, callback: () => void) {
+      const timer = { active: true, invalidate() { this.active = false } }
+      setImmediate(() => { if (timer.active) { animationNow += 1000; callback() } })
+      return timer
+    } },
+    JSB: { defineClass: (_declaration: string, methods: any) => ({ new: () => ({ ...methods }) }) },
     MNUtil: { currentWindow: window, animate: (update: any) => { update(); return Promise.resolve() } },
-    NSUserDefaults: { standardUserDefaults: () => ({ objectForKey() {}, setObjectForKey() {}, synchronize() {} }) },
-    UIView: View, UIScrollView: View, UILabel: Label, UIWebView: class extends View { scrollView = new View() }, UITapGestureRecognizer: class { cancelsTouchesInView = true }, UILongPressGestureRecognizer: class {},
-    UIButton: { buttonWithType: () => new View() },
-    UIImage: { imageWithContentsOfFile: () => ({}) },
+    NSUserDefaults: { standardUserDefaults: () => ({
+      objectForKey: (key: string) => preferences.get(key),
+      setObjectForKey: (value: string, key: string) => { preferences.set(key, value) }, synchronize() {}
+    }) },
+    UIView: View, UIToolbar: View, UIScrollView: View, UILabel: Label, UIWebView: class extends View { scrollView = new View() }, UITapGestureRecognizer: class { cancelsTouchesInView = true }, UILongPressGestureRecognizer: class {},
+    UIButton: { buttonWithType: () => new View() }, UIPanGestureRecognizer: class {},
+    UIImage: { imageWithContentsOfFile: () => ({}), imageWithDataScale: () => ({}) },
+    NSData: { dataWithContentsOfFile: () => ({}) },
     UIColor: { colorWithHexString: () => color, clearColor: () => color, blackColor: () => color, whiteColor: () => color },
     UIFont: { systemFontOfSize() {}, boldSystemFontOfSize() {} },
     Application: { sharedInstance: () => ({ studyController: () => ({ refreshAddonCommands() {} }) }) },
@@ -280,29 +235,40 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
       showPanel: () => { visible = true; shown++ },
       hidePanel: () => { visible = false }
     },
-    require: (name: string) => name === "./card-toolbar-state"
+    require: (name: string) => name === "./window-opacity" ? windowOpacityFixture(View, { failClass: true }) : name === "./quick-menu-surface" ? quickSurface : name === "./card-toolbar-state"
       ? {}
       : name === "./ui-tokens" ? { UI_COLORS: { accent: "#0e8dfd", grayFill: "#d8d8dd", surface: "#f7f8fa" } }
+      : name === "./review-toolbar-layout" ? reviewToolbarLayoutApi
       : name === "./quick-menu-geometry" ? { quickMenuGeometry }
-      : name === "./settings" ? { loadMatcherSettings: () => ({ entranceDefaultMode: "practice", allowSameStudySetMindMap: true }) }
+      : name === "./settings" ? { loadMatcherSettings: () => ({ entranceDefaultMode: "practice", allowSameStudySetMindMap: true, globalQuestionColors: globalColors }) }
       : name === "./note-navigation" ? { recordRuntimeState: (_scope: string, label: string, detail: string) => menuLogs.push(`${label} ${detail}`) }
       : name === "./question-clipper" ? { clipperModeActive: () => false, exitClipperMode() {} }
-      : name === "./same-map-practice" ? { sameMapPracticeActive: () => false, stopSameMapPractice() {}, startSameMapPractice: (_book: string, ids: Set<string>, options: { maskAnswers: boolean }) => { if (startError) throw new Error("native selection failed"); startedSelection = [...ids]; startedModes.push(options.maskAnswers); return { started: true, answerCount: options.maskAnswers ? 1 : 0, maskAnswers: options.maskAnswers } } }
+      : name === "./review-mode" ? { updateReviewToolbarOrientation() {}, startPracticeMode: (_book: string, ids: string[], _root: string, mask: boolean, mode: string) => { if (startError) throw new Error("native selection failed"); startedSelection = [...ids]; startedModes.push(mask); writingModes.push(mode); return { started: true, count: ids.length } } }
+      : name === "./same-map-practice" ? { sameMapPracticeActive: () => practiceActive, sameMapPracticeCurrentQuestionId: () => practiceCurrentId, sameMapPracticeQuestionIds: () => startedSelection, stopSameMapPractice() {}, startSameMapPractice: (_book: string, ids: Set<string>, options: { maskAnswers: boolean }) => { if (startError) throw new Error("native selection failed"); startedSelection = [...ids]; startedModes.push(options.maskAnswers); return { started: true, answerCount: options.maskAnswers ? 1 : 0, maskAnswers: options.maskAnswers } } }
       : name === "./quick-menu-selection" ? { collectQuestionTree, mindMapScopeOf, questionIdsInTree, renderedMindMapNoteIds }
       : name === "./note-tree" ? { notebookNotes: () => notes }
       : name === "./mindmap-candidate" ? { MAIN_MINDMAP_SCOPE_ID: "__mn4_main_mindmap__", mindMapScopeIdForNote: (note: any) => note?.childMindMap?.noteId || "__mn4_main_mindmap__" }
       : name === "./store" ? { loadBindings: () => ({ "book::root::__mn4_main_mindmap__": answerBinding }) }
       : name === "./binding" ? bindings
       : name === "marginnote" ? {
+        select: async (choices: string[]) => { assert.deepEqual(Array.from(choices), ["脑图内书写", "批注窗口书写"]); if (writingChoice === 1) windowTap(-1, 10); return { index: writingChoice } },
         showHUD(message: string) { hudMessages.push(message) }, MN: { currnetNotebookId: "book", db: { getNotebookById: () => ({ notes }) }, notebookController: { mindmapView: mindmap } },
         NodeNote: { getSelectedNodes: () => [{ note: question }] }
       }
       : { showHUD() {} }
   }
+  runInNewContext(transpileModule(readFileSync("src/quick-menu-surface.ts", "utf8"), { compilerOptions: { module: 1, target: 7 } }).outputText, {
+    exports: quickSurface, UIColor: sandbox.UIColor, require: sandbox.require
+  })
   runInNewContext(transpileModule(readFileSync("src/mnutils-entrance.ts", "utf8"), { compilerOptions: { module: 1, target: 7 } }).outputText, sandbox)
   sandbox.exports.onMnutilsEntranceClick({})
   assert.equal(shown, 0)
   assert.equal(owner.mnutilsQuickMenu.open, true)
+  const observer = owner.mnutilsQuickMenu.dismissTap
+  assert.equal(observer.cancelsTouchesInView, false)
+  assert.equal(observer.delaysTouchesBegan, false)
+  assert.equal(observer.delaysTouchesEnded, false)
+  assert.equal(observer.delegate.gestureRecognizerShouldRecognizeSimultaneouslyWithGestureRecognizer(observer, {}), true)
   assert.equal(ball.frame.width, 44)
   assert.equal(ball.frame.x, 900)
   assert.equal(owner.mnutilsQuickMenu.content.frame.width, 44)
@@ -313,6 +279,7 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(owner.mnutilsQuickMenu.content.frame.width, 272)
   assert.equal(owner.mnutilsQuickMenu.content.frame.height, 122)
+  assert.equal(owner.mnutilsQuickMenu.content.backgroundColor.alpha, 0.94)
   assert.equal(ball.frame.width, 44)
   assert.equal(ball.frame.x, 900)
   assert.equal(owner.mnutilsQuickMenu.controls.alpha, 1)
@@ -362,11 +329,30 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
   assert.equal(owner.mnutilsQuickMenu.content.frame.width, 272)
   sandbox.exports.onMnutilsQuickMenuSelectAll()
   assert.equal(owner.mnutilsQuickMenu.selectedIds.size, 1)
-  sandbox.exports.onMnutilsEntrancePan({ state: 1, locationInView: () => ({ x: 815, y: 73 }) })
-  sandbox.exports.onMnutilsEntrancePan({ state: 2, locationInView: () => ({ x: 785, y: 93 }) })
+  assert.equal(owner.mnutilsQuickMenu.expandedIds.size, 0)
+  // 收起全部后重新筛选、关闭重开都保留空集合，不恢复默认顶层展开。
+  sandbox.exports.onMnutilsQuickMenuFilter()
+  assert.equal(owner.mnutilsQuickMenu.expandedIds.size, 0)
+  sandbox.exports.onMnutilsQuickMenuDismiss()
+  await new Promise(resolve => setImmediate(resolve))
+  sandbox.exports.onMnutilsEntranceClick({})
+  sandbox.exports.onMnutilsQuickMenuFilter()
+  assert.equal(owner.mnutilsQuickMenu.expandedIds.size, 0)
+  sandbox.exports.onMnutilsQuickMenuToggleBranch({ tag: 0 })
+  assert.equal(owner.mnutilsQuickMenu.expandedIds.has("root"), true)
+  sandbox.exports.onMnutilsQuickMenuDismiss()
+  await new Promise(resolve => setImmediate(resolve))
+  sandbox.exports.onMnutilsEntranceClick({})
+  sandbox.exports.onMnutilsQuickMenuFilter()
+  assert.equal(owner.mnutilsQuickMenu.expandedIds.has("root"), true)
+  sandbox.exports.onMnutilsQuickMenuSelectAll()
+  sandbox.exports.onMnutilsEntrancePan({ state: 1, translationInView: () => ({ x: 0, y: 0 }), setTranslationInView() {} })
+  sandbox.exports.onMnutilsEntrancePan({ state: 2, translationInView: () => ({ x: -30, y: 20 }), setTranslationInView() {} })
   assert.equal(owner.mnutilsQuickMenu.open, true)
-  sandbox.exports.onMnutilsEntrancePan({ state: 3, locationInView: () => ({ x: 785, y: 93 }) })
+  sandbox.exports.onMnutilsEntrancePan({ state: 3, translationInView: () => ({ x: 0, y: 0 }), setTranslationInView() {} })
   assert.equal(owner.mnutilsQuickMenu.open, true)
+  assert.ok(ball.frame.x === 18 || ball.frame.x === 962 || ball.frame.y === 18 || ball.frame.y === 706, '展开快捷区拖动结束应吸附窗口边缘')
+  assert.ok(preferences.has('marginnote.extension.mn4-answer-matcher.entrance-dock.v1'))
   const anchoredX = ball.frame.x, anchoredY = ball.frame.y
   const closingContent = owner.mnutilsQuickMenu.content
   sandbox.exports.onMnutilsQuickMenuDismiss()
@@ -376,6 +362,13 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
   assert.equal(ball.frame.width, 44)
   assert.equal(ball.frame.x, anchoredX)
   assert.equal(ball.frame.y, anchoredY)
+  ball.frame = { x: 820, y: 350, width: 44, height: 44 }
+  sandbox.exports.onMnutilsEntrancePan({ state: 1, translationInView: () => ({ x: 0, y: 0 }), setTranslationInView() {} })
+  sandbox.exports.onMnutilsEntrancePan({ state: 3, translationInView: () => ({ x: 0, y: 0 }), setTranslationInView() {} })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(ball.frame.x, 962, '收起后的悬浮球应恢复右侧吸附')
+  assert.equal(ball.frame.y, 350)
+  assert.equal(owner.mnutilsEntranceNativeFrame, undefined)
   owner.mnutilsEntranceSuppressClick = 0
   sandbox.exports.onMnutilsEntranceClick({})
   sandbox.exports.onMnutilsEntranceClick({})
@@ -388,11 +381,16 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
   assert.equal(shown, 1)
   sandbox.exports.onMnutilsEntranceClick({})
   sandbox.exports.onMnutilsQuickMenuSelectAll()
+  writingChoice = -1
+  await sandbox.exports.onMnutilsQuickMenuStart()
+  assert.equal(startedSelection.length, 0)
+  assert.equal(owner.mnutilsQuickMenu.open, true)
+  writingChoice = 0
   await sandbox.exports.onMnutilsQuickMenuStart()
   assert.deepEqual(startedSelection, ["question"])
   assert.equal(owner.mnutilsQuickMenu.open, true)
   assert.deepEqual(startedModes, [false])
-  assert.ok(hudMessages.includes("已开始做题，按队列定位聚焦"))
+  assert.ok(hudMessages.includes("已开始做题"))
   for (const target of [
     { notebookId: "book", designatedAnswer: "subcard" as const, questionColors: [1] },
     { notebookId: "answers", selectionMode: "mixed" as const, questionColors: [1] }
@@ -401,7 +399,10 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
     await sandbox.exports.onMnutilsQuickMenuStart()
   }
   assert.deepEqual(startedModes, [false, true, true])
-  assert.ok(menuLogs.some(line => line.includes("start.result started=true answerCount=1")))
+  writingChoice = 1
+  await sandbox.exports.onMnutilsQuickMenuStart()
+  assert.equal(writingModes[writingModes.length - 1], "annotation")
+  writingChoice = 0
   startError = true
   await sandbox.exports.onMnutilsQuickMenuStart()
   assert.equal(owner.mnutilsQuickMenu.open, true)
@@ -414,4 +415,145 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(owner.mnutilsQuickMenu, undefined)
   assert.ok(menuLogs.some(line => line.includes("close reason=outside-tap")))
+  owner.cardLinkReviewEntranceRender = (host: any) => { owner.cardLinkReviewEntranceHost = host }
+  sandbox.exports.onMnutilsEntranceClick({})
+  await new Promise(resolve => setImmediate(resolve))
+  const reviewMenu = owner.mnutilsQuickMenu
+  assert.equal((ball as any).hidden, true)
+  assert.equal(reviewMenu.closeButton.hidden, true)
+  assert.equal(reviewMenu.reviewBackdrop, undefined)
+  assert.equal(reviewMenu.expandedFrame.width, 52)
+  assert.equal(reviewMenu.expandedFrame.height, 316)
+  assert.equal(reviewMenu.content.backgroundColor.alpha, 0.78)
+  assert.equal(reviewMenu.content.layer.masksToBounds, false)
+  assert.equal(reviewMenu.content.layer.shadowOpacity, 0.14)
+  assert.equal(reviewMenu.controls.layer.masksToBounds, true)
+  assert.equal(reviewMenu.controls.layer.cornerRadius, 20)
+  assert.equal(reviewMenu.reviewControls.frame.x, 4)
+  assert.equal(reviewMenu.reviewControls.frame.y, 4)
+  owner.cardLinkReviewMode = { writingMode: "mindmap", annotationHorizontal: true }
+  owner.cardLinkReviewEntranceResize(44, 308)
+  owner.cardLinkReviewEntranceCommit()
+  assert.equal(reviewMenu.expandedFrame.width, 316)
+  assert.equal(reviewMenu.expandedFrame.height, 52)
+  assert.ok(reviewMenu.expandedFrame.x + reviewMenu.expandedFrame.width <= window.frame.width)
+  assert.equal(reviewMenu.reviewControls.frame.width, 308)
+  const shellStyle = {
+    background: reviewMenu.content.backgroundColor,
+    borderWidth: reviewMenu.content.layer.borderWidth,
+    shadowOpacity: reviewMenu.content.layer.shadowOpacity
+  }
+  owner.cardLinkReviewMode = { annotationHorizontal: true }
+  owner.cardLinkReviewEntranceResize(300, 500)
+  owner.cardLinkReviewEntranceCommit()
+  assert.deepEqual({
+    background: reviewMenu.content.backgroundColor,
+    borderWidth: reviewMenu.content.layer.borderWidth,
+    shadowOpacity: reviewMenu.content.layer.shadowOpacity
+  }, shellStyle, '横排下拉继续使用同一外壳，不更换背景或叠加第二层')
+  owner.cardLinkReviewEntranceResize(44, 308)
+  owner.cardLinkReviewEntranceCommit()
+  let classificationDismissals = 0
+  owner.cardLinkReviewDismissClassification = () => { classificationDismissals++ }
+  windowTap(20, 20)
+  assert.equal(classificationDismissals, 0)
+  windowTap(-1, 10)
+  assert.equal(classificationDismissals, 1)
+  sandbox.exports.onMnutilsQuickMenuDismiss()
+  sandbox.exports.closeMnutilsQuickMenu()
+  sandbox.exports.onMnutilsEntranceLongPress({ state: 1 })
+  sandbox.exports.onMnutilsQuickMenuOpenPanel()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(owner.mnutilsQuickMenu, reviewMenu)
+  assert.equal(reviewMenu.open, true)
+  assert.ok(reviewMenu.content.superview)
+  sandbox.exports.onMnutilsEntrancePan({ state: 1, translationInView: () => ({ x: 0, y: 0 }), setTranslationInView() {} })
+  animationNow += 1000
+  sandbox.exports.onMnutilsEntrancePan({ state: 2, translationInView: () => ({ x: -40, y: -20 }), setTranslationInView() {} })
+  const reviewDraggedCore = { ...reviewMenu.reviewCore }
+  sandbox.exports.onMnutilsEntrancePan({ state: 3, translationInView: () => ({ x: 0, y: 0 }), setTranslationInView() {} })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual({ ...reviewMenu.reviewCore }, reviewDraggedCore, '松手恢复完整工具条，但主控保留自由拖动位置')
+  assert.equal(reviewMenu.content.frame.width, reviewMenu.expandedFrame.width)
+  assert.equal(reviewMenu.content.frame.height, reviewMenu.expandedFrame.height)
+  sandbox.exports.closeReviewQuickMenu(owner)
+  assert.equal((ball as any).hidden, false)
+  assert.equal(owner.cardLinkReviewEntranceResize, undefined)
+  owner.cardLinkReviewEntranceRender = undefined
+  await new Promise(resolve => setImmediate(resolve))
+  for (const position of [{ x: 450, y: 8, horizontal: true }, { x: 8, y: 250, horizontal: false }]) {
+    ball.frame = { x: position.x, y: position.y, width: 44, height: 44 }
+    owner.mnutilsEntranceNativeFrame = { ...ball.frame }
+    owner.mnutilsEntranceSuppressClick = 0
+    owner.cardLinkReviewMode = { purpose: 'practice', writingMode: 'mindmap' }
+    owner.cardLinkReviewEntranceRender = (host: any) => {
+      owner.cardLinkReviewEntranceHost = host
+      owner.cardLinkReviewEntranceResize(position.horizontal ? 44 : 352, position.horizontal ? 352 : 44)
+      owner.cardLinkReviewEntranceCommit()
+    }
+    sandbox.exports.onMnutilsEntranceClick({})
+    const opened = owner.mnutilsQuickMenu
+    assert.equal(owner.cardLinkReviewMode.annotationHorizontal, position.horizontal)
+    assert.equal(opened.content.frame.width, 44, '首帧保持球体宽度，渲染提交不能提前展开')
+    assert.equal(opened.content.frame.height, 44)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(opened.content.frame.width, position.horizontal ? 360 : 52)
+    assert.equal(opened.content.frame.height, position.horizontal ? 52 : 360)
+    ball.frame = { x: 460, y: 20, width: 44, height: 44 }
+    sandbox.exports.closeReviewQuickMenu(owner)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(owner.mnutilsEntranceDock.edge, 'top')
+    assert.equal(owner.mnutilsEntranceNativeFrame, undefined)
+    assert.ok(ball.frame.y < 20, '退出恢复顶部贴边')
+    owner.cardLinkReviewEntranceRender = undefined
+    owner.cardLinkReviewMode = undefined
+  }
+  const chapter = { noteId: 'chapter-two', noteTitle: '第二章', colorIndex: 0 }
+  const more = Array.from({ length: 40 }, (_, i) => ({ noteId: `q${i}`, noteTitle: `题${i}`, colorIndex: 1, parentNote: chapter }))
+  notes.push(chapter, ...more)
+  mindmap.mindmapNodes.push(...[chapter, ...more].map(note => ({ note })))
+  startError = false
+  owner.mnutilsEntranceSuppressClick = 0
+  sandbox.exports.onMnutilsEntranceClick({})
+  sandbox.exports.onMnutilsQuickMenuFilter()
+  sandbox.exports.onMnutilsQuickMenuSelectAll()
+  assert.ok(owner.mnutilsQuickMenu.selectedIds.has('q25'), JSON.stringify({ selected: [...owner.mnutilsQuickMenu.selectedIds], logs: menuLogs.slice(-7) }))
+  await sandbox.exports.onMnutilsQuickMenuStart()
+  practiceActive = true
+  practiceCurrentId = 'q25'
+  preferences.clear()
+  sandbox.exports.onMnutilsQuickMenuDismiss()
+  await new Promise(resolve => setImmediate(resolve))
+  sandbox.exports.onMnutilsEntranceClick({})
+  await new Promise(resolve => setImmediate(resolve))
+  const reopened = owner.mnutilsQuickMenu
+  assert.equal(reopened.mode, 'queue')
+  assert.ok(reopened.expandedIds.has('chapter-two'))
+  const currentRow = reopened.rowIds.indexOf('q25')
+  assert.ok(currentRow > 5, JSON.stringify(reopened.rowIds))
+  assert.ok(reopened.scroll.contentOffset.y > 0)
+  assert.equal(currentRow * 42 + 21 - reopened.scroll.contentOffset.y, reopened.scroll.frame.height / 2)
+  practiceActive = false
+  sandbox.exports.closeMnutilsQuickMenu()
+  owner.mnutilsEntranceSuppressClick = 0
+  owner.cardLinkReviewMode = undefined
+  answerBinding = { notebookId: 'answers', selectionMode: 'designated', designatedAnswer: 'mindmap', questionColors: [] } as any
+  sandbox.exports.onMnutilsEntranceClick({})
+  sandbox.exports.onMnutilsQuickMenuFilter()
+  sandbox.exports.onMnutilsQuickMenuSelectAll()
+  assert.ok(owner.mnutilsQuickMenu.selectedIds.has('chapter-two'), '答案脑图无颜色绑定时包含所有卡片')
+  assert.ok(owner.mnutilsQuickMenu.selectedIds.has('q25'))
+  assert.equal(owner.mnutilsQuickMenu.maskAnswers, false)
+  globalColors = [1]
+  sandbox.exports.onMnutilsQuickMenuFilter()
+  sandbox.exports.onMnutilsQuickMenuSelectAll()
+  assert.equal(owner.mnutilsQuickMenu.selectedIds.has('chapter-two'), false, '全局颜色筛选排除其他颜色')
+  assert.ok(owner.mnutilsQuickMenu.selectedIds.has('q25'))
+
+  answerBinding.questionColors = [1]
+  globalColors = [0]
+  sandbox.exports.onMnutilsQuickMenuFilter()
+  sandbox.exports.onMnutilsQuickMenuSelectAll()
+  assert.ok(owner.mnutilsQuickMenu.selectedIds.has('chapter-two'), '全局颜色即使局部有配置也必须有效')
+
 })

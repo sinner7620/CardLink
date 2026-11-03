@@ -16,7 +16,7 @@ function harness(confirm: number, option: number, fromMistake = false) {
   const question = { note: { noteId: "original-question" }, title: "题目" }
   let saved = 0
   const sandbox: any = {
-    exports: {},
+    exports: {}, self: {},
     resolveAnswerLookupContext: () => ({ lookupQuestion: question, questionNotebookId: "display-book",
       sourceNotebookId: "source-book", sourceRootNodeId: "source-root", questionTitle: "题目",
       mistakeContext: fromMistake ? { record: { sourceNotebookTitle: "原题" } } : undefined }),

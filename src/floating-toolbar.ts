@@ -1,3 +1,4 @@
+import { createWindowSurface } from "./window-opacity"
 import { MN } from "marginnote"
 import { UI_COLORS } from "./ui-tokens"
 import { loadMatcherSettings } from "./settings"
@@ -28,7 +29,7 @@ function toolbarButton(title: string, color: string, selector: string): UIButton
 
 export function createAnswerToolbar(): UIView {
   destroyAnswerToolbar()
-  const toolbar = new UIView({ x: 0, y: 0, width: BUTTON_WIDTH, height: TOOLBAR_HEIGHT })
+  const toolbar = createWindowSurface({ x: 0, y: 0, width: BUTTON_WIDTH, height: TOOLBAR_HEIGHT })
   toolbar.backgroundColor = UIColor.clearColor()
 
   const answerButton = toolbarButton("查找答案", UI_COLORS.accent, "onAnswerToolbarSingleTap:")
@@ -46,7 +47,7 @@ export function createAnswerToolbar(): UIView {
   self.answerToolbarButton = answerButton
   self.answerToolbarLongPressGesture = answerLongPress
   self.mistakeToolbarButton = mistakeButton
-  const dropdown = new UIView({ x: 0, y: 0, width: DROPDOWN_WIDTH, height: DROPDOWN_HEIGHT })
+  const dropdown = createWindowSurface({ x: 0, y: 0, width: DROPDOWN_WIDTH, height: DROPDOWN_HEIGHT })
   dropdown.backgroundColor = UIColor.colorWithHexString(UI_COLORS.surface)
   dropdown.layer.cornerRadius = 9
   dropdown.layer.masksToBounds = false
@@ -122,6 +123,20 @@ export function showAnswerToolbar(winRect: string): void {
     MN.studyController.view.addSubview(self.answerToolbar)
   }
   self.answerToolbarShownAt = Date.now()
+}
+
+export function cardMistakeAnchor(owner: any, noteID: string, host: any): { x: number; y: number; width: number; height: number } | undefined {
+  const cached = owner.answerToolbarNoteId === noteID ? owner.answerToolbarTargetRect : undefined
+  if (cached) return host === owner.window ? { ...cached } : { ...cached, x: cached.x - host.frame.x, y: cached.y - host.frame.y }
+  const study = Application.sharedInstance().studyController(owner.window)
+  const map = study?.notebookController?.mindmapView
+  const entry = (Array.from(map?.selViewLst ?? []) as any[]).find(item => String(item?.note?.note?.noteId ?? item?.note?.noteId ?? '') === noteID)
+  const view = entry?.view ?? entry
+  if (!view?.superview || !view.bounds || typeof view.convertRectToView !== 'function') return
+  try {
+    const rect = view.convertRectToView(view.bounds, host)
+    if ([rect?.x, rect?.y, rect?.width, rect?.height].every(Number.isFinite) && rect.width > 0 && rect.height > 0) return rect
+  } catch {}
 }
 
 export function updateMistakeToolbarTitle(isExistingMistake: boolean, record?: MistakeRecord): void {

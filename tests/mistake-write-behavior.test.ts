@@ -16,6 +16,7 @@ const syncDirty: string[] = []
 const undoCalls: Array<{ action: string; notebookId: string }> = []
 const nodeCreates: Array<{ noteId?: string; notebookId?: string }> = []
 const noWriteNotes = new Set<string>()
+const dropReasonTags = new Set<string>()
 let currentNotebookId = ""
 
 const kv: Record<string, any> = {}
@@ -33,6 +34,7 @@ function tagsOf(note: any): string[] {
 
 function setTagsOf(note: any, tags: string[]): void {
   if (noWriteNotes.has(note.noteId)) return // 模拟写入静默失败，回读保持旧标签
+  if (dropReasonTags.has(note.noteId)) tags = tags.filter(tag => !tag.startsWith('错因_'))
   const others = (note.comments ?? []).filter(
     (comment: any) => !(comment && comment.type === "TextNote" && typeof comment.text === "string" && comment.text.startsWith("#"))
   )
@@ -167,6 +169,277 @@ function mistakeStateRecords(): Record<string, any> {
   const parsed = typeof raw === "string" ? JSON.parse(raw) : raw
   return parsed?.records ?? {}
 }
+
+test('保留错因的单卡等级保存保留原卡多项错因和旧历史，不伪造本次错因', async () => {
+  for (const level of [0, 1, 2] as const) {
+    const book = `preserve-mark-${level}`, noteId = `${book}-note`
+    const id = await seedRecord(book, noteId, 1, { cardTags: ['错题_不熟', '用户标签', '错因_审题遗漏', '错因_时间不足'] })
+    const state = store.loadMistakeState()
+    const oldHistory = [{ at: state.records[id].createdAt, level: 1 as const, errorReason: { key: 'reading', label: '审题遗漏' } }]
+    store.upsertMistakeRecord(state, { ...state.records[id], history: oldHistory })
+    store.saveMistakeState(state)
+    const saved = await manager.markQuestionAsMistake(new FakeNodeNote(notesById[noteId], book) as any, book, level, undefined, true)
+    assert.ok(saved)
+    const record = mistakeStateRecords()[id]
+    assert.equal(record.level, level)
+    assert.equal(record.history.length, 2)
+    assert.deepEqual(record.history[0], oldHistory[0])
+    assert.equal(record.history[1].errorReason, undefined)
+    assert.equal(record.reviewCount, level === 1 ? 1 : 0)
+    assert.ok(tagsOf(notesById[noteId]).includes('错因_审题遗漏'))
+    assert.ok(tagsOf(notesById[noteId]).includes('错因_时间不足'))
+    assert.ok(tagsOf(notesById[noteId]).includes('用户标签'))
+    assert.ok(manager.mistakeReasonHistoryId(saved))
+  }
+})
+
+test('侧边单项和多项等级保留错因，默认等级与批量入口仍清除未选错因', async () => {
+  const book = 'preserve-side-book', noteId = 'preserve-side-note'
+  const id = await seedRecord(book, noteId, 1, { cardTags: ['错题_不熟', '错因_计算失误', '用户标签'] })
+  await manager.changeMistakeLevelById(id, 2, { key: 'time', label: '时间不足' }, true)
+  assert.ok(tagsOf(notesById[noteId]).includes('错因_计算失误'))
+  assert.ok(!tagsOf(notesById[noteId]).includes('错因_时间不足'))
+  assert.equal(mistakeStateRecords()[id].history[0].errorReason, undefined)
+  await manager.changeMistakeLevelById(id, 0, undefined, true)
+  assert.ok(tagsOf(notesById[noteId]).includes('错因_计算失误'))
+  const newId = 'preserve-side-new'
+  notesById[newId] = { noteId: newId, title: '新题', comments: [{ type: 'TextNote', text: '#错因_时间不足 #用户标签' }] }
+  const cards = [noteId, newId].map(note => new FakeNodeNote(notesById[note], book)) as any
+  const beforeUndo = undoCalls.length
+  const batch = await manager.markQuestionsAsMistakes(cards, book, 1, undefined, true)
+  assert.equal(batch.updated, 1)
+  assert.equal(batch.added, 1)
+  assert.equal(undoCalls.length - beforeUndo, 1, '保留批量单次学习集事务')
+  assert.ok(tagsOf(notesById[noteId]).includes('错因_计算失误'))
+  assert.ok(tagsOf(notesById[newId]).includes('错因_时间不足'))
+  for (const record of batch.records) assert.equal(record.history[record.history.length - 1]?.errorReason, undefined)
+  await manager.markQuestionsAsMistakes(cards, book, 2, { key: 'reading', label: '审题遗漏' }, true)
+  assert.ok(tagsOf(notesById[noteId]).includes('错因_计算失误'))
+  assert.ok(tagsOf(notesById[newId]).includes('错因_时间不足'))
+  for (const recordId of [id, `${book}:${newId}`]) assert.equal(mistakeStateRecords()[recordId].history.at(-1).errorReason, undefined)
+  await manager.changeMistakeLevelById(id, 0)
+  assert.ok(!tagsOf(notesById[noteId]).some(tag => tag.startsWith('错因_')))
+  await manager.markQuestionsAsMistakes(cards, book, 1)
+  assert.ok(!tagsOf(notesById[newId]).some(tag => tag.startsWith('错因_')))
+  await manager.markQuestionAsMistake(cards[0], book, 1, { key: 'reading', label: '审题遗漏' })
+  await manager.markQuestionAsMistake(cards[0], book, 1)
+  assert.ok(!tagsOf(notesById[noteId]).some(tag => tag.startsWith('错因_')))
+})
+
+test('补写只更新刚保存的一次历史与错因标签，不增加复测次数或改变计划和手动队列', async () => {
+  const book = 'supplement-book', noteId = 'supplement-note'
+  const id = await seedRecord(book, noteId, 1, { cardTags: ['错题_不熟', '用户标签', '错因_概念不清'] })
+  const state = store.loadMistakeState()
+  const oldHistory = [{ at: state.records[id].createdAt, level: 1 as const, errorReason: { key: 'concept', label: '概念不清' } }]
+  store.upsertMistakeRecord(state, { ...state.records[id], history: oldHistory })
+  store.saveMistakeState(state)
+  const saved = await manager.markQuestionAsMistake(new FakeNodeNote(notesById[noteId], book) as any, book, 1, undefined, true)
+  assert.ok(saved)
+  const historyId = manager.mistakeReasonHistoryId(saved)
+  assert.ok(historyId)
+  const before = mistakeStateRecords()[id]
+  const manualQueue = await import('../src/manual-review-queue')
+  const queueNow = new Date(Date.parse(saved.nextReviewAt) + 2 * 86400000)
+  const records = store.loadMistakeState().records
+  manualQueue.addOverdueToToday({ [id]: records[id] }, 1, queueNow)
+  const queueBefore = manualQueue.manualTodayIds(records, queueNow)
+  assert.deepEqual(queueBefore, [id])
+  const queueStorageBefore = JSON.stringify(kv['mn4-answer-matcher.manual-review-queue.v1'])
+  const reason = { key: 'reading', label: '审题遗漏' }
+  const supplemented = await manager.supplementMistakeReasonById(id, reason, historyId)
+  let after = mistakeStateRecords()[id]
+  assert.equal(after.history.length, before.history.length)
+  assert.deepEqual(after.history[0], oldHistory[0])
+  assert.deepEqual(after.history[1], { ...before.history[1], errorReason: reason })
+  for (const key of ['level', 'reviewCount', 'nextReviewAt', 'lastReviewedAt', 'reviewCompleted', 'createdAt']) assert.equal(after[key], before[key], key)
+  assert.deepEqual(manualQueue.manualTodayIds(records, queueNow), queueBefore)
+  assert.equal(JSON.stringify(kv['mn4-answer-matcher.manual-review-queue.v1']), queueStorageBefore)
+  assert.equal(manager.mistakeReasonHistoryId(supplemented), historyId)
+  assert.deepEqual(tagsOf(notesById[noteId]).sort(), ['错题_不熟', '用户标签', '错因_审题遗漏'].sort())
+  await manager.supplementMistakeReasonById(id, reason, historyId)
+  after = mistakeStateRecords()[id]
+  assert.equal(after.history.length, before.history.length)
+  assert.equal(after.reviewCount, before.reviewCount)
+  assert.equal(after.nextReviewAt, before.nextReviewAt)
+  manualQueue.removeFromManualToday(id, records, queueNow)
+})
+
+test('新题首次等级保存可以补写同一次历史，不变成第一次复测', async () => {
+  await loadModules()
+  const book = 'supplement-new-book', noteId = 'supplement-new-note'
+  notesById[noteId] = { noteId, title: '首次标记', comments: [] }
+  const saved = await manager.markQuestionAsMistake(new FakeNodeNote(notesById[noteId], book) as any, book, 0, undefined, true)
+  assert.ok(saved)
+  await manager.supplementMistakeReasonById(saved.recordId, { key: 'concept', label: '概念不清' }, manager.mistakeReasonHistoryId(saved))
+  const after = mistakeStateRecords()[saved.recordId]
+  assert.equal(after.history.length, 1)
+  assert.equal(after.reviewCount, 0)
+  assert.equal(after.lastReviewedAt, undefined)
+  assert.equal(after.nextReviewAt, saved.nextReviewAt)
+  assert.equal(after.history[0].errorReason.key, 'concept')
+})
+
+test('补写标签失败不改变旧记录，保留回执重试不会增加历史或复测', async () => {
+  const book = 'supplement-retry-book', noteId = 'supplement-retry-note'
+  const id = await seedRecord(book, noteId, 0, { cardTags: ['错题_不会', '错因_计算失误'] })
+  const saved = await manager.markQuestionAsMistake(new FakeNodeNote(notesById[noteId], book) as any, book, 0, undefined, true)
+  assert.ok(saved)
+  const receipt = manager.mistakeReasonHistoryId(saved)
+  const before = JSON.stringify(mistakeStateRecords()[id])
+  noWriteNotes.add(noteId)
+  try {
+    await assert.rejects(manager.supplementMistakeReasonById(id, { key: 'reading', label: '审题遗漏' }, receipt), /mistakeTagWriteFailed|标签|写入/)
+    assert.equal(JSON.stringify(mistakeStateRecords()[id]), before)
+    assert.ok(tagsOf(notesById[noteId]).includes('错因_计算失误'))
+  } finally { noWriteNotes.delete(noteId) }
+  dropReasonTags.add(noteId)
+  try {
+    await assert.rejects(manager.supplementMistakeReasonById(id, { key: 'reading', label: '审题遗漏' }, receipt), /mistakeTagWriteFailed|标签|写入/)
+    assert.equal(JSON.stringify(mistakeStateRecords()[id]), before)
+  } finally { dropReasonTags.delete(noteId) }
+  await manager.supplementMistakeReasonById(id, { key: 'reading', label: '审题遗漏' }, receipt)
+  assert.equal(mistakeStateRecords()[id].history.length, saved.history.length)
+  assert.equal(mistakeStateRecords()[id].reviewCount, saved.reviewCount)
+  assert.equal(mistakeStateRecords()[id].nextReviewAt, saved.nextReviewAt)
+  assert.ok(tagsOf(notesById[noteId]).includes('错因_审题遗漏'))
+})
+
+test('同毫秒同等级的旧回执和跨题回执均不能写入更晚历史或原卡', async () => {
+  const book = 'supplement-stale-book', noteId = 'supplement-stale-note'
+  const id = await seedRecord(book, noteId, 1, { cardTags: ['错题_不熟', '错因_计算失误'] })
+  const question = new FakeNodeNote(notesById[noteId], book) as any
+  const saved = await manager.markQuestionAsMistake(question, book, 1, undefined, true)
+  assert.ok(saved)
+  const oldReceipt = manager.mistakeReasonHistoryId(saved)
+  const newer = await manager.markQuestionAsMistake(question, book, 1, undefined, true)
+  assert.ok(newer)
+  const state = store.loadMistakeState()
+  const history = state.records[id].history.map((entry, index) => index === state.records[id].history.length - 1
+    ? { ...entry, at: saved.history[saved.history.length - 1].at } : entry)
+  store.upsertMistakeRecord(state, { ...state.records[id], history })
+  store.saveMistakeState(state)
+  const before = JSON.stringify(mistakeStateRecords()[id]), tagsBefore = tagsOf(notesById[noteId]), writesBefore = undoCalls.length
+  await assert.rejects(manager.supplementMistakeReasonById(id, { key: 'time', label: '时间不足' }, oldReceipt), /记录已变化/)
+  assert.equal(JSON.stringify(mistakeStateRecords()[id]), before)
+  assert.deepEqual(tagsOf(notesById[noteId]), tagsBefore)
+  assert.equal(undoCalls.length, writesBefore)
+  const otherNoteId = 'supplement-other-note'
+  await seedRecord(book, otherNoteId, 1, { cardTags: ['错题_不熟'] })
+  const other = await manager.markQuestionAsMistake(new FakeNodeNote(notesById[otherNoteId], book) as any, book, 1, undefined, true)
+  assert.ok(other)
+  const otherBefore = JSON.stringify(mistakeStateRecords()[other.recordId])
+  await assert.rejects(manager.supplementMistakeReasonById(other.recordId, { key: 'time', label: '时间不足' }, manager.mistakeReasonHistoryId(state.records[id])), /记录已变化/)
+  assert.equal(JSON.stringify(mistakeStateRecords()[other.recordId]), otherBefore)
+  assert.deepEqual(tagsOf(notesById[otherNoteId]), ['错题_不熟'])
+})
+
+test('补写不复活取消错题、不覆盖原卡新等级；掌握和无历史记录不能补写', async () => {
+  const book = 'supplement-guard-book', noteId = 'supplement-guard-note'
+  const id = await seedRecord(book, noteId, 1, { cardTags: ['错题_不熟', '错因_概念不清'] })
+  const question = new FakeNodeNote(notesById[noteId], book) as any
+  const saved = await manager.markQuestionAsMistake(question, book, 1, undefined, true)
+  assert.ok(saved)
+  const reason = { key: 'reading', label: '审题遗漏' }, receipt = manager.mistakeReasonHistoryId(saved)
+  const before = JSON.stringify(mistakeStateRecords()[id])
+  for (const tags of [[], ['错题_不会', '错因_概念不清']]) {
+    setTagsOf(notesById[noteId], tags)
+    await assert.rejects(manager.supplementMistakeReasonById(id, reason, receipt), /mistakeTagWriteFailed|标签|写入/)
+    assert.equal(JSON.stringify(mistakeStateRecords()[id]), before)
+    assert.deepEqual(tagsOf(notesById[noteId]), tags)
+  }
+  setTagsOf(notesById[noteId], ['错题_不熟', '错因_概念不清'])
+  const mastered = await manager.markQuestionAsMistake(question, book, 2, reason, true)
+  assert.ok(mastered)
+  const masteredBefore = JSON.stringify(mistakeStateRecords()[id])
+  await assert.rejects(manager.supplementMistakeReasonById(id, reason, manager.mistakeReasonHistoryId(mastered)), /掌握/)
+  assert.equal(JSON.stringify(mistakeStateRecords()[id]), masteredBefore)
+  assert.equal(mistakeStateRecords()[id].history.at(-1).errorReason, undefined)
+  assert.ok(tagsOf(notesById[noteId]).includes('错因_概念不清'))
+  const empty = await seedRecord(book, 'supplement-no-history', 0)
+  await assert.rejects(manager.supplementMistakeReasonById(empty, reason), /记录已变化/)
+  assert.equal(manager.mistakeReasonHistoryId(store.loadMistakeState().records[empty]), undefined)
+})
+
+test('固定复习的错因随本次历史真正落盘，后续未选错因不沿用旧值', async () => {
+  const id = await seedRecord('reason-notebook', 'reason-note', 0)
+  await manager.reviewMistakeById(id, 1, { key: 'reading', label: '审题遗漏' })
+  assert.equal(mistakeStateRecords()[id].history[0].errorReason.key, 'reading')
+  assert.ok(tagsOf(notesById['reason-note']).includes('错因_审题遗漏'))
+  assert.deepEqual(manager.mistakeWorkbenchData().records.find(r => r.recordId === id)?.manualCategories, [])
+  await manager.reviewMistakeById(id, 1, { key: 'calculation', label: '计算失误' })
+  assert.ok(tagsOf(notesById['reason-note']).includes('错因_计算失误'))
+  assert.ok(!tagsOf(notesById['reason-note']).includes('错因_审题遗漏'))
+  await manager.reviewMistakeById(id, 2)
+  const history = mistakeStateRecords()[id].history
+  assert.equal(history[0].errorReason.label, '审题遗漏')
+  assert.equal(history[1].errorReason.label, '计算失误')
+  assert.equal(history[2].errorReason, undefined)
+  assert.ok(!tagsOf(notesById['reason-note']).some(tag => tag.startsWith('错因_')))
+})
+
+test('智能复习错因仅改卡片错因标签，不改固定等级或固定历史', async () => {
+  const id = await seedRecord('fsrs-reason-book', 'fsrs-reason-note', 1, { cardTags: ['错题_不熟', '用户标签'] })
+  const before = JSON.stringify(mistakeStateRecords()[id])
+  manager.syncMistakeReasonTags(id, [{ key: 'reading', label: '审题遗漏' }, { key: 'time', label: '时间不足' }])
+  assert.deepEqual(tagsOf(notesById['fsrs-reason-note']), ['错题_不熟', '用户标签', '错因_审题遗漏', '错因_时间不足'])
+  assert.equal(JSON.stringify(mistakeStateRecords()[id]), before)
+  await manager.setMistakeCategoryById(id, ['新分类'])
+  assert.ok(tagsOf(notesById['fsrs-reason-note']).includes('错因_审题遗漏'))
+  assert.ok(tagsOf(notesById['fsrs-reason-note']).includes('错因_时间不足'))
+  manager.syncMistakeReasonTags(id, [])
+  assert.ok(!tagsOf(notesById['fsrs-reason-note']).some(tag => tag.startsWith('错因_')))
+  assert.ok(tagsOf(notesById['fsrs-reason-note']).includes('新分类'))
+})
+
+test('等级标签成功但错因标签静默丢失时，反馈不算写入成功', async () => {
+  const id = await seedRecord('partial-reason-book', 'partial-reason-note', 1)
+  const before = JSON.stringify(mistakeStateRecords()[id])
+  dropReasonTags.add('partial-reason-note')
+  try {
+    await assert.rejects(manager.reviewMistakeById(id, 1, { key: 'reading', label: '审题遗漏' }), /mistakeTagWriteFailed|标签|写入/)
+    assert.equal(JSON.stringify(mistakeStateRecords()[id]), before)
+    assert.throws(() => manager.syncMistakeReasonTags(id, [{ key: 'time', label: '时间不足' }]), /错因标签/)
+  } finally { dropReasonTags.delete('partial-reason-note') }
+})
+
+test('单卡已有记录写入失败返回未保存并回滚历史，修复标签后可重试', async () => {
+  const book = 'single-panel-failed-book', noteId = 'single-panel-failed-note'
+  const id = await seedRecord(book, noteId, 1, { cardTags: ['错题_不熟', '保留'] })
+  const question = new FakeNodeNote(notesById[noteId], book) as any
+  const before = JSON.stringify(mistakeStateRecords()[id])
+  noWriteNotes.add(noteId)
+  try {
+    assert.equal(await manager.markQuestionAsMistake(question, book, 0), undefined)
+    assert.equal(JSON.stringify(mistakeStateRecords()[id]), before)
+  } finally { noWriteNotes.delete(noteId) }
+  dropReasonTags.add(noteId)
+  try {
+    assert.equal(await manager.markQuestionAsMistake(question, book, 1, { key: 'reading', label: '审题遗漏' }), undefined)
+    assert.equal(JSON.stringify(mistakeStateRecords()[id]), before)
+  } finally { dropReasonTags.delete(noteId) }
+  const saved = await manager.markQuestionAsMistake(question, book, 1, { key: 'reading', label: '审题遗漏' })
+  assert.ok(saved)
+  assert.equal(mistakeStateRecords()[id].history.length, 1)
+  assert.equal(mistakeStateRecords()[id].history[0].errorReason.key, 'reading')
+  assert.ok(tagsOf(notesById[noteId]).includes('错因_审题遗漏'))
+  assert.ok(tagsOf(notesById[noteId]).includes('保留'))
+})
+
+test('单卡标记和批量标记都将自定义错因写入各自原卡，取消错题清除错因', async () => {
+  const book = 'mark-reason-book'
+  const first = await seedRecord(book, 'mark-reason-one', 0, { cardTags: ['错题_不会', '保留'] })
+  const second = await seedRecord(book, 'mark-reason-two', 0)
+  const reason = { key: 'custom', label: '新错因名称' }
+  await manager.markQuestionAsMistake(new FakeNodeNote(notesById['mark-reason-one'], book) as any, book, 0, reason)
+  assert.ok(tagsOf(notesById['mark-reason-one']).includes('错因_新错因名称'))
+  await manager.markQuestionsAsMistakes(['mark-reason-one', 'mark-reason-two'].map(id => new FakeNodeNote(notesById[id], book)) as any, book, 1, { key: 'reading', label: '审题遗漏' })
+  for (const noteId of ['mark-reason-one', 'mark-reason-two']) {
+    assert.ok(tagsOf(notesById[noteId]).includes('错因_审题遗漏'))
+    assert.ok(!tagsOf(notesById[noteId]).includes('错因_新错因名称'))
+  }
+  await manager.removeMistakesByIds([first, second])
+  assert.deepEqual(tagsOf(notesById['mark-reason-one']), ['保留'])
+})
 
 test("混合绑定其他脑图时，详情/轻量原题/只读提取不夹带子卡答案；纯脑图模式保留子卡内容", async () => {
   const book = `mixedPreview${seq++}`

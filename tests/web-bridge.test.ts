@@ -101,13 +101,13 @@ test("跨脑图定位原题时只使用稳定会话尺寸，不采样切换过�
   assert.match(addon, /self\.pendingMistakeNavigation[\s\S]*preservePanelForNotebookSwitch/)
   assert.match(addon, /preserveAcrossNotebookSwitch[\s\S]*restorePanelAfterNotebookSwitch/)
   const preserve = panel.match(/function preservePanelForNotebookSwitch[\s\S]*?\n  \}/)?.[0] || ""
-  assert.match(preserve, /controller\.view\.frame = savedFrame\(controller\)/)
+  assert.match(preserve, /controller\.panelSurface\.frame = savedFrame\(controller\)/)
   assert.doesNotMatch(preserve, /saveFrame\(controller\)|removeFromSuperview/)
   const restore = panel.match(/function restorePanelAfterNotebookSwitch[\s\S]*?\n  \}/)?.[0] || ""
   assert.match(restore, /var frame = savedFrame\(controller\)/)
   assert.doesNotMatch(restore, /__onPanelShow/)
-  assert.match(panel, /controller\.view\.autoresizingMask = 0/)
-  assert.match(panel, /function ensureLayout[\s\S]*var frame = savedFrame\(controller\)[\s\S]*controller\.view\.frame = frame/)
+  assert.match(panel, /controller\.panelSurface\.autoresizingMask = 0/)
+  assert.match(panel, /function ensureLayout[\s\S]*var frame = savedFrame\(controller\)[\s\S]*controller\.panelSurface\.frame = frame/)
   const close = panel.match(/function closePanel[\s\S]*?\n  \}/)?.[0] || ""
   assert.doesNotMatch(close, /saveFrame\(controller\)/)
 })
@@ -177,15 +177,15 @@ test("2.3.2 详情交互修复进入源码构建", () => {
 
   const preview = readFileSync(path.join(process.cwd(), "web", "src", "CardPreview.jsx"), "utf8")
   const previewController = readFileSync(path.join(process.cwd(), "src", "card-preview.ts"), "utf8")
-  assert.match(preview, /mountCardPreview\(win, wireFramePinchZoom\)/)
+  assert.match(preview, /win\.__mnMountCardPreview\(\)/)
   // 触摸/gesture 事件跟踪统一在跨 Web/卡片共用的 pinch-zoom.ts
   assert.match(pinch, /gesturechange/)
   assert.match(pinch, /touchmove/)
-  assert.match(previewController, /card\.style\.transform = scale === 1/)
-  assert.match(previewController, /card\.style\.width = width \+ "px"/)
+  assert.doesNotMatch(previewController, /win\.scrollTo\(/)
+  assert.match(previewController, /Panzoom\(card,/)
   assert.doesNotMatch(source, /documentElement\.style\.zoom/)
-  assert.match(cardHtml, /maximum-scale=3,user-scalable=yes/)
-  assert.match(cardHtml, /mountCardPreview\.toString\(\)/)
+  assert.match(cardHtml, /maximum-scale=1,user-scalable=no/)
+  assert.match(cardHtml, /__CARD_PREVIEW_SCRIPT__/)
   assert.match(source, /当前队列没有题目[^\n]*icon=\{false\}/)
   assert.match(source, /previewLevelSelect[^\n]*\{name\}<\/option>/)
   assert.match(source, /detailTagDelete/)
@@ -241,7 +241,7 @@ test("冷启动先绘制外壳且首次面板显示不会重复请求 dashboard"
   assert.match(source, /useState\(startupSnapshotRef\.current\)/)
   assert.match(source, /await load\(Boolean\(startupSnapshotRef\.current\)\)/)
   assert.match(source, /const initialTimer = window\.setTimeout\([\s\S]*?await load\(Boolean\(startupSnapshotRef\.current\)\)/)
-  assert.match(panel, /controller\.view\.hidden = true;[\s\S]*?return controller/)
+  assert.match(panel, /controller\.panelSurface\.hidden = true;[\s\S]*?return controller/)
   assert.match(panel, /boot\.appRendered/)
   assert.match(source, /window\.__onPanelShow = async options => \{[\s\S]*MNBridge\.send\("mistakesRevision"\)[\s\S]*status\?\.revision !== dataRef\.current\?\.mistakes\?\.revision/)
   assert.match(panel, /controller\.webReady = false/)
@@ -278,8 +278,8 @@ test("插件网页延伸到原生关闭按钮行且设置项位于插件分组",
   assert.match(css, /\.topTools-left\s*\{[^}]*grid-column:\s*1;/)
   assert.match(css, /\.topTools-right\s*\{[^}]*grid-column:\s*3;/)
   assert.match(panel, /y: 0,[\s\S]*height: frame\.height/)
-  assert.match(panel, /controller\.view\.addSubview\(controller\.webView\)/)
-  assert.doesNotMatch(panel, /controller\.view\.addSubview\(controller\.titleBar\)/)
+  assert.match(panel, /controller\.panelSurface\.addSubview\(controller\.webView\)/)
+  assert.doesNotMatch(panel, /controller\.panelSurface\.addSubview\(controller\.titleBar\)/)
 })
 
 test("整条顶栏除按钮组外可拖动、Tab 居中且顶栏为白色", () => {
@@ -299,7 +299,7 @@ test("整条顶栏除按钮组外可拖动、Tab 居中且顶栏为白色", () =
   // 重锚等补偿链。
   assert.match(panel, /function safeAreaTop/)
   assert.match(panel, /function clampFrameTop/)
-  assert.match(panel, /self\.view\.frame = clampFrameTop\(self, \{/)
+  assert.match(panel, /__MN_ANSWER_CORE_GLOBAL__\.setWindowFrame\(self\.panelSurface, clampFrameTop\(self, \{/)
   assert.match(panel, /Math\.max\(safeAreaTop\(controller\), Number\(frame\.y\) \|\| 0\)/)
   // 滚动架构：根 UIScrollView 仅在 setup 初始化时禁滚一次；
   // 拖动/布局路径不得再出现任何滚动补偿（scrollEnabled 翻转/settle/reanchor/scrollTo）。
@@ -447,7 +447,7 @@ test("待复习队列包含真实原题、双重筛选和与预览一致的控�
   assert.doesNotMatch(source, /fitReviewFrame|wireReviewAnswerFrame|applyReviewFrameScale/)
   const controller = readFileSync("src/card-preview.ts", "utf8")
   const previewComponent = readFileSync("web/src/CardPreview.jsx", "utf8")
-  assert.match(controller, /touchAction = "pan-x pan-y"/)
+  assert.match(controller, /touchAction = "none"/)
   assert.match(source, /aria-label="答案缩放"/)
   assert.match(source, /setAnswerZoom\(value => Math\.min\(300, value \+ 10\)\)/)
   assert.match(previewComponent, /onZoom/)
@@ -478,9 +478,9 @@ test("待复习队列包含真实原题、双重筛选和与预览一致的控�
   assert.match(previewCss, /@container review-card \(max-width: 590px\)[\s\S]*\.reviewAnswerText \{ display: none;/)
   assert.match(previewCss, /@container review-card \(max-width: 500px\)[\s\S]*\.reviewLocateText \{ display: none;/)
   assert.match(pinch, /event\.preventDefault\(\)/)
-  assert.match(previewComponent, /wireFramePinchZoom/)
+  assert.match(previewComponent, /__mnMountCardPreview/)
   const card = readFileSync(path.join(process.cwd(), "src", "card-html.ts"), "utf8")
-  assert.match(card, /wireFramePinchZoom\.toString\(\)/)
+  assert.match(card, /__CARD_PREVIEW_SCRIPT__/)
   assert.doesNotMatch(css, /\.dueReviewSummary \{ grid-template-columns: auto minmax\(0,1fr\); \}/)
   assert.match(source, /className="reviewQueueTools"/)
   assert.match(source, /className="questionFoldButton"/)

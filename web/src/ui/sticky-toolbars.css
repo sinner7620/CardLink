@@ -1,0 +1,131 @@
+/* These bars belong to their page's scroll container, below the main tabs. */
+.settingsPage > .settingsCapsule,
+.reviewPage > .settingsCapsule {
+  position: sticky;
+  top: 8px;
+  left: auto;
+  transform: none;
+  flex-shrink: 0;
+  margin: 10px auto 18px;
+  width: min(640px, 100%);
+  align-self: start;
+}
+body > #root > .shell > main > section.settingsPaged,
+body > #root > .shell > main > section.reviewPage {
+  padding-top: var(--mn-topbar-height);
+  transition: none;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .settingsPage > .settingsCapsule, .reviewPage > .settingsCapsule {
+    background: #f4f7fc;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+/* Queue popovers overlay the list; opening them never shifts the questions. */
+.reviewPage > .settingsCapsule.reviewToolbar {
+  background: #f3f4f5;
+  border: 1px solid #e7e8ea;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.reviewToolbar .reviewFilterToggle,
+.reviewToolbar .reviewIconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 34px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #657080;
+  box-shadow: none;
+}
+.reviewToolbar .reviewIconButton .uiIcon,
+.reviewToolbar .reviewIconButton .morphIcon { width: 19px; height: 19px; }
+.reviewToolbar .reviewIconButton.active,
+.reviewToolbar .reviewIconButton:hover { color: var(--mn-accent); background: transparent; }
+.reviewToolbar .reviewIconButton:disabled { opacity: .35; }
+.reviewToolbar .reviewFilterDropdown,
+.reviewToolbar .reviewSortDropdown {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 20;
+  width: min(350px, calc(100vw - 36px));
+  max-height: min(420px, calc(100dvh - 160px));
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #e1e4e8;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 8px 24px #23304720;
+  padding: 0;
+}
+.reviewFilterHeader { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 12px; background: #fff; border-bottom: 1px solid #edf0f2; }
+.reviewLevelSegments { display: flex; border-radius: 999px; overflow: hidden; background: #eceef1; }
+.reviewToolbar .reviewLevelSegments button { min-height: 26px; padding: 0 13px; border: 0; border-radius: 0; background: #eceef1; color: #8a9099; box-shadow: none; font-size: 12px; }
+.reviewToolbar .reviewLevelSegments button + button { border-left: 1px solid #ffffff80; }
+.reviewToolbar .reviewFilterReset { flex: none; padding: 2px 4px; min-height: 26px; border: 0; background: transparent; color: var(--mn-accent); box-shadow: none; font-size: 12px; }
+.reviewSourceTree { padding: 5px 0; }
+.reviewSourceRow { display: flex; align-items: center; min-height: 38px; margin: 2px 4px; padding-right: 10px; border-radius: 10px; cursor: pointer; color: #30343b; }
+.reviewToolbar .reviewSourceExpand, .reviewSourceSpacer { flex: none; display: grid; place-items: center; width: 26px; height: 32px; min-height: 0; padding: 0; border: 0; background: transparent; box-shadow: none; }
+.reviewSourceExpand .uiIcon { width: 14px; height: 14px; }
+.reviewToolbar .reviewSourceSelect { display: flex; align-items: center; flex: 1; gap: 8px; min-width: 0; min-height: 36px; padding: 4px; border: 0; background: transparent; box-shadow: none; text-align: left; color: inherit; font-size: 13px; }
+.reviewSourceSelect > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reviewSourceSelect small { margin-left: auto; color: inherit; opacity: .65; }
+.reviewSourceRow[data-selection="all"] { background: rgb(14 141 253 / 20%); color: var(--mn-accent); }
+.reviewSourceRow[data-selection="partial"] { background: rgb(14 141 253 / 8%); }
+.reviewToolbar .reviewSourceExpand { color: inherit; }
+.reviewSourceRow[data-selection="none"]:hover { background: #f5f7f9; }
+.reviewToolbar .reviewSortDropdown { width: 210px; padding: 5px; }
+.reviewToolbar .reviewSortDropdown button { display: flex; width: 100%; justify-content: space-between; align-items: center; padding: 8px 12px; border: 0; border-radius: 10px; background: transparent; box-shadow: none; color: #475467; text-align: left; }
+.reviewSortDropdown button small { display: block; font-size: 10px; color: #939aa5; }
+.reviewToolbar .reviewSortDropdown button[aria-pressed="true"] { background: #edf5ff; color: var(--mn-accent); }
+@media (max-width: 520px) {
+  .reviewPage > .settingsCapsule.reviewToolbar { flex-wrap: wrap; height: auto; padding: 4px; border-radius: 20px; }
+  .reviewToolbar nav { flex: 1 0 100%; height: 36px; }
+  .reviewToolbar > .reviewActionCapsule { margin-left: auto; height: 40px; }
+  .reviewLevelSegments button { padding-inline: 9px; }
+}
+
+
+/* Action icons use the shared accent without adding a selected surface. */
+.reviewToolbar .reviewIconButton.active,
+.reviewToolbar .reviewIconButton:hover,
+.reviewToolbar .reviewFilterToggle.active,
+.reviewToolbar .reviewFilterToggle:hover { color: var(--mn-accent); background: transparent; }
+.reviewToolbar .reviewIconButton:active,
+.reviewToolbar .reviewFilterToggle:active { opacity: .65; }
+.reviewToolbar .reviewStartButton {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  height: 34px; min-height: 34px; padding: 0 14px; border: 0; border-radius: 999px;
+  color: #fff; background: var(--mn-accent); box-shadow: none; font-size: 13px;
+}
+.reviewToolbar .reviewStartButton:hover { background: var(--mn-accent); filter: brightness(.96); }
+.reviewToolbar .reviewStartButton:active { transform: scale(.97); }
+.reviewToolbar .reviewStartButton:disabled { opacity: .4; }
+.reviewToolbar .reviewFilterHeader { background: #f3f4f5; backdrop-filter: none; -webkit-backdrop-filter: none; }
+.reviewToolbar .reviewLevelSegments button[aria-pressed="true"] { color: var(--mn-accent); background: #e3e5e8; }
+.reviewToolbar .reviewSourceRow[data-selection="all"],
+.reviewToolbar .reviewSourceRow[data-selection="partial"] { color: var(--mn-accent); background: transparent; }
+.reviewToolbar .reviewSortDropdown button[aria-pressed="true"] { color: var(--mn-accent); background: transparent; }
+.reviewToolbar .reviewFilterReset { color: var(--mn-accent); }
+
+.reviewToolbar .reviewSourceExpand[aria-expanded="true"],
+.reviewPage .questionFoldButton.active { color: var(--mn-accent); background: transparent; }
+
+/* Header and source rows occupy separate boxes: rows never scroll beneath it. */
+.reviewToolbar .reviewFilterDropdown { display: flex; flex-direction: column; overflow: hidden; isolation: isolate; }
+.reviewToolbar .reviewFilterHeader {
+  position: relative; top: auto; flex: none; min-height: 40px; z-index: 2;
+  background: #f3f4f5; opacity: 1; pointer-events: auto; isolation: isolate;
+}
+.reviewToolbar .reviewSourceTree { position: relative; z-index: 0; min-height: 0; flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; }

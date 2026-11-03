@@ -3,6 +3,7 @@ import { escapeHtml } from "../../../src/html-utils"
 const DAY = 86400000
 const levelCurves = [[1, 3, 7], [2, 5, 10], [14]]
 let customCategories = ["计算题", "概念辨析", "需要重做"]
+let debugAnswerPreviewMode = "custom"
 let debugModeEnabled = false
 let reviewAlgorithm = "fixed"
 let debugUpdateDownloadsEnabled = false
@@ -10,7 +11,7 @@ let debugAutoInstallUpdatesEnabled = false
 let pluginEnabled = true
 let previewClipper = { mode: false, running: false, started: false, excerptTitle: true, toolLabels: {} }
 let sourceLocateMode = "locate"
-let previewPersonalSettings = { sceneWorkbenchEnabled: false, entranceDefaultMode: "practice", boundHandwritingDisplay: "doubleTap", mistakeListDisplay: "always", subcardAnswerDisplay: "window", answerMaskStyle: "dark", answerMaskColor: "#141922", maskImageConfigured: false, autoCollapseComments: false, reviewExpandedCommentCount: 2 }
+let previewPersonalSettings = { globalQuestionColors: [], sceneWorkbenchEnabled: false, entranceDefaultMode: "practice", boundHandwritingDisplay: "doubleTap", mistakeListDisplay: "always", subcardAnswerDisplay: "window", answerMaskStyle: "dark", answerMaskColor: "#141922", maskImageConfigured: false, autoCollapseComments: false, reviewExpandedCommentCount: 2, reviewCompletionConfetti: true }
 let manualTodayIds = []
 let previewBindings = [
   { key: "questions::root::main", notebookId: "questions", notebookTitle: "多元微分", sourceRootNodeId: "main", sourceTitle: "考研真题", answerTitle: "多元微分答案 › 标准答案", hasAnswerMindMap: true, selectionMode: "mixed", designatedAnswer: "mindmap", questionColors: [1], availableColors: [0, 1, 2, 3] },
@@ -300,6 +301,7 @@ export async function previewSend(command, payload = null) {
       regexRules: { questionPattern: "", answerPattern: "" },
       debugModeEnabled,
       debugUpdateDownloadsEnabled,
+      debugAnswerPreviewMode,
       debugAutoInstallUpdatesEnabled,
       pluginEnabled,
       sourceLocateMode,
@@ -332,6 +334,10 @@ export async function previewSend(command, payload = null) {
     previewBindings = previewBindings.filter(row => row.key !== payload?.key)
     return { deleted: true }
   }
+  if (command === "addGlobalAnswerBindingColor") {
+    previewPersonalSettings.globalQuestionColors = [...new Set([...previewPersonalSettings.globalQuestionColors, 3])]
+    return { color: 3 }
+  }
   if (command === "addManagedAnswerBindingColor") {
     const color = 3
     previewBindings = previewBindings.map(row => row.key === payload?.key ? { ...row, questionColors: [...new Set([...row.questionColors, color])] } : row)
@@ -362,6 +368,11 @@ export async function previewSend(command, payload = null) {
     debugModeEnabled = payload?.enabled === true
     if (!debugModeEnabled) { debugUpdateDownloadsEnabled = false; debugAutoInstallUpdatesEnabled = false }
     return { enabled: debugModeEnabled, algorithm: debugModeEnabled ? reviewAlgorithm : "fixed" }
+  }
+  if (command === "chooseAnswerPreviewMode") {
+    if (!debugModeEnabled) throw new Error("请先开启调试模式")
+    debugAnswerPreviewMode = debugAnswerPreviewMode === "native" ? "custom" : "native"
+    return { debugAnswerPreviewMode }
   }
   if (command === "setDebugUpdateDownloads") {
     if (!debugModeEnabled) throw new Error("请先开启调试模式")

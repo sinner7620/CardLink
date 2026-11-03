@@ -1,6 +1,7 @@
 import React from "react"
 
 const paths = {
+  sort: '<path d="M8 4v16m-4-4 4 4 4-4M14 5h6M14 10h4M14 15h2"/>',
   handwrite: '<path d="m16 3 5 5-11 11-6 1 1-6zM14 5l5 5M4 22h16"/>',
   window: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/>',
   overview: '<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><path d="M14 17.5h7M17.5 14v7"/>',

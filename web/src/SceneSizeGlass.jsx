@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from "react"
 import { DEFAULT_SCENE_PRESETS } from "./lib/sceneWindow"
 import { useSizeGlassFooter } from "./lib/useSizeGlassFooter"
-export function SceneSizeGlass({ size, presets, onResize, onSave, onRemove, onClose }) {
+export function SceneSizeGlass({ size, presets, defaultSize, onDefault, onReset, onResize, onSave, onRemove, onClose }) {
   const [draft, setDraft] = useState(size), [notice, setNotice] = useState("")
-  const glass = useSizeGlassFooter(onResize, onClose, `${presets.length}:${notice}`)
+  const glass = useSizeGlassFooter(onReset, onClose, `${presets.length}:${notice}`)
   useEffect(() => setDraft(size), [size.width, size.height])
   function commit(key) {
     const value = Number(draft[key])
@@ -30,8 +30,12 @@ export function SceneSizeGlass({ size, presets, onResize, onSave, onRemove, onCl
           try { onRemove(preset); setNotice("已删除预设") } catch { setNotice("预设删除失败，请重试") }
         }}>×</button>}
       </span>)}</div>
+      <label className="sceneDefaultPreset"><span>默认预设</span><select aria-label="默认窗口预设" value={`${defaultSize.width}x${defaultSize.height}`} onChange={event => {
+        const preset = allPresets.find(item => `${item.width}x${item.height}` === event.target.value)
+        try { onDefault(preset); setNotice("重置或重启时使用此预设") } catch { setNotice("默认预设保存失败，请重试") }
+      }}>{allPresets.map((preset, index) => <option key={index} value={`${preset.width}x${preset.height}`}>预设{index + 1} · {preset.width}×{preset.height}</option>)}</select></label>
       <div className="sceneSizeFooter">
-        <button ref={glass.reset} type="button" className="sceneGlassFooterAction" aria-label="恢复默认" disabled={Boolean(glass.failure)} onPointerDown={glass.pointerDown} onClick={event => { if (event.detail === 0) onResize(640, 620) }} />
+        <button ref={glass.reset} type="button" className="sceneGlassFooterAction" aria-label="恢复默认" disabled={Boolean(glass.failure)} onPointerDown={glass.pointerDown} onClick={event => { if (event.detail === 0) onReset() }} />
         <button ref={glass.done} type="button" className="sceneGlassFooterAction" aria-label="完成" disabled={Boolean(glass.failure)} onPointerDown={glass.pointerDown} onClick={event => { if (event.detail === 0) onClose() }} />
       </div>
       {glass.failure && <p role="alert" className="sceneSizeNotice">玻璃按钮加载失败：{glass.failure}。按 Esc 关闭。</p>}

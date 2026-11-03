@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import test from "node:test"
 import { runInNewContext } from "node:vm"
-import { transpileModule } from "typescript"
+import { createSourceFile, isFunctionDeclaration, ScriptTarget, transpileModule } from "typescript"
 
 function moduleAt(file: string, modules: Record<string, any>) {
   const context = { exports: {} as any, require: (name: string) => modules[name] ?? {} }
@@ -14,6 +14,128 @@ function storage() {
   const data = new Map<string, any>()
   return { data, getLocalDataByKey: (key: string) => data.get(key), setLocalDataByKey: (value: any, key: string) => data.set(key, JSON.parse(JSON.stringify(value))) }
 }
+
+function functionAt(file: string, name: string, globals: Record<string, any>) {
+  const source = createSourceFile(file, readFileSync(file, "utf8"), ScriptTarget.Latest, true)
+  const declaration = source.statements.find(statement => isFunctionDeclaration(statement) && statement.name?.text === name)
+  assert.ok(declaration, `${name} 应存在`)
+  const context = { exports: {} as any, ...globals }
+  runInNewContext(transpileModule(declaration.getText(source), { compilerOptions: { module: 1, target: 7 } }).outputText, context)
+  return context.exports[name]
+}
+
+function snapshot(value: any) {
+  return JSON.parse(JSON.stringify(value))
+}
+
+test("复习完成彩纸默认开启，旧设置缺少字段时保留其他偏好，开关可保存并重启恢复", () => {
+  const store = storage()
+  const modules = { marginnote: store, "./mistake-review-settings": { normalizeMistakeReviewCurves: (value: any) => value ?? {} } }
+  const load = () => moduleAt("src/settings.ts", modules)
+  let api = load()
+  assert.equal(api.loadMatcherSettings().reviewCompletionConfetti, true)
+  api.saveMatcherSettings({ mistakeListDisplay: "autoHide", entranceDefaultMode: "clipper", reviewExpandedCommentCount: 5, globalQuestionColors: [1, 3] })
+  const expected = snapshot(api.loadMatcherSettings())
+  for (const value of store.data.values()) delete value.reviewCompletionConfetti
+  api = load()
+  assert.deepEqual(snapshot(api.loadMatcherSettings()), expected, "缺少旧字段仍默认开启，不重置其他设置")
+
+  for (const enabled of [false, true]) {
+    api.saveMatcherSettings({ reviewCompletionConfetti: enabled })
+    assert.deepEqual(snapshot(api.loadMatcherSettings()), { ...expected, reviewCompletionConfetti: enabled })
+    api = load()
+    assert.deepEqual(snapshot(api.loadMatcherSettings()), { ...expected, reviewCompletionConfetti: enabled }, "重启后保留开关及其他偏好")
+    api.saveMatcherSettings({ reviewExpandedCommentCount: 6 })
+    api = load()
+    assert.equal(api.loadMatcherSettings().reviewCompletionConfetti, enabled, "保存其他偏好不能覆盖开关")
+    api.saveMatcherSettings({ reviewExpandedCommentCount: 5 })
+  }
+})
+
+test("复习完成彩纸保存非法值时保留当前开关及其他设置", () => {
+  const store = storage()
+  const modules = { marginnote: store, "./mistake-review-settings": { normalizeMistakeReviewCurves: (value: any) => value ?? {} } }
+  const load = () => moduleAt("src/settings.ts", modules)
+  let api = load()
+  api.saveMatcherSettings({ boundHandwritingDisplay: "always", autoCollapseComments: true, answerMaskColor: "#123456" })
+  for (const enabled of [false, true]) {
+    api.saveMatcherSettings({ reviewCompletionConfetti: enabled })
+    const expected = snapshot(api.loadMatcherSettings())
+    for (const invalid of ["false", "true", 0, 1, null, undefined, [], {}, new Boolean(false)]) {
+      api.saveMatcherSettings({ reviewCompletionConfetti: invalid })
+      assert.deepEqual(snapshot(api.loadMatcherSettings()), expected, `非法值 ${String(invalid)} 不覆盖当前设置`)
+      api = load()
+      assert.deepEqual(snapshot(api.loadMatcherSettings()), expected, "重启后仍保留当前设置")
+    }
+  }
+})
+
+test("原生个性设置命令仅接受布尔彩纸开关，匹配设置快照包含当前开关", async () => {
+  const store = storage()
+  const modules = { marginnote: store, "./mistake-review-settings": { normalizeMistakeReviewCurves: (value: any) => value ?? {} } }
+  const load = () => moduleAt("src/settings.ts", modules)
+  let api = load()
+  api.saveMatcherSettings({ entranceDefaultMode: "clipper", reviewExpandedCommentCount: 4 })
+  const expected = snapshot(api.loadMatcherSettings())
+  const matching = functionAt("src/plugin.ts", "answerMatchingSettingsData", {
+    loadMatcherSettings: () => api.loadMatcherSettings(),
+    currentNotebookId: () => undefined,
+    loadBindings: () => ({}),
+    matchingModeLabel: () => "完整标题匹配"
+  })
+  const writes: any[] = []
+  const nativeModules: Record<string, any> = {
+    "./settings": {
+      loadMatcherSettings: () => api.loadMatcherSettings(),
+      saveMatcherSettings: (value: any) => { writes.push(snapshot(value)); api.saveMatcherSettings(value) }
+    },
+    "./plugin": { answerMatchingSettingsData: matching, managedAnswerBindings: () => [] },
+    "./question-clipper": { clipperSnapshot: () => ({}) },
+    "./ai-subsystem": { isAICommand: () => false },
+    "./note-navigation": { captureDiagnosticError() {} },
+    "./error-messages": { presentError: (error: any) => error }
+  }
+  const context: any = { exports: {}, self: {}, require: (name: string) => nativeModules[name] ?? {} }
+  runInNewContext(transpileModule(readFileSync("src/rails-core.ts", "utf8"), { compilerOptions: { module: 1, target: 7 } }).outputText, context)
+  const bridge = context.__MN_ANSWER_CORE_GLOBAL__.bridge
+  assert.equal(matching().reviewCompletionConfetti, true)
+  assert.equal((await bridge("bindingSettingsSnapshot", {})).matching.reviewCompletionConfetti, true)
+
+  for (const enabled of [false, true]) {
+    const result = await bridge("setPersonalSetting", { key: "reviewCompletionConfetti", value: enabled })
+    assert.deepEqual(writes[writes.length - 1], { reviewCompletionConfetti: enabled }, "原生命令只保存指定开关")
+    assert.equal(result.reviewCompletionConfetti, enabled, "命令响应包含更新后的开关")
+    assert.equal(result.entranceDefaultMode, "clipper")
+    assert.equal(result.reviewExpandedCommentCount, 4)
+    api = load()
+    assert.deepEqual(snapshot(api.loadMatcherSettings()), { ...expected, reviewCompletionConfetti: enabled })
+    assert.equal((await bridge("bindingSettingsSnapshot", {})).matching.reviewCompletionConfetti, enabled)
+    const writeCount = writes.length
+    for (const invalid of ["false", "true", 0, 1, null, undefined, [], {}, new Boolean(false)]) {
+      await assert.rejects(bridge("setPersonalSetting", { key: "reviewCompletionConfetti", value: invalid }))
+      assert.equal(writes.length, writeCount, "非法载荷必须在原生分发层拒绝，不能依赖存储层规范化")
+      api = load()
+      assert.deepEqual(snapshot(api.loadMatcherSettings()), { ...expected, reviewCompletionConfetti: enabled })
+      assert.equal(matching().reviewCompletionConfetti, enabled)
+    }
+  }
+  assert.deepEqual(writes, [{ reviewCompletionConfetti: false }, { reviewCompletionConfetti: true }])
+})
+
+test("答案缩放模式默认插件、可持久化原生选择，非法值不覆盖", () => {
+  const store = storage()
+  const modules = { marginnote: store, "./mistake-review-settings": { normalizeMistakeReviewCurves: () => ({}) } }
+  let api = moduleAt("src/settings.ts", modules)
+  assert.equal(api.loadMatcherSettings().debugAnswerPreviewMode, "custom")
+  api.saveMatcherSettings({ debugModeEnabled: true, debugAnswerPreviewMode: "native" })
+  api = moduleAt("src/settings.ts", modules)
+  assert.equal(api.loadMatcherSettings().debugAnswerPreviewMode, "native")
+  api.saveMatcherSettings({ debugAnswerPreviewMode: "bad" })
+  assert.equal(api.loadMatcherSettings().debugAnswerPreviewMode, "native")
+  api.saveMatcherSettings({ debugModeEnabled: false })
+  assert.equal(api.loadMatcherSettings().debugModeEnabled, false)
+  assert.equal(api.loadMatcherSettings().debugAnswerPreviewMode, "native", "保留选择，是否启用由调试开关控制")
+})
 
 test("多答案记住最后选择；重启、索引重排、题目和学习集隔离及失效回退", () => {
   const store = storage()
@@ -148,4 +270,19 @@ test("自动安装设置默认关闭，随调试模式关闭清除，重开不�
   api.saveMatcherSettings({ debugModeEnabled: false })
   api.saveMatcherSettings({ debugModeEnabled: true })
   assert.equal(api.loadMatcherSettings().debugAutoInstallUpdatesEnabled, false)
+})
+
+test('全局题目颜色规范化、持久化并与所有绑定局部颜色合并', () => {
+  const disk = storage()
+  const settings = moduleAt('src/settings.ts', { marginnote: disk, './mistake-review-settings': { normalizeMistakeReviewCurves: () => ({}) } })
+  settings.saveMatcherSettings({ globalQuestionColors: [1, 1, 3, -1, 50, '2'] })
+  assert.deepEqual(Array.from(settings.loadMatcherSettings().globalQuestionColors), [1, 3])
+  const binding = moduleAt('src/binding.ts', {})
+  const store = moduleAt('src/store.ts', { marginnote: disk, './binding': binding, './settings': settings })
+  const explicit = { notebookId: 'answers', questionColors: [4] }
+  assert.deepEqual(Array.from(store.getBindingForMode({ book: explicit }, 'book', undefined, true).questionColors), [1, 3, 4])
+  assert.deepEqual(Array.from(store.getBindingForMode({ book: { notebookId: 'answers' } }, 'book', undefined, true).questionColors), [1, 3])
+  assert.equal(explicit.questionColors.length, 1)
+  settings.saveMatcherSettings({ globalQuestionColors: [] })
+  assert.equal(store.getBindingForMode({ book: { notebookId: 'answers' } }, 'book', undefined, true).questionColors, undefined)
 })
