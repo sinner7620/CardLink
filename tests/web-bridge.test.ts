@@ -13,7 +13,7 @@ test("面板恢复独立刷新摘题状态，错题版本不变或 skipReload �
     const state = { clipper: { started: true }, refreshes: 0, listLoads: 0 }
     const callback = runInNewContext(`(${handler})`, {
       setConsentAttempt() {}, touchLocateOnShow() {},
-      refreshBindingSettings: async () => { state.clipper = { started: false }; state.refreshes++ },
+      refreshOCR: () => {}, refreshBindingSettings: async () => { state.clipper = { started: false }; state.refreshes++ },
       setError: (message: string) => assert.fail(message),
       initialLoadCompleteRef: { current: true },
       dataRef: { current: { mistakes: { revision: "same" } } },
@@ -539,7 +539,7 @@ test("PDF 预览请求即时终账任务槽，不残留 rendering 幽灵任务",
   const rejectBody = source.match(/reject: function \(error\) \{[\s\S]*?\n        \}/)?.[0] || ""
   assert.match(rejectBody, /if \(isPreview\) controller\.exportPdfTask = null;/)
   // 预览与正式导出共用互斥：任何活动任务都拒绝新请求，旧版残留的预览幽灵任务直接丢弃
-  assert.match(source, /active\.preview && \(active\.status === "rendering" \|\| active\.status === "saving"\)/)
+  assert.match(source, /active\.preview && \(active\.status === "preparing" \|\| active\.status === "rendering" \|\| active\.status === "saving"\)/)
   assert.match(source, /已有 PDF 导出任务进行中/)
 })
 

@@ -29,8 +29,10 @@ test("4.5.0 门限解析宿主版本，场景状态只接受明确 true", () => 
   }
 })
 
-function native(version = "4.5.0", permitted = true, loadResult: any = true) {
+function native(version = "5.0.0", permitted = true, loadResult: any = true) {
   const calls: any[] = [], timers: (() => void)[] = [], lockTimers: (() => void)[] = []
+  const lockIntervals: number[] = []
+  let activeLocks = 0
   const owner: any = { window: "window" }, controller: any = { addon: owner }
   const panel: any = {
     loadPanel() { calls.push("load"); return loadResult },
@@ -48,20 +50,21 @@ function native(version = "4.5.0", permitted = true, loadResult: any = true) {
     Application: { sharedInstance: () => ({ appVersion: version, studyController: () => "study" }) },
     AddonWebPanel: { panel: () => { calls.push("factory"); return permitted ? panel : null } },
     NSUserDefaults: { standardUserDefaults: () => ({ setObjectForKey() {} }) },
-    NSTimer: { scheduledTimerWithTimeInterval: (_delay: number, _repeat: boolean, callback: () => void) => {
+    NSTimer: { scheduledTimerWithTimeInterval: (delay: number, repeat: boolean, callback: () => void) => {
       let active = true
-      ;(_repeat ? lockTimers : timers).push(() => { if (active) callback() })
-      return { invalidate() { active = false } }
+      if (repeat) { activeLocks++; lockIntervals.push(delay) }
+      ;(repeat ? lockTimers : timers).push(() => { if (active) callback() })
+      return { invalidate() { if (active && repeat) activeLocks--; active = false } }
     } },
     __MNAM_WEB_BRIDGE_GLOBAL__: { dispatch: async (context: any, command: string, payload: any) => {
       assert.equal(context.addon, owner); return { command, payload }
     } },
-    __MN_ANSWER_CORE_GLOBAL__: { sceneWorkbenchEnabled: () => true, annotationLog() {}, cardToolbar: { isEnabled: () => true },
+    __MN_ANSWER_CORE_GLOBAL__: { isSceneMode: () => /^\d+\./.test(version) && parseInt(version, 10) >= 5, notifySceneUnavailable(message: string) { calls.push({ message }) }, annotationLog() {}, cardToolbar: { isEnabled: () => true },
       closeCardMistakePanel(target: any) { assert.equal(target, owner); calls.push('closeMistakePanel') } }
   }
   runInNewContext(readFileSync("rails-native/SceneMedia.js", "utf8"), scope)
   runInNewContext(readFileSync("rails-native/SceneWorkbench.js", "utf8"), scope)
-  return { calls, timers, lockTimers, owner, controller, panel, legacy, scope, helper: scope.__MNAM_SCENE_WORKBENCH_GLOBAL__ }
+  return { calls, timers, lockTimers, lockIntervals, get activeLocks() { return activeLocks }, owner, controller, panel, legacy, scope, helper: scope.__MNAM_SCENE_WORKBENCH_GLOBAL__ }
 }
 
 function fadedNativeView(host: any, alpha = .6, width = 640, height = 520) {
@@ -118,7 +121,7 @@ test('layer 写入失败或不可读时仅调用可用的 setAlpha；没有 setA
     target.layer = { get opacity() { if (unreadable) throw Error('not exported'); return .6 }, set opacity(_v) { throw Error('readonly') } };
     target.setAlpha = (v: number) => { target.alpha = v; calls++ };
     host.subviews = [nativeWeb(target)]; h.owner.window = host;
-    h.legacy.showPanel(h.controller); h.lockTimers[0]();
+    h.legacy.showPanel(h.controller);
     assert.equal(calls, 1); assert.equal(target.alpha, 1);
     assert.equal(h.owner.cardLinkSceneOpacityStatus.event, 'panel.opacityRestored');
   }
@@ -141,7 +144,16 @@ test('首次自动等待淡化；已绑定容器移除后重新查找新容器�
   now += 1000; h.lockTimers[0](); assert.equal(next.layer.opacity, 1);
   h.panel.onMessage('sceneReady', { state: { immersive: true } });
   h.panel.onMessage('sceneMinimize'); next.layer.opacity = .6; h.lockTimers[0](); assert.equal(next.layer.opacity, .6);
-  h.legacy.showPanel(h.controller); h.lockTimers[0](); assert.equal(next.layer.opacity, 1);
+  assert.equal(h.activeLocks, 0);
+  h.panel.onMessage('sceneExpand'); assert.equal(next.layer.opacity, 1);
+  assert.equal(h.activeLocks, 1);
+  h.panel.onMessage('sceneCommandReady');
+  h.legacy.hidePanel(h.controller, true); assert.equal(h.activeLocks, 0);
+  next.layer.opacity = .6;
+  h.legacy.showPanel(h.controller); assert.equal(next.layer.opacity, 1);
+  h.legacy.showPanel(h.controller); assert.equal(h.activeLocks, 1);
+  assert.deepEqual(h.lockIntervals, [0.5, 0.5, 0.5]);
+  h.helper.dispose(h.owner); assert.equal(h.activeLocks, 0);
 });
 
 test('首次做题自动建立场景通道；握手和应用就绪后才完成，同步请求复用面板', async () => {
@@ -267,16 +279,17 @@ test("旧版本和未知版本保留经典面板，完全不创建场景面板",
   }
 })
 
-test("宿主不允许场景面板或加载明确失败时回退经典面板", () => {
-  for (const n of [native("4.5.0", false), native("4.5.0", true, false)]) {
+test("宿主不允许场景面板或加载明确失败时提示原因", () => {
+  for (const n of [native("5.0.0", false), native("5.0.0", true, false)]) {
     n.legacy.showPanel(n.controller)
-    assert.equal(n.calls[n.calls.length - 1], "classic")
+    assert.ok(n.calls.some(call => typeof call.message === "string"))
+    assert.ok(!n.calls.includes("classic"))
     assert.equal(n.helper.enabled(n.owner), false)
   }
 })
 
 test("正式场景面板确认状态后才能处理业务；异步回复使用 post", async () => {
-  const n = native("4.5.0", true, undefined)
+  const n = native("5.0.0", true, undefined)
   n.legacy.showPanel(n.controller)
   assert.deepEqual(n.calls.slice(0, 4), ["factory", "load", "classicHide", "show"])
   assert.ok(n.panel.onMessage("bridgeRequest", {}).error)
@@ -292,7 +305,29 @@ test("正式场景面板确认状态后才能处理业务；异步回复使用 p
   assert.equal(n.helper.enabled(n.owner), false)
   assert.ok(n.panel.onMessage("bridgeRequest", {}).error)
   n.timers[1]()
-  assert.equal(n.calls[n.calls.length - 1], "classic")
+  assert.ok(n.calls.some(call => typeof call.message === "string"))
+})
+
+test("场景工具读取独立关联回执，关闭与超时清理请求，迟到回执不会写入", async () => {
+  const n = native("5.1.0")
+  n.legacy.showPanel(n.controller)
+  await assert.rejects(n.helper.readClipperTools(n.owner), /打开当前场景/)
+  n.panel.onMessage("sceneReady", { state: { immersive: true } })
+  const reading = n.helper.readClipperTools(n.owner)
+  await assert.rejects(n.helper.readClipperTools(n.owner), /正在读取/)
+  const posted = n.calls.find(c => c.event === "clipperToolsRead")
+  assert.equal(n.panel.onMessage("clipperToolsReply", { requestId: "wrong", result: {} }).ignored, true)
+  const data = { available: true, excerptTools: { tools: [{ index: 42, label: "答案" }] } }
+  assert.equal(n.panel.onMessage("clipperToolsReply", { requestId: posted.data.requestId, result: data }).accepted, true)
+  assert.equal(await reading, data)
+  const timeout = n.helper.readClipperTools(n.owner)
+  const rejected = assert.rejects(timeout, /超时/)
+  n.timers[n.timers.length - 1]()
+  await rejected
+  const closing = n.helper.readClipperTools(n.owner)
+  const closed = assert.rejects(closing, /场景面板已关闭/)
+  n.helper.dispose(n.owner)
+  await closed
 })
 
 test("跨学习集恢复同一面板，关闭后清理并禁止迟到回复", async () => {
@@ -310,7 +345,7 @@ test("跨学习集恢复同一面板，关闭后清理并禁止迟到回复", as
   assert.equal(n.helper.enabled(n.owner), false)
 })
 
-test("启动资源或应用未完成渲染时，原生看门狗恢复经典面板", () => {
+test("启动资源或应用未完成渲染时，原生看门狗关闭场景面板并提示", () => {
   for (const confirmed of [false, true]) {
     const n = native()
     n.legacy.showPanel(n.controller)
@@ -319,7 +354,8 @@ test("启动资源或应用未完成渲染时，原生看门狗恢复经典面�
     assert.equal(n.helper.enabled(n.owner), false)
     assert.equal(n.panel.onMessage("sceneReady", { state: { immersive: true } }).enabled, false)
     n.timers[1]()
-    assert.equal(n.calls[n.calls.length - 1], "classic")
+    assert.ok(n.calls.some(call => typeof call.message === "string"))
+    assert.ok(!n.calls.includes("classic"))
   }
 })
 
@@ -387,6 +423,7 @@ function transport(apiReply?: (url: string, options: any) => any) {
   const window: any = {
     __MN_HOST_VERSION__: "4.5.0", CustomEvent: class { constructor(public type: string, public detailObject: any) {} get detail() { return this.detailObject.detail } },
     addEventListener: (name: string, handler: any) => (events[name] ||= []).push(handler),
+    removeEventListener: (name: string, handler: any) => { events[name] = (events[name] || []).filter(value => value !== handler) },
     dispatchEvent: (event: any) => (events[event.type] || []).forEach(handler => handler(event))
   }
   const target = { noteid: "question", topicid: "source-not-open", recordId: "record" }
@@ -415,8 +452,27 @@ function transport(apiReply?: (url: string, options: any) => any) {
   const client = scope.exports.createSceneTransport(sdk, window, async (url: string, options: any) => {
     calls.push({ url, options }); return { ok: true, text: async () => 'runtime writing guide', json: async () => apiReply && !url.endsWith('/ui-state') ? apiReply(url, options) : ({ state: { immersive, topicid: "topic", focusnoteid: "wrong-focus" } }) }
   }, policy(), annotation)
-  return { client, calls, handlers, window, annotation, sdk, failCloseDelivery() { closeDeliveryFails = true }, exit() { immersive = false }, enter() { immersive = true } }
+  return { client, calls, handlers, window, annotation, sdk, transportApi: scope.exports, events, failCloseDelivery() { closeDeliveryFails = true }, exit() { immersive = false }, enter() { immersive = true } }
 }
+
+test('场景摘录笔仅从面板读取当前模板，错误回传且销毁后不再读取', async () => {
+  const data = { available: true, template: { id: 'reading' }, excerptTools: { source: 'template', tools: [{ index: 42, label: '答案笔' }] } }
+  const t = transport(() => data)
+  t.window.dispatchEvent({ type: 'mn:clipperToolsRead', detail: { requestId: 'tools-1' } })
+  await new Promise(resolve => setImmediate(resolve))
+  const response = t.calls.find(c => c.name === 'clipperToolsReply')
+  assert.equal(response.payload.requestId, 'tools-1')
+  assert.equal(response.payload.result.excerptTools.tools[0].label, '答案笔')
+  assert.deepEqual(t.calls.filter(c => c.url).map(c => c.url), ['/bridge/v1/ui-state', '/bridge/v1/immersive/template'])
+  t.client.dispose(); t.calls.length = 0
+  t.window.dispatchEvent({ type: 'mn:clipperToolsRead', detail: { requestId: 'late' } })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(t.calls.length, 0)
+  const failed = transport(() => ({ error: { code: 'IN_PROCESS_NOT_ALLOWED', message: '没有读取许可' } }))
+  failed.window.dispatchEvent({ type: 'mn:clipperToolsRead', detail: { requestId: 'failed' } })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(failed.calls.find(c => c.name === 'clipperToolsReply').payload.error, '没有读取许可')
+})
 
 test('手写模式经场景通道读取真实能力，不可用时回传原因且不转开批注', async () => {
   const t = transport(url => url.endsWith('/capabilities') && !url.endsWith('/writing/capabilities')
@@ -726,7 +782,7 @@ test('已接收侧边反馈请求等待用户操作不超时，接收失败及�
     if (name === 'bridgeRequest') { request = payload; if (!acknowledge) return new Promise(() => {}) }
     return { accepted }
   } }
-  const transport = scope.exports.createSceneTransport(sdk, window, async () => ({ json: async () => ({ state: { immersive: true } }) }), policy(), null,
+  const transport = scope.exports.createSceneCommandTransport(sdk, window, async () => ({ json: async () => ({ state: { immersive: true } }) }), policy(),
     'card-menu-', (command: string, target: any) => command === 'cardMenuCommand' && target?.id === 'markMistake' ? null : 60000)
   let done = false
   const marking = transport.send('cardMenuCommand', { id: 'markMistake' }).then(() => { done = true })
@@ -750,7 +806,7 @@ test('已接收侧边反馈请求等待用户操作不超时，接收失败及�
 test('卡片命令宿主仅对标错等待保存取消，不解除查答案超时', async () => {
   let listener: any, timeout: any
   const scope: any = { exports: {}, window: { __MN_WORKBENCH_MOUNTING__: true, fetch() {}, CardLinkCardMenu: { listen(handler: any) { listener = handler } } },
-    document: { getElementById: () => ({}) }, require: () => ({ createSceneTransport: (...args: any[]) => { timeout = args[6]; return { send: async () => ({}) } } }) }
+    document: { getElementById: () => ({}) }, require: () => ({ createSceneCommandTransport: (...args: any[]) => { timeout = args[5]; return { send: async () => ({}) } } }) }
   runInNewContext(transpileModule(readFileSync('web/card-command-surface.js', 'utf8'), { compilerOptions: { module: 1, target: 7 } }).outputText, scope)
   scope.window.CardLinkCommandSurface.install({ call: async () => ({}) }, Promise.resolve())
   await listener({ id: 'markMistake', noteID: 'event' })
@@ -766,8 +822,8 @@ test("小面板与已打开工作台请求并行时，回复不会串到另一�
   const window: any = {__MN_HOST_VERSION__:'4.5.0',addEventListener:(name:string,handler:any)=>{if(name==='mn:bridgeResponse')events.push(handler)}}
   const sdk: any = {on(){},call:async(name:string,payload:any)=>{if(name==='sceneReady')return {enabled:true};if(name==='bridgeRequest')requests.push(payload);return {accepted:true}}}
   const fetch = async()=>({json:async()=>({state:{immersive:true}})})
-  const workbench=scope.exports.createSceneTransport(sdk,window,fetch,policy(),null)
-  const menu=scope.exports.createSceneTransport(sdk,window,fetch,policy(),null,'card-menu-')
+  const workbench=scope.exports.createSceneCommandTransport(sdk,window,fetch,policy(),'scene-')
+  const menu=scope.exports.createSceneCommandTransport(sdk,window,fetch,policy(),'card-menu-')
   let workbenchDone=false,menuDone=false
   const a=workbench.send('dashboard',{}).then(()=>{workbenchDone=true})
   const b=menu.send('cardMenuCommand',{}).then(()=>{menuDone=true})
@@ -780,10 +836,12 @@ test("小面板与已打开工作台请求并行时，回复不会串到另一�
 })
 
 
-test("场景总开关关闭不创建面板，开启仍须满足版本；关闭已有面板后再次打开回到经典", () => {
+test("面板跟随宿主模式自动切换，旧版本保留经典", () => {
   const n = native()
   let enabled = false
-  n.scope.__MN_ANSWER_CORE_GLOBAL__.sceneWorkbenchEnabled = () => enabled
+  n.scope.__MN_ANSWER_CORE_GLOBAL__.isSceneMode = () => enabled
+  n.owner.webController = n.controller
+  n.legacy.isVisible = () => true
   n.legacy.showPanel(n.controller)
   assert.deepEqual(n.calls, ["classic"])
   enabled = true
@@ -791,7 +849,7 @@ test("场景总开关关闭不创建面板，开启仍须满足版本；关闭�
   n.panel.onMessage("sceneReady", { state: { immersive: true } })
   assert.equal(n.helper.enabled(n.owner), true)
   enabled = false
-  n.legacy.showPanel(n.controller)
+  n.helper.syncMode(n.owner)
   assert.equal(n.helper.enabled(n.owner), false)
   assert.deepEqual(n.calls.slice(-2), ["hide", "classic"])
   const old = native("4.4.9")
@@ -799,11 +857,11 @@ test("场景总开关关闭不创建面板，开启仍须满足版本；关闭�
   assert.deepEqual(old.calls, ["classic"])
 })
 
-test("场景面板与手写须同时满足前置开关及已确认场景；已打开时关闭立即禁用手写", () => {
+test("场景面板和手写随宿主模式切换，并等待场景就绪", () => {
   const source = readFileSync("src/rails-core.ts", "utf8")
   const fn = source.match(/function sceneFeatures\([\s\S]*?\n\}/)![0]
   let enabled = false, confirmed = true
-  const scope: any = { exports: {}, loadMatcherSettings: () => ({ sceneWorkbenchEnabled: enabled }), self: {} }
+  const scope: any = { exports: {}, isSceneMode: () => enabled, self: {} }
   scope.__MNAM_SCENE_WORKBENCH_GLOBAL__ = { enabled: () => confirmed }
   runInNewContext(transpileModule(fn + "\nexports.features = sceneFeatures", { compilerOptions: { module: 1, target: 7 } }).outputText, scope)
   assert.equal(scope.exports.features().handwriting, false)
@@ -979,7 +1037,7 @@ test('首次安装不请求错题迁移，旧面板残留的迁移命令也不�
   const scope: any = { exports: {}, self: {}, __APP_VERSION__: 'test', isAICommand: () => false,
     loadMatcherSettings: () => ({}), sceneFeatures: () => ({}), consumePendingLocateHint() {},
     beginMistakeWorkbenchTransfer: () => ({}), getManualTodayIds: () => [], answerMatchingSettingsData: () => ({}),
-    clipperSnapshot: () => ({}), managedAnswerBindings: () => [], aiRuntimeEnabled: () => false,
+    clipperSnapshot: () => ({}), managedAnswerBindings: () => [],
     legacyMistakeTagMigrationCompleted: () => false,
     repairAndOrganizeMistakes: async () => { writes++ }, rememberLegacyMistakeTagMigration: () => { writes++ } }
   runInNewContext(transpileModule(fn + '\nexports.dispatch = bridgeInternal', { compilerOptions: { module: 1, target: 7 } }).outputText, scope)
@@ -1014,4 +1072,126 @@ test('丢弃命令只接受同令牌的新批注关闭回执；仍打开、旧�
   t.exit()
   assert.ok((await send('discard-exited', target)).error)
   assert.equal(discarded.length, 1)
+})
+
+
+test('卡片菜单与工作台共存，重复标错后练习请求只返回一次，宿主事件只处理一次', async () => {
+  const t = transport()
+  let menuListener: any, reads = 0, verdicts = 0, invalidations = 0, panelShows = 0, changes = 0
+  Object.assign(t.annotation, {
+    practiceConfig: async () => ({ available: true, reasons: [{ key: 'concept' }] }),
+    read: async () => { reads++; return { comments: [] } },
+    verdict: async () => { verdicts++; return { persisted: true } },
+    invalidate: () => { invalidations++ }
+  })
+  t.window.__MN_WORKBENCH_MOUNTING__ = true
+  t.window.fetch = async () => ({ json: async () => ({ state: { immersive: true } }) })
+  t.window.CardLinkHostPolicy = policy()
+  t.window.CardLinkCardMenu = { listen(handler: any) { menuListener = handler } }
+  t.window.__onPanelShow = () => { panelShows++ }
+  t.window.__onNativeDataChanged = () => { changes++ }
+  const scope: any = { exports: {}, window: t.window, document: { getElementById: () => ({}) }, require: () => t.transportApi }
+  runInNewContext(transpileModule(readFileSync('web/card-command-surface.js', 'utf8'), { compilerOptions: { module: 1, target: 7 } }).outputText, scope)
+  t.window.CardLinkCommandSurface.install(t.sdk, Promise.resolve())
+  for (let i = 0; i < 3; i++) {
+    await menuListener({ id: 'markMistake', noteID: 'question' })
+    for (const operation of ['practice-config', 'practice-history', 'practice-verdict', 'status']) {
+      const requestId = `${operation}-${i}`
+      t.window.dispatchEvent({ type: 'mn:reviewAnnotationOpen', detail: { requestId, target: { operation, noteid: 'question' } } })
+      await new Promise(resolve => setImmediate(resolve))
+      const replies = t.calls.filter(c => c.name === 'reviewAnnotationReply' && c.payload.requestId === requestId)
+      assert.equal(replies.length, 1)
+      assert.equal(replies[0].payload.error, undefined)
+      if (operation === 'practice-config') assert.equal(replies[0].payload.result.available, true)
+    }
+  }
+  assert.equal(reads, 3); assert.equal(verdicts, 3)
+  await t.handlers.practice({ noteid: 'other', saved: false })
+  await t.handlers.comments({ noteid: 'other' })
+  assert.equal(invalidations, 2)
+  t.window.dispatchEvent({ type: 'mn:panelShown' })
+  t.window.dispatchEvent({ type: 'mn:nativeDataChanged' })
+  assert.equal(panelShows, 1); assert.equal(changes, 1)
+  assert.equal(t.events['mn:reviewAnnotationOpen'].length, 1)
+})
+
+test('工作台控制器替换和销毁后，旧 DOM 与 SDK 回调不再处理事件', async () => {
+  const t = transport()
+  let oldInvalidations = 0, newConfigs = 0
+  Object.assign(t.annotation, { invalidate: () => { oldInvalidations++ } })
+  const oldPractice = t.handlers.practice, oldComments = t.handlers.comments
+  const replacement = t.transportApi.createSceneTransport(t.sdk, t.window, async () => ({ json: async () => ({ state: { immersive: true } }) }), policy(), {
+    practiceConfig: async () => { newConfigs++; return { available: true } }
+  })
+  await oldPractice({ noteid: 'question' }); await oldComments({ noteid: 'question' })
+  assert.equal(oldInvalidations, 0)
+  t.window.dispatchEvent({ type: 'mn:reviewAnnotationOpen', detail: { requestId: 'replacement', target: { operation: 'practice-config' } } })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(newConfigs, 1)
+  assert.equal(t.calls.filter(c => c.name === 'reviewAnnotationReply').length, 1)
+  assert.equal(t.events['mn:reviewAnnotationOpen'].length, 1)
+  replacement.dispose(); replacement.dispose()
+  assert.equal(t.events['mn:reviewAnnotationOpen'].length, 0)
+  assert.equal(t.events['mn:bridgeResponse'].length, 0)
+  t.window.dispatchEvent({ type: 'mn:reviewAnnotationOpen', detail: { requestId: 'disposed', target: { operation: 'practice-config' } } })
+  assert.equal(newConfigs, 1)
+  await assert.rejects(replacement.send('dashboard', {}), /已销毁/)
+})
+
+test('缺少批注客户端时在注册监听前明确拒绝，命令通道销毁结束等待', async () => {
+  const t = transport()
+  assert.throws(() => t.transportApi.createSceneTransport(t.sdk, t.window, t.window.fetch, policy(), null), /练习批注客户端尚未初始化/)
+  assert.equal(t.events['mn:reviewAnnotationOpen'].length, 1)
+  const sdk = { call: async (name: string) => name === 'sceneReady' ? { enabled: true } : { accepted: true } }
+  const menu = t.transportApi.createSceneCommandTransport(sdk, t.window, async () => ({ json: async () => ({ state: { immersive: true } }) }), policy())
+  const waiting = assert.rejects(menu.send('cardMenuCommand', {}), /已销毁/)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(menu.busy(), true)
+  menu.dispose(); menu.dispose()
+  await waiting
+  assert.equal(menu.busy(), false)
+  assert.equal(t.events['mn:bridgeResponse'].length, 1)
+  await assert.rejects(menu.send('cardMenuCommand', {}), /已销毁/)
+})
+
+
+test('替换控制器后旧配置检查的迟到结果不再回传', async () => {
+  const t = transport()
+  let complete!: (value: any) => void
+  Object.assign(t.annotation, { practiceConfig: () => new Promise(resolve => { complete = resolve }) })
+  const request = { type: 'mn:reviewAnnotationOpen', detail: { requestId: 'pending-config', target: { operation: 'practice-config' } } }
+  t.window.dispatchEvent(request)
+  await new Promise(resolve => setImmediate(resolve))
+  const replacement = t.transportApi.createSceneTransport(t.sdk, t.window, async () => ({ json: async () => ({ state: { immersive: true } }) }), policy(), {
+    practiceConfig: async () => ({ available: true })
+  })
+  t.window.dispatchEvent(request)
+  await new Promise(resolve => setImmediate(resolve))
+  complete({ available: false })
+  await new Promise(resolve => setImmediate(resolve))
+  const replies = t.calls.filter(c => c.name === 'reviewAnnotationReply')
+  assert.equal(replies.length, 1)
+  assert.equal(replies[0].payload.result.available, true)
+  replacement.dispose()
+})
+
+test('销毁后重建同前缀命令通道，迟到回复不能完成新请求', async () => {
+  const t = transport(), requests: any[] = []
+  const sdk = { call: async (name: string, payload: any) => {
+    if (name === 'bridgeRequest') requests.push(payload)
+    return name === 'sceneReady' ? { enabled: true } : { accepted: true }
+  } }
+  const create = () => t.transportApi.createSceneCommandTransport(sdk, t.window, async () => ({ json: async () => ({ state: { immersive: true } }) }), policy())
+  const old = create()
+  const cancelled = assert.rejects(old.send('cardMenuCommand', {}), /已销毁/)
+  await new Promise(resolve => setImmediate(resolve)); old.dispose(); await cancelled
+  const current = create(); let done = false
+  const waiting = current.send('cardMenuCommand', {}).then(() => { done = true })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.notEqual(requests[0].requestId, requests[1].requestId)
+  t.window.dispatchEvent({ type: 'mn:bridgeResponse', detail: { requestId: requests[0].requestId, payload: {} } })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(done, false)
+  t.window.dispatchEvent({ type: 'mn:bridgeResponse', detail: { requestId: requests[1].requestId, payload: {} } })
+  await waiting; current.dispose()
 })

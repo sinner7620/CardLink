@@ -12,7 +12,14 @@ function harness() {
   const notes = new Map<string, any>(), timers: Array<() => void> = [], stored: Record<string, any> = { "cardlink.question-clipper.v1": { tools: { title: "ToolTextExcerpt", question: "ToolRectCut", answer: "ToolRectCut" } } }
   const owner: any = { window: {} }, toolbar: boolean[] = [], checked = new Set(["ToolTextExcerpt"])
   const notices: string[] = []
+  const diagnostics: Array<{ scope: string; event: string; detail: string }> = []
+  const debugSettings = { debugModeEnabled: true }
   const choice = { index: 0 }
+  const choiceQueue: number[] = []
+  const toolChoices: string[][] = []
+  const sceneConfig: any = { available: true, template: { id: "reading" }, excerptTools: { source: "template",
+    tools: [3, 7, 11, 18, 24, 42, 48, 60].map((index, position) => ({ index, label: `场景笔 ${position}`, colorIndex: position })) } }
+  let toolReads = 0
   let selected: any
   const app = {
     studyController: () => ({ readerController: { currentDocumentController: {} } }),
@@ -26,10 +33,14 @@ function harness() {
     require: (name: string) => name === "./window-opacity" ? windowOpacityFixture(sandbox.UIView, { failClass: true }) : name === "./quick-menu-surface" ? { styleQuickMenuSurface(view: any, radius = 18) { view.layer.cornerRadius = radius; view.backgroundColor = sandbox.UIColor.colorWithHexString("#f7f8fa").colorWithAlphaComponent(0.94) } } : name === "marginnote" ? {
       MN: { currnetNotebookId: "book", db }, NodeNote: { getSelectedNodes: () => selected ? [{ note: selected }] : [] },
       UIAlertViewStyle: { PlainTextInput: 2 },
-      select: async () => choice,
+      select: async (options: string[]) => { toolChoices.push(options); return choiceQueue.length ? { index: choiceQueue.shift() } : { index: choice.index } },
       getLocalDataByKey: (key: string) => stored[key], setLocalDataByKey: (value: any, key: string) => { stored[key] = value }, showHUD(message: string) { notices.push(message) }
-    } : name === "./card-toolbar-state" ? { setCardToolbarEnabled: (value: boolean) => toolbar.push(value) }
+    } : name === "./note-navigation" ? { recordRuntimeState: (scope: string, event: string, detail: string) => {
+      if (debugSettings.debugModeEnabled) diagnostics.push({ scope, event, detail })
+    } } : name === "./settings" ? { loadMatcherSettings: () => debugSettings }
+      : name === "./card-toolbar-state" ? { setCardToolbarEnabled: (value: boolean) => toolbar.push(value) }
       : { hideAnswerToolbar: () => toolbar.push(false) } }
+  sandbox.__MNAM_SCENE_WORKBENCH_GLOBAL__ = { readClipperTools: async (target: any) => { assert.equal(target, owner); toolReads++; return sceneConfig } }
   runInNewContext(transpileModule(readFileSync("src/question-clipper.ts", "utf8"), { compilerOptions: { module: 1, target: 7 } }).outputText, sandbox)
   function flush() { let n = 0; while (timers.length && ++n < 100) timers.shift()!(); assert.ok(n < 100) }
   function note(id: string, text = "") {
@@ -39,7 +50,7 @@ function harness() {
     notes.set(id, result); return result
   }
   const api = sandbox.exports
-  return { api, owner, sandbox, note, notes, toolbar, checked, flush, stored, notices, choice, select: (value: any) => { selected = value },
+  return { api, owner, sandbox, app, diagnostics, debugSettings, toolChoices, choiceQueue, sceneConfig, reads: () => toolReads, note, notes, toolbar, checked, flush, stored, notices, choice, select: (value: any) => { selected = value },
     excerpt: (id: string) => api.onProcessNewExcerpt({ userInfo: { noteid: id } }) }
 }
 
@@ -123,6 +134,235 @@ test("工具学习优先唯一自定义预设，保留标题文本回退并持�
   h.checked.add("ExcerptToolCustom3"); api.recordClipperTool("title")
   assert.equal(api.clipperSettings().tools.title, "ToolTextExcerpt")
   assert.throws(() => api.recordClipperTool("answer"), /多个工具/)
+})
+
+test("工具记录诊断区分空返回、未勾选、原始数值、禁用和查询异常，失败不改绑定", () => {
+  const h = harness(), before = JSON.stringify(h.stored)
+  h.app.queryCommandWithKeyFlagsInWindow = (cmd: string): any => {
+    if (cmd === "ToolTextExcerpt") return null
+    if (cmd === "ToolRectCut") return { checked: false, disabled: false }
+    if (cmd === "ExcerptToolSketch") return { checked: 1, disabled: 0 }
+    if (cmd === "ExcerptToolCustom0") throw new Error("host query failed")
+    if (cmd === "ExcerptToolCustom1") return { checked: true, disabled: true }
+    return undefined
+  }
+  assert.throws(() => h.api.recordClipperTool("question"), /未能识别当前摘录工具/)
+  assert.equal(JSON.stringify(h.stored), before)
+  const lines = h.diagnostics.map(line => `${line.event} ${line.detail}`).join("\n")
+  assert.match(lines, /command=ToolTextExcerpt result=null/)
+  assert.match(lines, /command=ToolRectCut result=object checked=false checkedType=boolean/)
+  assert.match(lines, /command=ExcerptToolSketch result=object checked=1 checkedType=number disabled=0 disabledType=number/)
+  assert.match(lines, /query.error .*command=ExcerptToolCustom0 error=Error: host query failed/)
+  assert.match(lines, /command=ExcerptToolCustom1 .*disabled=true disabledType=boolean/)
+  assert.match(lines, /command=ExcerptToolCustom2 result=undefined/)
+  assert.match(lines, /record.unrecognized .*checked=\(none\)/)
+  assert.doesNotMatch(lines, /record.saved/)
+})
+
+test("成功记录包含宿主版本和窗口上下文；关闭诊断仍能正常绑定", () => {
+  const h = harness()
+  Object.assign(h.app, { appVersion: "4.5.0", build: "123", osType: 0, focusWindow: h.owner.window })
+  h.api.recordClipperTool("title")
+  assert.ok(h.diagnostics.some(line => line.event === "record.start" && /appVersion=4.5.0 build=123 osType=0 windowPresent=true focusWindowMatches=true/.test(line.detail)))
+  assert.ok(h.diagnostics.some(line => line.event === "record.saved" && /command=ToolTextExcerpt/.test(line.detail)))
+  h.debugSettings.debugModeEnabled = false; h.diagnostics.length = 0
+  h.checked.clear(); h.checked.add("ExcerptToolCustom2")
+  h.api.recordClipperTool("answer")
+  assert.equal(h.api.clipperSettings().tools.answer, "ExcerptToolCustom2")
+  assert.equal(h.diagnostics.length, 0)
+})
+
+test("切换诊断记录命令派发及回读；暂停取消剩余重试", () => {
+  const h = harness()
+  h.api.saveClipperSetting(false); h.api.enterClipperMode(() => {}); h.api.toggleClipperRunning(); h.flush()
+  assert.ok(h.diagnostics.some(line => line.event === "dispatch.returned" && /command=ToolRectCut/.test(line.detail)))
+  assert.ok(h.diagnostics.some(line => /phase=after-command command=ToolRectCut .*checked=true/.test(line.detail)))
+  h.api.toggleClipperRunning(); h.checked.clear(); h.api.toggleClipperRunning(); h.api.toggleClipperRunning()
+  h.diagnostics.length = 0; h.flush()
+  assert.equal(h.diagnostics.length, 0)
+})
+
+test("切换失败区分命令禁用与 URL 异常，保留原重试上限和手动选笔提示", () => {
+  const h = harness()
+  h.app.queryCommandWithKeyFlagsInWindow = (): any => ({ checked: false, disabled: true })
+  let processed = 0, urls = 0
+  h.app.processCommandWithKeyFlagsInWindow = () => { processed++ }
+  Object.assign(h.app, { openURL() { urls++; throw new Error("URL failed") } })
+  h.sandbox.NSURL = { URLWithString: (url: string) => url }
+  h.api.enterClipperMode(() => {}); h.api.toggleClipperRunning(); h.flush()
+  assert.equal(processed, 0); assert.equal(urls, 5)
+  assert.ok(h.diagnostics.some(line => line.event === "dispatch.skipped" && /reason=disabled/.test(line.detail)))
+  assert.ok(h.diagnostics.some(line => line.event === "url.error" && /URL failed/.test(line.detail)))
+  assert.ok(h.diagnostics.some(line => line.event === "switch.unverified" && /attempt=5/.test(line.detail)))
+  assert.equal(h.api.clipperSnapshot().issue, "请手动选择当前步骤的摘录工具")
+})
+
+function sceneHost(h: ReturnType<typeof harness>, immersive = true, version = "5.1.0") {
+  Object.assign(h.app, { appVersion: version,
+    studyController: () => ({ immersiveMode: immersive, readerController: { currentDocumentController: {} } }) })
+}
+
+test("MN5 场景绑定绕过全禁用的查询，独立保存所选预设并沿用原自动切笔", async () => {
+  const h = harness()
+  sceneHost(h)
+  let queries = 0
+  const query = h.app.queryCommandWithKeyFlagsInWindow
+  h.app.queryCommandWithKeyFlagsInWindow = () => { queries++; return { checked: false, disabled: true } as any }
+  h.choice.index = 5 // ExcerptToolCustom2: exactly the existing command choice, no template-index mapping.
+  assert.equal(h.api.clipperSnapshot().toolBindingMode, "scene")
+  await h.api.recordClipperTool("title", h.owner)
+  assert.equal(queries, 0)
+  const saved = JSON.parse(h.stored["cardlink.question-clipper.v1"])
+  assert.equal(saved.tools.title, "ToolTextExcerpt")
+  assert.equal(saved.sceneTools.title.command, "ExcerptToolCustom2")
+  assert.equal(saved.sceneTools.title.index, 42)
+  assert.equal(saved.sceneTools.title.label, "场景笔 5")
+  assert.deepEqual(Array.from(h.toolChoices[0]), h.sceneConfig.excerptTools.tools.map((tool: any) => tool.label))
+  assert.equal(h.reads(), 2)
+  assert.equal(h.api.clipperSnapshot().tools.title, "ExcerptToolCustom2")
+  assert.equal(h.api.clipperSnapshot().tools.question, "ToolRectCut")
+  assert.equal(h.api.clipperSnapshot().toolLabels.title, "场景笔 5")
+  h.app.queryCommandWithKeyFlagsInWindow = query
+  h.api.enterClipperMode(() => {}); h.api.toggleClipperRunning(); await new Promise(resolve => setImmediate(resolve)); h.flush()
+  assert.deepEqual([...h.checked], ["ExcerptToolCustom2"])
+  h.api.exitClipperMode()
+  h.api.saveClipperAnswerSetting(false); h.api.saveClipperTitleFormat("original", "")
+  assert.equal(h.api.clipperSettings().sceneTools.title.command, "ExcerptToolCustom2")
+  sceneHost(h, false)
+  assert.equal(h.api.clipperSnapshot().toolBindingMode, "classic")
+  assert.equal(h.api.clipperSnapshot().tools.title, "ToolTextExcerpt")
+  h.checked.clear(); h.checked.add("ToolRectCut")
+  h.api.recordClipperTool("title")
+  assert.equal(h.api.clipperSettings().tools.title, "ToolRectCut")
+  assert.equal(h.api.clipperSettings().sceneTools.title.command, "ExcerptToolCustom2")
+})
+
+test("MN4 与 MN5 传统界面继续记录当前工具，旧绑定在 MN5 场景可直接使用", () => {
+  for (const [version, immersive] of [["4.1.0", true], ["5.1.0", false]] as const) {
+    const h = harness(); sceneHost(h, immersive, version)
+    h.checked.clear(); h.checked.add("ExcerptToolCustom4")
+    h.api.recordClipperTool("question")
+    assert.equal(h.api.clipperSettings().tools.question, "ExcerptToolCustom4")
+    assert.equal(h.toolChoices.length, 0)
+  }
+  const h = harness(); sceneHost(h)
+  h.api.enterClipperMode(() => {}); h.api.toggleClipperRunning(); h.flush()
+  assert.equal(h.api.clipperSnapshot().running, true)
+  assert.deepEqual([...h.checked], ["ToolTextExcerpt"])
+})
+
+test("场景选择取消或失效不改绑定，摘题开始后不接受迟到的选择", async () => {
+  const h = harness(); sceneHost(h)
+  const before = JSON.stringify(h.stored)
+  h.choice.index = -1; await h.api.recordClipperTool("title")
+  assert.equal(JSON.stringify(h.stored), before)
+  h.choice.index = 19
+  await assert.rejects(h.api.recordClipperTool("title"), /无效的场景摘录笔/)
+  h.choice.index = 5
+  const leaving = h.api.recordClipperTool("title")
+  sceneHost(h, false)
+  await assert.rejects(leaving, /已离开/)
+  assert.equal(JSON.stringify(h.stored), before)
+  sceneHost(h)
+  const starting = h.api.recordClipperTool("title")
+  h.api.enterClipperMode(() => {}); h.api.toggleClipperRunning()
+  await assert.rejects(starting, /请先结束/)
+  assert.equal(JSON.stringify(h.stored), before)
+})
+
+test("场景必需工具检查使用场景绑定，并在重开流程后保留", async () => {
+  const h = harness(); sceneHost(h)
+  h.stored["cardlink.question-clipper.v1"] = { tools: {} }
+  h.api.saveClipperSetting(false); h.api.saveClipperAnswerSetting(false)
+  h.choice.index = 6; await h.api.recordClipperTool("question")
+  h.api.enterClipperMode(() => {}); h.api.toggleClipperRunning(); await new Promise(resolve => setImmediate(resolve)); h.flush()
+  assert.equal(h.api.clipperSnapshot().running, true)
+  assert.deepEqual([...h.checked], ["ExcerptToolCustom3"])
+  h.api.exitClipperMode(); h.api.enterClipperMode(() => {}); h.api.toggleClipperRunning(); await new Promise(resolve => setImmediate(resolve)); h.flush()
+  assert.deepEqual([...h.checked], ["ExcerptToolCustom3"])
+  assert.equal(h.api.clipperSnapshot().tools.question, "ExcerptToolCustom3")
+})
+
+test("旧场景命令绑定不被强制迁移，仍使用原自动切笔且不要求新工具接口", () => {
+  const h = harness(); sceneHost(h)
+  h.stored["cardlink.question-clipper.v1"].sceneTools = { title: "ExcerptToolCustom4" }
+  h.sceneConfig.available = false
+  h.api.enterClipperMode(() => {}); h.api.toggleClipperRunning(); h.flush()
+  assert.deepEqual([...h.checked], ["ExcerptToolCustom4"])
+  assert.equal(h.reads(), 0)
+  assert.equal(h.api.clipperSnapshot().toolLabels.title, "自定义 4")
+})
+
+test("真实场景工具可超过16支、序号不连续且重名；不按模板序号猜测切笔命令", async () => {
+  const h = harness(); sceneHost(h)
+  h.sceneConfig.excerptTools.tools = Array.from({ length: 24 }, (_, i) => ({ index: i * 3 + 20, label: i === 23 ? "" : "同名笔" }))
+  h.choiceQueue.push(23, 1) // Real index=89; user explicitly chooses rectangle as the switch position.
+  await h.api.recordClipperTool("answer")
+  const binding = h.api.clipperSettings().sceneTools.answer
+  assert.equal(h.toolChoices[0].length, 24)
+  assert.equal(binding.index, 89)
+  assert.equal(binding.command, "ToolRectCut")
+  assert.equal(binding.label, "未命名摘录笔（序号 89）")
+  assert.equal(h.api.clipperSnapshot().toolLabels.answer, binding.label)
+  h.choiceQueue.push(23)
+  const choices = h.toolChoices.length
+  await h.api.recordClipperTool("answer")
+  assert.equal(h.toolChoices.length, choices + 1) // Same tool/config retains its confirmed mapping.
+})
+
+test("场景配置不可用、空笔盒、重复序号及读取失败不会回退到固定清单或改绑定", async () => {
+  for (const value of [
+    { available: false, reason: "template unavailable" },
+    { error: { message: "面板没有读取许可" } },
+    { available: true, excerptTools: { tools: [] } },
+    { available: true, excerptTools: { tools: [{ index: 3 }, { index: 3 }] } },
+    { available: true, excerptTools: { tools: [{ index: -1 }] } }
+  ]) {
+    const h = harness(); sceneHost(h)
+    h.sandbox.__MNAM_SCENE_WORKBENCH_GLOBAL__.readClipperTools = async () => value
+    const before = JSON.stringify(h.stored)
+    await assert.rejects(h.api.recordClipperTool("title"))
+    assert.equal(h.toolChoices.length, 0)
+    assert.equal(JSON.stringify(h.stored), before)
+  }
+  const h = harness(); sceneHost(h)
+  h.sandbox.__MNAM_SCENE_WORKBENCH_GLOBAL__.readClipperTools = async () => { throw new Error("read failed") }
+  await assert.rejects(h.api.recordClipperTool("title"), /read failed/)
+})
+
+test("取消自动切笔位置不改绑定；选笔期间模板变更拒绝保存", async () => {
+  const h = harness(); sceneHost(h)
+  const before = JSON.stringify(h.stored)
+  h.choiceQueue.push(2, -1)
+  await h.api.recordClipperTool("title")
+  assert.equal(JSON.stringify(h.stored), before)
+  let reads = 0
+  h.sandbox.__MNAM_SCENE_WORKBENCH_GLOBAL__.readClipperTools = async () => {
+    if (++reads === 2) h.sceneConfig.template.id = "another-template"
+    return h.sceneConfig
+  }
+  h.choiceQueue.push(2, 4)
+  await assert.rejects(h.api.recordClipperTool("title"), /配置已变化/)
+  assert.equal(JSON.stringify(h.stored), before)
+})
+
+test("启动前读回场景笔身份；配置变更阻止切错笔，暂停使迟到的配置回执失效", async () => {
+  const h = harness(); sceneHost(h)
+  h.choiceQueue.push(0, 5); await h.api.recordClipperTool("title")
+  h.sceneConfig.excerptTools.tools[0].colorIndex = 15
+  h.api.enterClipperMode(() => {}); h.api.toggleClipperRunning()
+  await new Promise(resolve => setImmediate(resolve)); h.flush()
+  assert.equal(h.api.clipperSnapshot().running, false)
+  assert.match(h.api.clipperSnapshot().issue, /配置已变化/)
+  assert.deepEqual([...h.checked], ["ToolTextExcerpt"])
+  h.api.exitClipperMode(); h.sceneConfig.excerptTools.tools[0].colorIndex = 0
+  let finish: (value: any) => void = () => {}
+  h.sandbox.__MNAM_SCENE_WORKBENCH_GLOBAL__.readClipperTools = () => new Promise(resolve => { finish = resolve })
+  h.api.enterClipperMode(() => {}); h.api.toggleClipperRunning(); h.api.toggleClipperRunning()
+  finish(h.sceneConfig); await new Promise(resolve => setImmediate(resolve)); h.flush()
+  assert.equal(h.api.clipperSnapshot().running, false)
+  assert.equal(h.api.clipperSnapshot().issue, "")
+  assert.deepEqual([...h.checked], ["ToolTextExcerpt"])
 })
 
 test("标题开关兼容原生数值布尔值；运行中关闭保留题目并从下题跳过标题", () => {

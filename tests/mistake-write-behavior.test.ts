@@ -382,7 +382,9 @@ test('智能复习错因仅改卡片错因标签，不改固定等级或固定�
   const before = JSON.stringify(mistakeStateRecords()[id])
   manager.syncMistakeReasonTags(id, [{ key: 'reading', label: '审题遗漏' }, { key: 'time', label: '时间不足' }])
   assert.deepEqual(tagsOf(notesById['fsrs-reason-note']), ['错题_不熟', '用户标签', '错因_审题遗漏', '错因_时间不足'])
-  assert.equal(JSON.stringify(mistakeStateRecords()[id]), before)
+  const { reasonTags, ...fixedReview } = mistakeStateRecords()[id]
+  assert.deepEqual(reasonTags, ["错因_审题遗漏", "错因_时间不足"])
+  assert.deepEqual(JSON.parse(JSON.stringify(fixedReview)), JSON.parse(before))
   await manager.setMistakeCategoryById(id, ['新分类'])
   assert.ok(tagsOf(notesById['fsrs-reason-note']).includes('错因_审题遗漏'))
   assert.ok(tagsOf(notesById['fsrs-reason-note']).includes('错因_时间不足'))

@@ -10,6 +10,7 @@ export interface StoredAnswerIndexItem {
   id: string
   noteId: string
   notebookId: string
+  pathOrder?: "root-first"
   pathTitles: string[]
   titles: string[]
   tags: string[]
@@ -40,6 +41,11 @@ function indexFilePath(notebookId: string): string | undefined {
   }
 }
 
+function normalizeIndexPaths(items: StoredAnswerIndexItem[]): StoredAnswerIndexItem[] {
+  return items.map(item => ({ ...item, pathOrder: "root-first",
+    pathTitles: item.pathOrder === "root-first" ? item.pathTitles : [...item.pathTitles].reverse() }))
+}
+
 export function loadStoredIndex(notebookId: string): StoredAnswerIndexItem[] | undefined {
   const path = indexFilePath(notebookId)
   if (path) {
@@ -48,7 +54,7 @@ export function loadStoredIndex(notebookId: string): StoredAnswerIndexItem[] | u
         const parsed = readJSON(path)
         // 空数组也是有效快照：表示“已建立但该范围 0 张卡”，
         // 拒绝它会让空答案范围的每次查找都误报“索引尚未建立”。
-        if (Array.isArray(parsed)) return parsed as StoredAnswerIndexItem[]
+        if (Array.isArray(parsed)) return normalizeIndexPaths(parsed)
       }
     } catch {
       // 文件不可读则回退旧存储
@@ -58,7 +64,7 @@ export function loadStoredIndex(notebookId: string): StoredAnswerIndexItem[] | u
   try {
     const legacy = getLocalDataByKey(`${INDEX_KEY_PREFIX}${notebookId}`)
     if (legacy && typeof legacy === "object") {
-      const items = Array.from(legacy as ArrayLike<StoredAnswerIndexItem>)
+      const items = normalizeIndexPaths(Array.from(legacy as ArrayLike<StoredAnswerIndexItem>))
       if (items.length) {
         saveStoredIndex(notebookId, items)
         return items
@@ -75,6 +81,7 @@ export function saveStoredIndex(
   answers: StoredAnswerIndexItem[]
 ): void {
   const updatedAt = new Date().toISOString()
+  answers = answers.map(answer => ({ ...answer, pathOrder: "root-first" }))
   const payload = JSON.stringify(answers)
   const path = indexFilePath(notebookId)
   if (path) {

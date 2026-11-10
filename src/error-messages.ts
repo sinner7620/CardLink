@@ -27,16 +27,6 @@ const ERROR_TEXTS: Record<ErrorMessageKey, string | ((params: ErrorParams) => st
   "error.debugModeRequired": "请先开启调试模式",
   "error.network": params => params.detail ? `网络请求失败：${params.detail}` : "网络请求失败，请稍后重试",
   "error.timeout": params => params.detail ? `网络请求超时：${params.detail}` : "网络请求超时，请稍后重试",
-  "error.aiDisabled": "AI 错题分析未开启，请先在设置中开启",
-  "error.aiTaskCancelled": params => String(params.detail || "任务已取消"),
-  "error.aiCredentialMissing": params => `${params.provider} 尚未设置 ${params.credential}`,
-  "error.aiProviderMissing": params => params.provider ? `AI 服务不存在：${params.provider}` : "默认 AI 服务未配置",
-  "error.handwritingUnavailable": "手写内容无法读取，请检查原卡片或关闭手写内容发送",
-  "error.ocrRequired": "题目含图片但未开启题目识别（OCR）",
-  "error.questionTextMissing": "没有可读取的题目文字",
-  "error.studySetMissing": "学习集不存在",
-  "error.subjectMissing": "科目不存在",
-  "error.preparationJobMissing": "题目准备任务不存在"
 }
 
 /** 当前仅有中文表；未来增加语言表时，调用方仍只依赖稳定的 error.<code> 键。 */

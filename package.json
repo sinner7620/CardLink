@@ -1,6 +1,6 @@
 {
   "name": "cardlink",
-  "version": "2.4.6",
+  "version": "2.4.7",
   "mnChannel": "stable",
   "private": true,
   "description": "MarginNote 4 跨脑图答案匹配插件",
@@ -14,8 +14,9 @@
     "build": "node build.mjs",
     "build:source": "node build.mjs",
     "dev:web": "vite --config web/vite.config.js",
+    "lint": "oxlint src web rails-native scripts tests build.mjs",
     "check": "tsc --noEmit",
-    "test": "tsx --experimental-test-module-mocks --test tests/ai-subsystem.test.ts tests/ai-input-behavior.test.ts tests/answer-card-creation.test.ts tests/bridge-schema.test.ts tests/content-fingerprint.test.ts tests/domain.test.ts tests/mistake-export.test.ts tests/mistake-performance.test.ts tests/mistake-write-behavior.test.ts tests/plugin-events.test.ts tests/telemetry.test.ts tests/updater-behavior.test.ts tests/updater.test.ts tests/web-bridge.test.ts tests/web-render-smoke.test.ts tests/index-store-behavior.test.ts tests/card-preview.test.ts tests/review-detail-cache.test.ts tests/manual-review-queue.test.ts"
+    "test": "tsx --experimental-test-module-mocks --test tests/answer-card-creation.test.ts tests/bridge-schema.test.ts tests/content-fingerprint.test.ts tests/domain.test.ts tests/mistake-export.test.ts tests/mistake-performance.test.ts tests/mistake-write-behavior.test.ts tests/plugin-events.test.ts tests/telemetry.test.ts tests/updater-behavior.test.ts tests/updater.test.ts tests/web-bridge.test.ts tests/web-render-smoke.test.ts tests/index-store-behavior.test.ts tests/card-preview.test.ts tests/review-detail-cache.test.ts tests/manual-review-queue.test.ts"
   },
   "dependencies": {
     "@panzoom/panzoom": "4.6.2",
@@ -34,10 +35,12 @@
   },
   "devDependencies": {
     "@playwright/test": "1.62.1",
+    "@shadcn/lint": "0.2.5",
     "@types/adm-zip": "0.5.7",
     "@vitejs/plugin-react": "6.0.1",
     "adm-zip": "0.5.16",
     "esbuild": "0.27.0",
+    "oxlint": "1.92.0",
     "postcss": "8.5.19",
     "react": "19.2.5",
     "react-dom": "19.2.5",

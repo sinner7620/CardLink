@@ -77,6 +77,7 @@ import {
   showAnswerCard,
   syncAnswerCardWindowControlSide
 } from "./answer-card-view"
+import { closeUpdateDialog } from "./update-dialog"
 import { checkForUpdates, installUpdateFromLink, showUpdateStatus, scheduleAutomaticUpdateCheck } from "./updater"
 import { scheduleTelemetryReport } from "./telemetry"
 import { isMindMapNotebook, notebookContainsNote, notebookNotes } from "./note-tree"
@@ -545,7 +546,6 @@ export interface AnswerMatchingSettingsData {
   pairs: number
   matchedGroups: number
   regexRules: RegexMatchingRules
-  sceneWorkbenchEnabled: boolean
   debugModeEnabled: boolean
   debugAnswerPreviewMode?: "custom" | "native"
   debugUpdateDownloadsEnabled: boolean
@@ -588,7 +588,6 @@ export function answerMatchingSettingsData(): AnswerMatchingSettingsData {
       questionPattern: "",
       answerPattern: ""
     },
-    sceneWorkbenchEnabled: settings.sceneWorkbenchEnabled,
     debugModeEnabled: settings.debugModeEnabled,
     debugAnswerPreviewMode: settings.debugAnswerPreviewMode ?? "custom",
     debugUpdateDownloadsEnabled: settings.debugUpdateDownloadsEnabled,
@@ -648,19 +647,19 @@ export function addGlobalAnswerBindingColor(): { color: number } {
   return { color }
 }
 
-export function addManagedAnswerBindingColor(key: string): { color: number } {
+export function addManagedAnswerBindingColor(key: string): { color: number } | { mismatch: true } {
   const bindings = loadBindings()
   const target = normalizeBinding(bindings[key])
   if (!target) throw new Error("绑定关系已不存在")
   const [notebookId, sourceRootNodeId = MAIN_MINDMAP_SCOPE_ID] = key.split("::root::")
-  if (currentNotebookId() !== notebookId) throw new Error("请先打开该题目脑图所在的学习集")
+  if (currentNotebookId() !== notebookId) return { mismatch: true }
   const selected = MN.notebookController?.mindmapView ? NodeNote.getSelectedNodes() : []
   if (selected.length !== 1) throw new Error("请在当前脑图中只选中一张题目卡片")
   const note = selected[0].note
   const selectedId = String(note?.noteId ?? "")
   const selectedNode = (Array.from(MN.notebookController?.mindmapView?.mindmapNodes ?? []) as any[])
     .find(node => String(node?.note?.noteId ?? "") === selectedId)
-  if (!selectedId || !selectedNode) throw new Error("所选卡片不在当前脑图中")
+  if (!selectedId || !selectedNode) return { mismatch: true }
   const knownRoots = Object.keys(bindings).filter(binding => binding.startsWith(`${notebookId}::root::`))
     .map(binding => binding.slice(`${notebookId}::root::`.length))
   let selectedScope = MAIN_MINDMAP_SCOPE_ID
@@ -673,7 +672,7 @@ export function addManagedAnswerBindingColor(key: string): { color: number } {
     ancestor = ancestor.parentNode
   }
   if (key.includes("::root::") && selectedScope !== sourceRootNodeId) {
-    throw new Error("所选卡片不属于这条绑定的题目脑图")
+    return { mismatch: true }
   }
   const color = selectedNode.note?.colorIndex
   if (!Number.isInteger(color) || color < 0 || color > 15) throw new Error("所选卡片没有可用颜色")
@@ -1178,7 +1177,7 @@ function resolveAnswerLookupContext(questionOverride?: NodeNote, sourceOverride?
   let path: string[] = mistakeContext?.record.sourcePathTitles ?? []
   try {
     titles = Array.from(new Set([questionTitle, ...lookupQuestion.titles.map(title => title.trim())])).filter(Boolean)
-    path = lookupQuestion.ancestorNodes.map(node => node.title?.trim()).filter(Boolean) as string[]
+    path = [...lookupQuestion.ancestorNodes].reverse().map(node => node.title?.trim()).filter(Boolean) as string[]
   } catch {
     // 已迁移错题卡使用存储里的来源元数据兜底
   }
@@ -1224,7 +1223,7 @@ function noteCandidatesForAnswerTarget(answerTarget: BindingTarget): Array<{
         value: note,
         id: nodeIdentifier(node),
         title: node.title?.trim() || "",
-        pathTitles: node.ancestorNodes.map(ancestor => ancestor.title?.trim()).filter(Boolean) as string[]
+        pathTitles: [...node.ancestorNodes].reverse().map(ancestor => ancestor.title?.trim()).filter(Boolean) as string[]
       }]
     } catch {
       return []
@@ -1948,6 +1947,7 @@ export const lifecycle = defineLifecycleHandlers({
     },
     notebookWillClose() {
       recordRuntimeState("生命周期", "notebookWillClose 开始")
+      closeUpdateDialog(MN.studyController?.view)
       self.cardLinkReviewNotebookGeneration = Number(self.cardLinkReviewNotebookGeneration || 0) + 1
       suspendReviewModeToolbar()
       closeMnutilsQuickMenu()
@@ -1965,6 +1965,7 @@ export const lifecycle = defineLifecycleHandlers({
     },
     sceneDidDisconnect() {
       recordRuntimeState("生命周期", "sceneDidDisconnect 开始")
+      closeUpdateDialog(MN.studyController?.view)
       eventObservers.remove()
       removeMnutilsEntrance()
       destroyAnswerToolbar()

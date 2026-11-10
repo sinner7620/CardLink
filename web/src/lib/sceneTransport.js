@@ -1,7 +1,89 @@
 import { resetSceneWindowSize } from "./sceneWindow"
 import { createWritingSessionClient } from "./writingSession"
-export function createSceneTransport(sdk, windowObject, fetchImpl, policy, annotationClient, requestPrefix = 'scene-', requestTimeoutMs = () => 60000) {
+// Command-only channel: no workbench callbacks, practice subscriptions or annotation replies.
+export function createSceneCommandTransport(sdk, windowObject, fetchImpl, policy, requestPrefix = 'card-menu-', requestTimeoutMs = () => 60000) {
   const pending = new Map();
+  let disposed = false;
+  const sequences = windowObject.__CARDLINK_SCENE_REQUEST_SEQUENCES__ ||= new Map();
+  const onResponse = event => {
+    const response = event.detail || {}, request = pending.get(response.requestId);
+    if (!request) return;
+    pending.delete(response.requestId); clearTimeout(request.timer);
+    if (response.error) request.reject(new Error(response.error.message || response.error.code));
+    else request.resolve(response.payload);
+  };
+  windowObject.addEventListener('mn:bridgeResponse', onResponse);
+  async function api(path, options) {
+    const opts = { ...(options || {}) };
+    if (opts.body) { opts.headers = { 'Content-Type': 'application/json' }; opts.body = JSON.stringify(opts.body); }
+    const response = await fetchImpl('/bridge/v1' + path, opts);
+    const result = await response.json();
+    if (result.error) throw Object.assign(new Error(result.error.message || result.error.code), { code: result.error.code });
+    return result;
+  }
+  async function verify() {
+    if (disposed) throw new Error('场景通道已销毁');
+    if (!policy.versionAtLeast450(windowObject.__MN_HOST_VERSION__)) throw new Error('新接口要求软件 4.5.0 及以上');
+    let ui;
+    try { ui = await api('/ui-state'); }
+    catch (error) { await sdk.call('sceneRejected', {}).catch(() => {}); throw error; }
+    if (!policy.sceneEnabled(windowObject.__MN_HOST_VERSION__, ui)) {
+      await sdk.call('sceneRejected', {});
+      throw new Error('已离开场景页面，新接口已停用');
+    }
+    // Media/boot checks can suspend the same native session too. Confirm the
+    // freshly read scene instead of relying on transport-local suspension state.
+    const ack = await sdk.call('sceneReady', ui);
+    if (disposed) throw new Error('场景通道已销毁');
+    if (ack?.enabled !== true) throw new Error('场景状态尚未恢复，请稍后重试');
+    return ui;
+  }
+  function nativeRequest(command, payload) {
+    if (disposed) return Promise.reject(new Error('场景通道已销毁'));
+    const sequence = (sequences.get(requestPrefix) || 0) + 1;
+    sequences.set(requestPrefix, sequence);
+    const requestId = requestPrefix + sequence;
+    return new Promise((resolve, reject) => {
+      const timeout = requestTimeoutMs(command, payload);
+      const timer = setTimeout(() => { pending.delete(requestId); reject(new Error('场景请求超时')); }, timeout ?? 60000);
+      pending.set(requestId, { resolve, reject, timer });
+      sdk.call('bridgeRequest', { requestId, command, payload }).then(ack => {
+        if (ack?.error) throw new Error(ack.error.message);
+        if (!ack?.accepted) throw new Error('场景请求未被接收');
+        // An accepted interactive request ends only when the user saves or cancels.
+        if (timeout === null) clearTimeout(timer);
+      }).catch(error => { clearTimeout(timer); pending.delete(requestId); reject(error); });
+    });
+  }
+  return {
+    api, verify, nativeRequest,
+    busy: () => pending.size > 0,
+    async send(command, payload) { await verify(); return nativeRequest(command, payload); },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      windowObject.removeEventListener('mn:bridgeResponse', onResponse);
+      for (const request of pending.values()) { clearTimeout(request.timer); request.reject(new Error('场景通道已销毁')); }
+      pending.clear();
+    }
+  };
+}
+
+export function createSceneTransport(sdk, windowObject, fetchImpl, policy, annotationClient, requestPrefix = 'scene-', requestTimeoutMs = () => 60000) {
+  if (!annotationClient) throw new Error('练习批注客户端尚未初始化');
+  windowObject.__CARDLINK_REVIEW_TRANSPORT__?.dispose();
+  const channel = createSceneCommandTransport(sdk, windowObject, fetchImpl, policy, requestPrefix, requestTimeoutMs);
+  const { api, verify, nativeRequest } = channel;
+  let disposed = false;
+  const listeners = [];
+  function listen(name, handler) {
+    const activeHandler = event => { if (!disposed) return handler(event); };
+    windowObject.addEventListener(name, activeHandler);
+    listeners.push([name, activeHandler]);
+  }
+  // SDK subscriptions remain registered; disposed controllers ignore later events.
+  function subscribe(name, handler) { sdk.on(name, event => { if (!disposed) return handler(event); }); }
+  function reply(payload) { if (!disposed) return sdk.call('reviewAnnotationReply', payload); }
   let sequence = 0, annotationTarget = null, annotationOpening = false;
   let annotationClosed = null;
   let writingClient;
@@ -26,16 +108,25 @@ export function createSceneTransport(sdk, windowObject, fetchImpl, policy, annot
       reviewToken: target.reviewToken ?? null, ordinary: target.ordinary === true, hostVersion: windowObject.__MN_HOST_VERSION__ ?? null }, traceId);
     return (event, data) => logData(event, data, traceId);
   }
-  windowObject.addEventListener('mn:bridgeResponse', event => {
-    const response = event.detail || {}, request = pending.get(response.requestId);
-    if (!request) return;
-    pending.delete(response.requestId); clearTimeout(request.timer);
-    if (response.error) request.reject(new Error(response.error.message || response.error.code));
-    else request.resolve(response.payload);
+  listen('mn:nativeDataChanged', () => windowObject.__onNativeDataChanged?.());
+  listen('mn:nativeBindingsChanged', () => windowObject.__onNativeBindingsChanged?.());
+  listen('mn:panelShown', event => windowObject.__onPanelShow?.(event.detail));
+  listen('mn:clipperToolsRead', async event => {
+    const requestId = event.detail?.requestId;
+    if (!requestId) return;
+    let payload;
+    try {
+      await verify();
+      const config = await api('/immersive/template');
+      const result = { available: config.available, reason: config.reason, template: { id: config.template?.id },
+        excerptTools: { source: config.excerptTools?.source, tools: config.excerptTools?.tools } };
+      payload = { requestId, result };
+    } catch (error) {
+      payload = { requestId, error: error.message || String(error) };
+    }
+    if (!disposed) try { await sdk.call('clipperToolsReply', payload); }
+    catch (error) { log('clipper.tools.replyFailed', error.message || String(error)); }
   });
-  windowObject.addEventListener('mn:nativeDataChanged', () => windowObject.__onNativeDataChanged?.());
-  windowObject.addEventListener('mn:nativeBindingsChanged', () => windowObject.__onNativeBindingsChanged?.());
-  windowObject.addEventListener('mn:panelShown', event => windowObject.__onPanelShow?.(event.detail));
   async function onPractice(event) {
     annotationClient.invalidate?.(event.noteid);
     logData('review.practice.received', { noteid: event.noteid ?? null, commentId: event.commentId ?? null,
@@ -69,8 +160,8 @@ export function createSceneTransport(sdk, windowObject, fetchImpl, policy, annot
       }
     } catch (error) { log('annotation.saveCheckFailed', error.message); }
   }
-  sdk.on('practice', onPractice);
-  sdk.on('comments', async event => {
+  subscribe('practice', onPractice);
+  subscribe('comments', async event => {
     [event.noteid, ...(event.noteids || [])].filter(Boolean).forEach(id => annotationClient.invalidate?.(id));
     const target = annotationTarget;
     if (!target || ![event.noteid, ...(event.noteids || [])].some(id => matchesTarget(target, id))) return;
@@ -79,30 +170,7 @@ export function createSceneTransport(sdk, windowObject, fetchImpl, policy, annot
       windowObject.dispatchEvent(new windowObject.CustomEvent('cardlink:annotation-saved', { detail: { recordId: target.recordId } }));
     } catch (error) { log('annotation.saveCheckFailed', error.message); }
   });
-  async function api(path, options) {
-    const opts = { ...(options || {}) };
-    if (opts.body) { opts.headers = { 'Content-Type': 'application/json' }; opts.body = JSON.stringify(opts.body); }
-    const response = await fetchImpl('/bridge/v1' + path, opts);
-    const result = await response.json();
-    if (result.error) throw Object.assign(new Error(result.error.message || result.error.code), { code: result.error.code });
-    return result;
-  }
-  async function verify() {
-    if (!policy.versionAtLeast450(windowObject.__MN_HOST_VERSION__)) throw new Error('新接口要求软件 4.5.0 及以上');
-    let ui;
-    try { ui = await api('/ui-state'); }
-    catch (error) { await sdk.call('sceneRejected', {}).catch(() => {}); throw error; }
-    if (!policy.sceneEnabled(windowObject.__MN_HOST_VERSION__, ui)) {
-      await sdk.call('sceneRejected', {});
-      throw new Error('已离开场景页面，新接口已停用');
-    }
-    // Media/boot checks can suspend the same native session too. Confirm the
-    // freshly read scene instead of relying on transport-local suspension state.
-    const ack = await sdk.call('sceneReady', ui);
-    if (ack?.enabled !== true) throw new Error('场景状态尚未恢复，请稍后重试');
-    return ui;
-  }
-  windowObject.addEventListener('mn:reviewAnnotationOpen', async event => {
+  listen('mn:reviewAnnotationOpen', async event => {
     const { requestId, target } = event.detail || {};
     if (!target || !requestId) return;
     target.diagnosticRequestId = requestId;
@@ -122,10 +190,10 @@ export function createSceneTransport(sdk, windowObject, fetchImpl, policy, annot
           : operation === 'writing-complete' ? await writingClient.complete(target)
           : operation === 'writing-finish' ? await writingClient.finish()
           : (() => { throw new Error('未知手写会话操作'); })();
-        await sdk.call('reviewAnnotationReply', { requestId, result });
+        await reply( { requestId, result });
       } catch (error) {
         report('writing.operation.error', { operation: target.operation, code: error.code ?? null, message: error.message });
-        await sdk.call('reviewAnnotationReply', { requestId, error: error.message, editorMayBeOpen: target.operation === 'writing-open' && writingClient?.mayBeOpen(target.reviewToken) === true });
+        await reply( { requestId, error: error.message, editorMayBeOpen: target.operation === 'writing-open' && writingClient?.mayBeOpen(target.reviewToken) === true });
       }
       return;
     }
@@ -151,13 +219,13 @@ export function createSceneTransport(sdk, windowObject, fetchImpl, policy, annot
           result = { ...(await api(path)), persisted: true };
           windowObject.dispatchEvent(new windowObject.CustomEvent('cardlink:annotation-saved', { detail: { noteid: target.noteid } }));
         }
-        await sdk.call('reviewAnnotationReply', { requestId, result });
-      } catch (error) { await sdk.call('reviewAnnotationReply', { requestId, error: error.message, editorMayBeOpen: false }); }
+        await reply( { requestId, result });
+      } catch (error) { await reply( { requestId, error: error.message, editorMayBeOpen: false }); }
       return;
     }
     if (target.operation === 'practice-history') {
-      try { await verify(); await sdk.call('reviewAnnotationReply', { requestId, result: await annotationClient.read(target.noteid, report) }); }
-      catch (error) { report('annotation.operation.error', { code: error.code ?? null, operation: target.operation }); await sdk.call('reviewAnnotationReply', { requestId, error: error.message, editorMayBeOpen: false }); }
+      try { await verify(); await reply( { requestId, result: await annotationClient.read(target.noteid, report) }); }
+      catch (error) { report('annotation.operation.error', { code: error.code ?? null, operation: target.operation }); await reply( { requestId, error: error.message, editorMayBeOpen: false }); }
       return;
     }
     if (target.operation === 'practice-discard') {
@@ -167,9 +235,9 @@ export function createSceneTransport(sdk, windowObject, fetchImpl, policy, annot
           throw new Error('新批注尚未确认保存关闭，不能丢弃');
         await verify();
         const result = await annotationClient.discardFresh(target.noteid, target, verify);
-        await sdk.call('reviewAnnotationReply', { requestId, result });
+        await reply( { requestId, result });
         windowObject.dispatchEvent(new windowObject.CustomEvent('cardlink:annotation-saved', { detail: { noteid: target.noteid } }));
-      } catch (error) { await sdk.call('reviewAnnotationReply', { requestId, error: error.message, editorMayBeOpen: false }); }
+      } catch (error) { await reply( { requestId, error: error.message, editorMayBeOpen: false }); }
       return;
     }
     if (target.operation === 'practice-config' || target.operation === 'practice-verdict') {
@@ -178,9 +246,9 @@ export function createSceneTransport(sdk, windowObject, fetchImpl, policy, annot
         const result = target.operation === 'practice-config' ? await annotationClient.practiceConfig(report)
           : await annotationClient.verdict(target.noteid, { ...target, diagnostic: report }, verify);
         if (target.operation === 'practice-config') report('annotation.practice.mode', { mode: result.available === false ? 'blocked' : 'native', reason: result.reason ?? null });
-        await sdk.call('reviewAnnotationReply', { requestId, result });
+        await reply( { requestId, result });
         if (target.operation === 'practice-verdict') windowObject.dispatchEvent(new windowObject.CustomEvent('cardlink:annotation-saved', { detail: { noteid: target.noteid } }));
-      } catch (error) { report('annotation.operation.error', { code: error.code ?? null, operation: target.operation }); await sdk.call('reviewAnnotationReply', { requestId, error: error.message, editorMayBeOpen: false }); }
+      } catch (error) { report('annotation.operation.error', { code: error.code ?? null, operation: target.operation }); await reply( { requestId, error: error.message, editorMayBeOpen: false }); }
       return;
     }
     // Internal reconciliation protocol, not a host API for closing an editor.
@@ -191,11 +259,11 @@ export function createSceneTransport(sdk, windowObject, fetchImpl, policy, annot
         if (annotationTarget?.reviewToken === target.reviewToken) annotationTarget = null;
         result = { state: 'released' };
       } else result = { state: 'unknown' };
-      await sdk.call('reviewAnnotationReply', { requestId, result });
+      await reply( { requestId, result });
       return;
     }
     if (annotationOpening || annotationTarget?.reviewToken) {
-      await sdk.call('reviewAnnotationReply', { requestId, error: '请先关闭当前批注窗口', editorMayBeOpen: false });
+      await reply( { requestId, error: '请先关闭当前批注窗口', editorMayBeOpen: false });
       return;
     }
     annotationOpening = true;
@@ -210,7 +278,7 @@ export function createSceneTransport(sdk, windowObject, fetchImpl, policy, annot
       target.hostNoteIds = [result.noteid, result.practice?.card].filter(id => typeof id === 'string');
       if (!target.ordinary && result.advance !== target.advance) throw new Error('宿主未确认批注的下一题按钮，请关闭当前窗口后重试');
       log('review.annotation.opened', 'noteid=' + target.noteid + '; advance=' + result.advance + '; ms=' + (Date.now() - started));
-      await sdk.call('reviewAnnotationReply', { requestId, result });
+      await reply( { requestId, result });
       if (target.nextNoteid) annotationClient.prefetch?.(target.nextNoteid).catch(error => log('review.annotation.prefetchFailed', error.message));
     } catch (error) {
       // An unconfirmed open may still have presented an editor. Keep its identity
@@ -220,29 +288,22 @@ export function createSceneTransport(sdk, windowObject, fetchImpl, policy, annot
       report('annotation.operation.error', { code: error.code ?? null, editorMayBeOpen, rejectedOldSheet: !!target.rejectedOldSheet });
       log('review.annotation.failed', 'uncertain=' + editorMayBeOpen + '; ' + error.message);
       if (!editorMayBeOpen && annotationTarget === target) annotationTarget = null;
-      await sdk.call('reviewAnnotationReply', { requestId, error: error.message, editorMayBeOpen });
+      await reply( { requestId, error: error.message, editorMayBeOpen });
     } finally {
       annotationOpening = false;
       const early = earlyPracticeEvents; earlyPracticeEvents = [];
       for (const closed of early) if (annotationTarget === target && matchesTarget(target, closed.noteid)) await onPractice(closed);
     }
   });
-  function nativeRequest(command, payload) {
-    const requestId = requestPrefix + (++sequence);
-    return new Promise((resolve, reject) => {
-      const timeout = requestTimeoutMs(command, payload);
-      const timer = setTimeout(() => { pending.delete(requestId); reject(new Error('场景请求超时')); }, timeout ?? 60000);
-      pending.set(requestId, { resolve, reject, timer });
-      sdk.call('bridgeRequest', { requestId, command, payload }).then(ack => {
-        if (ack?.error) throw new Error(ack.error.message);
-        if (!ack?.accepted) throw new Error('场景请求未被接收');
-        // An accepted interactive request ends only when the user saves or cancels.
-        if (timeout === null) clearTimeout(timer);
-      }).catch(error => { clearTimeout(timer); pending.delete(requestId); reject(error); });
-    });
-  }
-  return {
-    busy: () => pending.size > 0,
+  const transport = {
+    busy: channel.busy,
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      for (const [name, handler] of listeners) windowObject.removeEventListener(name, handler);
+      channel.dispose();
+      if (windowObject.__CARDLINK_REVIEW_TRANSPORT__ === transport) delete windowObject.__CARDLINK_REVIEW_TRANSPORT__;
+    },
     async send(command, payload) {
       await verify();
       if (command === 'closePanel') return sdk.call('sceneMinimize', {});
@@ -276,4 +337,6 @@ export function createSceneTransport(sdk, windowObject, fetchImpl, policy, annot
       finally { annotationOpening = false; }
     }
   };
+  windowObject.__CARDLINK_REVIEW_TRANSPORT__ = transport;
+  return transport;
 }

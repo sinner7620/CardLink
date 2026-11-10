@@ -29,3 +29,7 @@ mistake-store、mistake-domain、mistake-tags、note-navigation（写入层/日�
 标记/复习/改级/取消在"面板打开+学习集已关闭"场景正确；恢复扫描只补缺失；纯答案学习集豁免。
 
 用户主动单条或批量取消时，原卡查询正常返回空值的记录直接清理，不要求标签写入，也不阻塞同学习集其他记录。现存原卡仍要求标签清除验证成功；查询异常不视为原卡删除。批量结果的 changed/records 包含成功清理的缺失原卡记录，missing 仅统计不存在的错题记录 ID。
+
+父级路径统一复制 ancestorNodes 后倒序，按根到直接父级存储；当前题目标题单独保存。错题存储读取时迁移缺少 sourcePathOrder 的旧路径及自动分类，并标记 root-first，人工分类与历史保持原值。答案候选合并后按 noteId 去重、排除原题自身，仍保留歧义多解；记录原始/唯一候选数与 ID。`mistakeDetailById` 内部导出参数 forExport 会省略逐卡运行脚本；新增末尾 exportContent 参数，导出默认关闭 handwriting/comments，仅显式开启才读取对应内容，普通详情/AI/复习默认行为保持不变。题目与答案均传递内容选项，绑定手写在导出时直接显示，不使用交互隐藏层。
+
+错题答案读取调用共享 `findAnswersForQuestion` 的父级硬筛选：父级不符的同名答案在 HTML 渲染之前排除，因此网页详情、复习、AI 和 PDF/Markdown 导出不会再携带这些候选。全部不符返回 not-found，保留“当前未匹配到答案”提示，不放宽到其他父级。

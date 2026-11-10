@@ -23,10 +23,12 @@ export interface MistakeRecord {
   sourceRootNodeId?: string
   sourceRootTitle?: string
   sourceTitle: string
+  sourcePathOrder?: "root-first"
   sourcePathTitles: string[]
   categoryPath: string[]
   manualCategory?: string
   manualCategories?: string[]
+  reasonTags?: string[]
   /** 收藏使用稳定 recordId 归属，不能由标题推断。 */
   favorite?: boolean
   /** 最近一次显式核对原卡时的可用性；普通 dashboard 不为此逐条查询数据库。 */
@@ -166,10 +168,12 @@ export interface NewMistakeInput {
   sourceRootNodeId?: string
   sourceRootTitle?: string
   sourceTitle: string
+  sourcePathOrder?: "root-first"
   sourcePathTitles: string[]
   categoryPath?: string[]
   manualCategory?: string
   manualCategories?: string[]
+  reasonTags?: string[]
   answerNotebookId?: string
   answerRootNodeId?: string
   level: MistakeLevel
@@ -184,6 +188,7 @@ export function createMistakeRecord(
   const at = now.toISOString()
   return {
     ...input,
+    sourcePathOrder: "root-first",
     levelModel: 3,
     reviewScheduleModel: 3,
     recordId: sourceRecordKey(input.sourceNotebookId, input.sourceNoteId),

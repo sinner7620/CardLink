@@ -7,7 +7,7 @@ import { UI_COLORS } from "./ui-tokens"
 import { styleQuickMenuSurface, styleAnnotationReviewSurface } from "./quick-menu-surface"
 import { loadMatcherSettings } from "./settings"
 import { recordRuntimeState } from "./note-navigation"
-import { collectQuestionTree, questionIdsInTree, type QuestionTreeNode } from "./quick-menu-selection"
+import { collectQuestionTree, questionIdsInTree, selectedQuestionIds, type QuestionTreeNode } from "./quick-menu-selection"
 import { MN, NodeNote } from "marginnote"
 import { MAIN_MINDMAP_SCOPE_ID, mindMapScopeIdForNote } from "./mindmap-candidate"
 import { navigateSameMapPractice, sameMapPracticeActive, sameMapPracticeQuestionIds, sameMapPracticeCurrentQuestionId, stopSameMapPractice } from "./same-map-practice"
@@ -51,6 +51,7 @@ interface QuickMenu {
   segmentVisual: UIWebView
   filterButton: UIButton
   allButton: UIButton
+  customAllButton?: UIButton
   listContainer?: UIView
   tree: QuestionTreeNode[]
   selectedIds: Set<string>
@@ -59,7 +60,10 @@ interface QuickMenu {
   rowIds: string[]
   visibleRows: QuestionTreeNode[]
   scroll?: UIScrollView
-  mode: "filter" | "all" | "queue"
+  mode: "filter" | "all" | "queue" | "selected"
+  selectedCardIds: Set<string>
+  selectionScope?: string
+  selectDescendants?: boolean
   questionColorIndex?: number
   maskAnswers?: boolean
   collapsedFrame: ViewFrame
@@ -270,22 +274,30 @@ function menuButton(title: string, frame: ViewFrame, selector: string, owner: an
   return button
 }
 
-function quickMenuSegmentHtml(mode: "all" | "queue"): string {
+function quickMenuSegmentHtml(mode: "all" | "queue" | "selected"): string {
   return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><style>
     :root{--ease-main:cubic-bezier(0.32,0.72,0,1);--accent:${UI_COLORS.accent};--muted:#6e6e73;--track:${UI_COLORS.grayFill}6b}
     *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}
     .track{position:relative;width:100%;height:42px;padding:3px;border-radius:21px;background:var(--track);display:flex;align-items:center}
     .slider{position:absolute;top:3px;left:3px;width:calc((100% - 6px)/2);height:36px;border-radius:18px;background:#fff;transform:translateX(100%);transition:transform 0.45s var(--ease-main)}
     .label{position:relative;z-index:1;width:50%;text-align:center;font:15px -apple-system,BlinkMacSystemFont,sans-serif;line-height:36px;color:var(--muted);transition:color 0.28s ease 0.06s}
-    .track[data-mode="filter"] .slider,.track[data-mode="queue"] .slider{transform:translateX(0)}
-    .track[data-mode="filter"] .filter,.track[data-mode="all"] .all,.track[data-mode="queue"] .filter{color:var(--accent)}
+    .track[data-mode="filter"] .slider,.track[data-mode="queue"] .slider,.track[data-selection="true"][data-mode="all"] .slider{transform:translateX(0)}
+    .track[data-mode="filter"] .filter,.track[data-selection="false"][data-mode="all"] .all,.track[data-mode="selected"] .all,.track[data-mode="queue"] .filter{color:var(--accent)}
     .track[data-mode="queue"] .filter{width:100%}.track[data-mode="queue"] .all{display:none}.track[data-mode="queue"] .slider{width:calc(100% - 6px)}
-    @media(prefers-reduced-motion:reduce){.slider,.label{transition:none}}
-  </style></head><body><div class="track" data-mode="${mode}"><div class="slider"></div><div class="label filter">${mode === "queue" ? "当前做题队列" : "筛选"}</div><div class="label all">全选</div></div>
-  <script>window.setQuickMenuMode=function(mode){var track=document.querySelector('.track');track.dataset.mode=mode;track.querySelector('.filter').textContent=mode==='queue'?'当前做题队列':'筛选'}</script></body></html>`
+    .customTitle{display:block;transition:opacity .28s ease,transform .45s var(--ease-main)}
+    .sub{position:absolute;inset:0;display:flex;opacity:0;transform:scale(.8);transition:opacity .28s ease,transform .45s var(--ease-main)}
+    .sub span{position:relative;width:50%;font-size:13px;color:var(--muted)}
+    .sub i{position:absolute;inset:3px auto 3px 3px;width:calc(50% - 3px);border-radius:16px;background:var(--track);transition:transform .45s var(--ease-main)}
+    .track[data-selection="true"]:not([data-mode="selected"]) .customTitle{opacity:0;transform:scale(.8)}
+    .track[data-selection="true"]:not([data-mode="selected"]) .sub{opacity:1;transform:scale(1)}
+    .track[data-mode="all"] .sub i{transform:translateX(100%)}
+    .track[data-mode="all"] .sub .subAll,.track[data-mode="filter"] .sub .subFilter{color:var(--accent)}
+    @media(prefers-reduced-motion:reduce){.slider,.label,.customTitle,.sub,.sub i{transition:none}}
+  </style></head><body><div class="track" data-mode="${mode}" data-selection="${mode === "selected"}"><div class="slider"></div><div class="label filter"><span class="customTitle">${mode === "queue" ? "当前做题队列" : mode === "selected" ? "自定义" : "筛选"}</span><div class="sub"><i></i><span class="subFilter">筛选</span><span class="subAll">全选</span></div></div><div class="label all">${mode === "selected" ? "当前选中" : "全选"}</div></div>
+  <script>window.setQuickMenuMode=function(mode){var track=document.querySelector('.track');track.dataset.mode=mode;if(track.dataset.selection!=='true')track.querySelector('.customTitle').textContent=mode==='queue'?'当前做题队列':'筛选'}</script></body></html>`
 }
 
-function quickMenuSegmentVisual(width: number, mode: "all" | "queue"): UIWebView {
+function quickMenuSegmentVisual(width: number, mode: "all" | "queue" | "selected"): UIWebView {
   const view = new UIWebView({ x: 0, y: 0, width, height: 42 })
   const bridged = view as any
   bridged.opaque = false
@@ -359,7 +371,9 @@ function createQuickMenu(ball: any, window: any, collapsedFrame: ViewFrame, geom
   segment.backgroundColor = UIColor.clearColor()
   segment.layer.cornerRadius = 21
   segment.layer.masksToBounds = true
-  const initialMode = sameMapPracticeActive() ? "queue" : "all"
+  const selectedCardIds = new Set<string>(MN.notebookController?.mindmapView
+    ? NodeNote.getSelectedNodes().map(node => String(node.note?.noteId ?? "")).filter(Boolean) : [])
+  const initialMode = sameMapPracticeActive() ? "queue" : selectedCardIds.size ? "selected" : "all"
   const segmentVisual = quickMenuSegmentVisual(expandedFrame.width - QUICK_MENU_INSET * 2, initialMode)
   segment.addSubview(segmentVisual)
   const filterButton = menuButton("", { x: 3, y: 0, width: (expandedFrame.width - QUICK_MENU_INSET * 2 - 6) / 2, height: 42 }, "onMnutilsQuickMenuFilter:", owner)
@@ -368,12 +382,20 @@ function createQuickMenu(ball: any, window: any, collapsedFrame: ViewFrame, geom
   const allButton = menuButton("", { x: 3 + (expandedFrame.width - QUICK_MENU_INSET * 2 - 6) / 2, y: 0, width: (expandedFrame.width - QUICK_MENU_INSET * 2 - 6) / 2, height: 42 }, "onMnutilsQuickMenuSelectAll:", owner)
   allButton.backgroundColor = UIColor.clearColor()
   segment.addSubview(allButton)
+  let customAllButton: UIButton | undefined
+  if (selectedCardIds.size && initialMode === "selected") {
+    customAllButton = menuButton("", { x: 0, y: 0, width: 0, height: 42 }, "onMnutilsQuickMenuSelectAll:", owner)
+    customAllButton.tag = 1
+    customAllButton.backgroundColor = UIColor.clearColor()
+    customAllButton.hidden = true
+    segment.addSubview(customAllButton)
+  }
   controls.addSubview(segment)
   window.addSubview(content)
   window.bringSubviewToFront?.(ball.button)
   return {
-    owner, window, windowSize: windowSize(window), dismissTap, ball, content, controls, startButton, closeButton, segment, segmentVisual, filterButton, allButton,
-    tree: [], selectedIds: new Set(), expandedIds: new Set(), rowIds: [], visibleRows: [], mode: initialMode,
+    owner, window, windowSize: windowSize(window), dismissTap, ball, content, controls, startButton, closeButton, segment, segmentVisual, filterButton, allButton, customAllButton,
+    tree: [], selectedIds: new Set(), expandedIds: new Set(), rowIds: [], visibleRows: [], mode: initialMode, selectedCardIds,
     collapsedFrame, expandedFrame, geometry, desiredWidth: QUICK_MENU_WIDTH, desiredHeight: QUICK_MENU_HEIGHT, open: false, generation: 0
   }
 }
@@ -433,9 +455,19 @@ function readQuickMenuQuestions(menu: QuickMenu): boolean {
     showHUD("请先打开脑图", 2)
     return false
   }
+  const contextKey = JSON.stringify([context.notebookId, context.scopeId])
+  if (menu.mode === "selected") {
+    if (menu.selectionScope && menu.selectionScope !== contextKey) {
+      showHUD("脑图已切换，请重新打开悬浮菜单选择题目", 3)
+      return false
+    }
+    menu.selectionScope = contextKey
+  }
   const bindings = loadBindings()
   const binding = getBindingForMode(bindings, context.notebookId, context.scopeId, loadMatcherSettings().allowSameStudySetMindMap)
-  const colors = [...new Set([...(loadMatcherSettings().globalQuestionColors ?? []), ...(binding?.questionColors ?? [])])]
+  const answerMindMapOnly = !!binding && binding.selectionMode !== "mixed" && binding.designatedAnswer !== "subcard"
+  menu.selectDescendants = !answerMindMapOnly
+  const colors = answerMindMapOnly ? [] : [...new Set([...(loadMatcherSettings().globalQuestionColors ?? []), ...(binding?.questionColors ?? [])])]
   if (!colors.length && !sameMapPracticeActive() && (binding?.designatedAnswer === "subcard" || binding?.selectionMode === "mixed")) {
     recordRuntimeState("悬浮菜单", "questions.unavailable", `scope=${context.scopeId} reason=no-question-colors`)
     showHUD("请先在答案配置中筛选题目卡片颜色", 3)
@@ -444,13 +476,20 @@ function readQuickMenuQuestions(menu: QuickMenu): boolean {
   menu.questionColorIndex = colors[0]
   menu.maskAnswers = usesSubcardAnswers(binding ? { ...binding, questionColors: colors } : binding, colors[0])
   const inCurrentMap = new Set(context.notes.map(note => String(note.noteId ?? "").trim()))
-  menu.tree = collectQuestionTree(context.notes, sameMapPracticeActive() || !colors.length ? undefined : colors, note => inCurrentMap.has(String(note.noteId ?? "").trim()))
+  menu.tree = collectQuestionTree(context.notes, sameMapPracticeActive() || !colors.length ? undefined : colors,
+    note => inCurrentMap.has(String(note.noteId ?? "").trim()), { excludeQuestionDescendants: menu.maskAnswers === true })
   restoreTreeExpansion(menu, JSON.stringify([context.notebookId, context.scopeId]))
   const available = new Set(questionIdsInTree(menu.tree))
   menu.selectedIds = sameMapPracticeActive()
     ? new Set(sameMapPracticeQuestionIds().filter(id => available.has(id)))
-    : menu.mode === "all" ? available : new Set([...menu.selectedIds].filter(id => available.has(id)))
-  recordRuntimeState("悬浮菜单", "questions.ready", `scope=${context.scopeId} colors=${colors.join(",")} visible=${context.notes.length} available=${available.size} selected=${menu.selectedIds.size}`)
+    : menu.mode === "selected" ? new Set(selectedQuestionIds(menu.tree, menu.selectedCardIds, menu.selectDescendants))
+      : menu.mode === "all" ? available : new Set([...menu.selectedIds].filter(id => available.has(id)))
+  const colorCounts = new Map<string, number>()
+  context.notes.forEach(note => {
+    const color = typeof note.colorIndex === "number" ? String(note.colorIndex) : `unreadable:${typeof note.colorIndex}`
+    colorCounts.set(color, (colorCounts.get(color) ?? 0) + 1)
+  })
+  recordRuntimeState("悬浮菜单", "questions.ready", `scope=${context.scopeId} colors=${colors.join(",")} visible=${context.notes.length} available=${available.size} selected=${menu.selectedIds.size} mode=${menu.mode} answer=${menu.maskAnswers ? "subcard" : "mindmap"} cardColors=${JSON.stringify([...colorCounts])} selectedCards=${menu.selectedCardIds.size}`)
   updateStartTitle(menu)
   return true
 }
@@ -477,6 +516,9 @@ function visibleQuestionRows(menu: QuickMenu): Array<{ node: QuestionTreeNode; d
 }
 
 function updateSegmentSelection(menu: QuickMenu): void {
+  ;(menu.filterButton as any).accessibilityLabel = menu.mode === "selected" ? "自定义" : "筛选"
+  ;(menu.allButton as any).accessibilityLabel = menu.customAllButton ? "当前选中" : "全选"
+  if (menu.customAllButton) (menu.customAllButton as any).accessibilityLabel = "全选"
   ;(menu.segmentVisual as any).evaluateJavaScript(`window.setQuickMenuMode(${JSON.stringify(menu.mode)})`, () => {})
 }
 
@@ -495,7 +537,12 @@ function layoutQuickMenu(menu: QuickMenu, geometry: QuickMenuGeometry, resizeShe
   menu.segmentVisual.frame = { x: 0, y: 0, width, height: 42 }
   const half = Math.max(0, (width - 6) / 2)
   menu.allButton.frame = { x: 3 + half, y: 0, width: half, height: 42 }
-  menu.filterButton.frame = { x: 3, y: 0, width: menu.mode === "queue" ? width - 6 : half, height: 42 }
+  const nestedCustom = !!menu.customAllButton && menu.mode !== "selected" && menu.mode !== "queue"
+  menu.filterButton.frame = { x: 3, y: 0, width: menu.mode === "queue" ? width - 6 : nestedCustom ? half / 2 : half, height: 42 }
+  if (menu.customAllButton) {
+    menu.customAllButton.hidden = !nestedCustom
+    menu.customAllButton.frame = { x: 3 + half / 2, y: 0, width: half / 2, height: 42 }
+  }
   menu.allButton.hidden = menu.mode === "queue"
   if (menu.listContainer) menu.listContainer.frame = { x: QUICK_MENU_INSET, y: listY, width, height: listHeight }
   if (menu.scroll) {
@@ -668,7 +715,7 @@ function renderQuestionTree(menu: QuickMenu, focusCurrent = false): void {
     })
     reveal(menu.tree)
   }
-  if (menu.mode === "all") {
+  if (menu.mode === "all" || menu.mode === "selected") {
     resizeQuickMenu(menu, QUICK_MENU_WIDTH, QUICK_MENU_HEIGHT)
     menu.visibleRows = []
     menu.rowIds = []
@@ -697,8 +744,9 @@ function renderQuestionTree(menu: QuickMenu, focusCurrent = false): void {
     row.layer.cornerRadius = 10
     row.layer.masksToBounds = true
     row.addTargetActionForControlEvents(self, "onMnutilsQuickMenuToggleQuestion:", 1 << 6)
-    const checked = node.questionIds.every(id => menu.selectedIds.has(id))
-    const partial = !checked && node.questionIds.some(id => menu.selectedIds.has(id))
+    const rowQuestions = menu.selectDescendants === false && node.question ? [node.id] : node.questionIds
+    const checked = rowQuestions.every(id => menu.selectedIds.has(id))
+    const partial = !checked && rowQuestions.some(id => menu.selectedIds.has(id))
     row.backgroundColor = checked || partial
       ? UIColor.colorWithHexString(UI_COLORS.accent).colorWithAlphaComponent(checked ? 0.2 : 0.08)
       : UIColor.clearColor()
@@ -996,8 +1044,8 @@ function openQuickMenu(button: any, window: any, owner: any = self): void {
     owner.cardLinkReviewEntranceRender(menu.reviewControls)
     setQuickMenuShell(menu, menu.collapsedFrame, ENTRANCE_SIZE / 2)
   } else if (clipperModeActive(owner)) prepareClipperMenu(menu)
-  else if (sameMapPracticeActive() && readQuickMenuQuestions(menu)) {
-    renderQuestionTree(menu, true)
+  else if ((sameMapPracticeActive() || menu.mode === "selected") && readQuickMenuQuestions(menu)) {
+    if (sameMapPracticeActive()) renderQuestionTree(menu, true)
     void updateSegmentSelection(menu)
   }
   void animateQuickMenu(menu, true)
@@ -1163,20 +1211,30 @@ export function onMnutilsQuickMenuFilter(): void {
   recordRuntimeState("悬浮菜单", "filter.tap", `open=${!!menu?.open}`)
   if (!menu?.open) return
   if (sameMapPracticeActive()) return
-  if (menu.mode === "all" && !sameMapPracticeActive()) menu.selectedIds.clear()
+  if (menu.mode === "selected") {
+    menu.mode = "all"
+    if (!readQuickMenuQuestions(menu)) return
+    renderQuestionTree(menu)
+    updateSegmentSelection(menu)
+    return
+  }
+  if (menu.mode === "all") menu.selectedIds.clear()
   menu.mode = "filter"
   if (!readQuickMenuQuestions(menu)) return
   renderQuestionTree(menu)
   void updateSegmentSelection(menu)
 }
 
-export function onMnutilsQuickMenuSelectAll(): void {
+export function onMnutilsQuickMenuSelectAll(sender?: any): void {
   const menu = self.mnutilsQuickMenu as QuickMenu | undefined
   recordRuntimeState("悬浮菜单", "selectAll.tap", `open=${!!menu?.open}`)
   if (sameMapPracticeActive()) return
   if (!menu?.open || !readQuickMenuQuestions(menu)) return
   menu.selectedIds = new Set(questionIdsInTree(menu.tree))
-  menu.mode = "all"
+  if (menu.customAllButton && Number(sender?.tag) !== 1) {
+    menu.mode = "selected"
+    menu.selectedIds = new Set(selectedQuestionIds(menu.tree, menu.selectedCardIds, menu.selectDescendants))
+  } else menu.mode = "all"
   renderQuestionTree(menu)
   void updateSegmentSelection(menu)
 }
@@ -1195,8 +1253,9 @@ export function onMnutilsQuickMenuToggleQuestion(sender: any): void {
     }
     return
   }
-  const allSelected = node.questionIds.every(id => menu.selectedIds.has(id))
-  for (const id of node.questionIds) {
+  const rowQuestions = menu.selectDescendants === false && node.question ? [node.id] : node.questionIds
+  const allSelected = rowQuestions.every(id => menu.selectedIds.has(id))
+  for (const id of rowQuestions) {
     if (allSelected) menu.selectedIds.delete(id)
     else menu.selectedIds.add(id)
   }
@@ -1297,7 +1356,14 @@ export async function onMnutilsQuickMenuStart(): Promise<void> {
   const notebookId = String(MN.currnetNotebookId ?? "").trim()
   const queue = questionIdsInTree(menu.tree).filter(id => menu.selectedIds.has(id))
   recordRuntimeState("悬浮菜单", "start.queue", `count=${queue.length}`)
-  if (!queue.length) { showHUD("请先选择做题题目", 2); return }
+  if (!queue.length) {
+    showHUD(!questionIdsInTree(menu.tree).length
+      ? menu.questionColorIndex !== undefined ? "当前脑图没有符合条件的题目，请检查答案配置中的题目颜色筛选"
+        : "当前脑图未读到可用题目，请重新打开脑图后重试"
+      : menu.mode === "selected" ? "所选卡片未包含符合条件的题目，请检查题目颜色或改用自定义选择"
+        : "请先选择做题题目", 4)
+    return
+  }
   if (menu.owner.cardLinkPracticeChoosing) return
   menu.owner.cardLinkPracticeChoosing = true
   try {

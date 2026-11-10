@@ -594,7 +594,6 @@ body > #root > .shell > main > section {
 body > #root > .shell > main > section.overviewPage,
 body > #root > .shell > main > section.reviewPage,
 body > #root > .shell > main > section.settingsPage,
-body > #root > .shell > main > section.aiSettingsPage,
 body > #root > .shell > main > section.exportPage {
   padding-right: 18px;
   padding-bottom: 18px;
@@ -605,7 +604,6 @@ body > #root > .shell > main > section.exportPage {
   body > #root > .shell > main > section.overviewPage,
   body > #root > .shell > main > section.reviewPage,
   body > #root > .shell > main > section.settingsPage,
-  body > #root > .shell > main > section.aiSettingsPage,
   body > #root > .shell > main > section.exportPage {
     padding-right: 10px;
     padding-bottom: 10px;

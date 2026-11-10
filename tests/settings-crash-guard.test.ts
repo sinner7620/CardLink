@@ -81,3 +81,18 @@ test("绑定管理排序不随存储对象的枚举顺序变化", () => {
   assert.deepEqual(Array.from(rows(), (row: any) => row.key), first)
   assert.deepEqual(first, ["questions::root::a", "questions::root::z"])
 })
+
+test("绑定颜色时，其他脑图的选中卡片不会写入颜色", () => {
+  const node = { note: { noteId: "q", colorIndex: 4, childMindMap: { noteId: "other" } } }
+  const add = exportedFunction("addManagedAnswerBindingColor", {
+    loadBindings: () => ({ "questions::root::target": { questionColors: [2] } }),
+    normalizeBinding: (value: any) => value,
+    MAIN_MINDMAP_SCOPE_ID: "main",
+    currentNotebookId: () => "questions",
+    NodeNote: { getSelectedNodes: () => [node] },
+    MN: { notebookController: { mindmapView: { mindmapNodes: [node] } } },
+    mindMapScopeIdForNote: () => "other",
+    updateManagedAnswerBinding: () => assert.fail("不得写入颜色")
+  })
+  assert.equal(add("questions::root::target").mismatch, true)
+})

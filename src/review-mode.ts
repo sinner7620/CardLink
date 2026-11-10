@@ -839,7 +839,7 @@ export async function startReviewMode(itemsValue: unknown, owner: any = self, al
     item.lastReviewedAt = algorithm === "fsrs" ? item.fsrsProgress?.card?.last_review : stored[item.recordId]?.lastReviewedAt
     try {
       const note = MN.db.getNoteById(item.sourceNoteId)
-      item.sourceAncestors = note ? new NodeNote(note, item.sourceNotebookId).ancestorNodes.reverse().map(node => ({ id: node.note.noteId, title: node.title?.trim() || '未命名节点' })) : []
+      item.sourceAncestors = note ? [...new NodeNote(note, item.sourceNotebookId).ancestorNodes].reverse().map(node => ({ id: node.note.noteId, title: node.title?.trim() || '未命名节点' })) : []
       const rootIndex = item.sourceAncestors.findIndex(node => node.id === item.sourceRootNodeId)
       if (rootIndex >= 0) item.sourceAncestors = item.sourceAncestors.slice(rootIndex + 1)
     } catch { item.sourceAncestors = [] }

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
 import { windowOpacityFixture } from './window-opacity-fixture'
 
-function harness() {
+function harness(show = true) {
   class View {
     frame: any; layer: any = { removeAnimationForKey() {} }; scrollView: any = {}
     hidden = false; children: any[] = []; superview: any
@@ -36,10 +36,35 @@ function harness() {
   runInNewContext(readFileSync('rails-native/WebPanelController.js', 'utf8'), scope)
   const api = scope.__MNAM_WEB_PANEL_GLOBAL__
   const controller = api.createController('/addon', { window: host })
-  api.showPanel(controller)
+  if (show) api.showPanel(controller)
   function invoke(name: string, gesture: any) { scope.self = controller; return methods[name](gesture) }
   return { api, controller, root, invoke }
 }
+
+test('经典面板首次打开时才创建 WebView，关闭和重开复用该实例', () => {
+  const { api, controller, root } = harness(false)
+  api.ensureLayout(controller)
+  api.hidePanel(controller, false)
+  assert.equal(api.isVisible(controller), false)
+  assert.equal(controller.webView, undefined)
+  api.showPanel(controller)
+  const webView = controller.webView
+  assert.ok(webView)
+  assert.equal(root.hidden, true)
+  assert.equal(api.isVisible(controller), true)
+  api.hidePanel(controller)
+  api.showPanel(controller)
+  assert.equal(controller.webView, webView)
+})
+
+test('从场景切回经典模式并恢复面板时，可以首次加载经典 WebView', () => {
+  const { api, controller } = harness(false)
+  controller.preserveAcrossNotebookSwitch = true
+  api.restorePanelAfterNotebookSwitch(controller)
+  assert.ok(controller.webView)
+  assert.equal(api.isVisible(controller), true)
+  assert.equal(controller.preserveAcrossNotebookSwitch, false)
+})
 
 test('经典浮窗拖动直接跟随位移，重复回调不累计漂移，缩放不能抢占', () => {
   const h = harness(), c = h.controller

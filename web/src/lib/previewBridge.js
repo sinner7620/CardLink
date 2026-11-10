@@ -1,5 +1,8 @@
 import { escapeHtml } from "../../../src/html-utils"
+import { ocrPreview } from './ocrPreview'
 
+const previewCredentials={'ocr-glm':'preview-only-c913'}
+let previewOCREngine='glm-ocr'
 const DAY = 86400000
 const levelCurves = [[1, 3, 7], [2, 5, 10], [14]]
 let customCategories = ["计算题", "概念辨析", "需要重做"]
@@ -11,10 +14,10 @@ let debugAutoInstallUpdatesEnabled = false
 let pluginEnabled = true
 let previewClipper = { mode: false, running: false, started: false, excerptTitle: true, toolLabels: {} }
 let sourceLocateMode = "locate"
-let previewPersonalSettings = { globalQuestionColors: [], sceneWorkbenchEnabled: false, entranceDefaultMode: "practice", boundHandwritingDisplay: "doubleTap", mistakeListDisplay: "always", subcardAnswerDisplay: "window", answerMaskStyle: "dark", answerMaskColor: "#141922", maskImageConfigured: false, autoCollapseComments: false, reviewExpandedCommentCount: 2, reviewCompletionConfetti: true }
+let previewPersonalSettings = { globalQuestionColors: [], entranceDefaultMode: "practice", boundHandwritingDisplay: "doubleTap", mistakeListDisplay: "always", subcardAnswerDisplay: "window", answerMaskStyle: "dark", answerMaskColor: "#141922", maskImageConfigured: false, autoCollapseComments: false, reviewExpandedCommentCount: 2, reviewCompletionConfetti: true }
 let manualTodayIds = []
 let previewBindings = [
-  { key: "questions::root::main", notebookId: "questions", notebookTitle: "多元微分", sourceRootNodeId: "main", sourceTitle: "考研真题", answerTitle: "多元微分答案 › 标准答案", hasAnswerMindMap: true, selectionMode: "mixed", designatedAnswer: "mindmap", questionColors: [1], availableColors: [0, 1, 2, 3] },
+  { key: "questions::root::main", notebookId: "questions", notebookTitle: "多元微分", sourceRootNodeId: "main", sourceTitle: "考研真题", answerTitle: "多元微分答案 › 标准答案", hasAnswerMindMap: true, selectionMode: "designated", designatedAnswer: "mindmap", questionColors: [1], availableColors: [0, 1, 2, 3] },
   { key: "practice::root::main", notebookId: "practice", notebookTitle: "强化练习", sourceRootNodeId: "main", sourceTitle: "方向导数", answerTitle: "—", hasAnswerMindMap: false, selectionMode: "designated", designatedAnswer: "subcard", questionColors: [2], availableColors: [0, 2, 4] }
 ]
 
@@ -198,18 +201,56 @@ function workbenchPage(offset = 0, transferId = "preview-workbench") {
   }
 }
 
-let previewPreparationJob = null
-function previewPreparationPublic() {
-  if (!previewPreparationJob) return { status: "missing" }
-  return { ...previewPreparationJob, recordIds: undefined, totalProgress: previewPreparationJob.total ? Math.round(previewPreparationJob.completed / previewPreparationJob.total * 100) : 100 }
-}
-function previewPreparationCurrent() {
-  const recordId = previewPreparationJob?.recordIds?.[previewPreparationJob.completed]
-  const record = records.find(item => item.recordId === recordId)
-  return record ? { recordId, title: record.sourceTitle, index: previewPreparationJob.completed + 1, total: previewPreparationJob.total, stage: "waiting-render", progress: 0, detail: "等待渲染题目卡片", ocrText: "" } : undefined
+let localCachePreview = [
+  { id: "indexes", title: "答案索引", clearable: false, files: 3, bytes: 2500000, documentKnownBytes: 0, documentFiles: 0 },
+  { id: "pdf", title: "PDF 预览与导出图片暂存", clearable: true, files: 20, bytes: 175921800, documentKnownBytes: 175000000, documentFiles: 15 },
+  { id: "logs", title: "诊断日志", clearable: true, files: 1, bytes: 695800, documentKnownBytes: 0, documentFiles: 0 },
+  { id: "templates", title: "模板临时文件", clearable: true, files: 2, bytes: 494500, documentKnownBytes: 0, documentFiles: 0 },
+  { id: "exports", title: "导出文件", clearable: true, files: 5, bytes: 10000000, documentKnownBytes: 10000000, documentFiles: 5 },
+  { id: "saved", title: "手写与 AI", clearable: false, files: 200, bytes: 25000000, documentKnownBytes: 25000000, documentFiles: 200 },
+  { id: "dataBackups", title: "插件数据备份", clearable: false, files: 2, bytes: 1200000, documentKnownBytes: 1200000, documentFiles: 2 },
+  { id: "ocrDatabase", title: "OCR 数据库", clearable: false, files: 1, bytes: 4000000, documentKnownBytes: 4000000, documentFiles: 1 },
+  { id: "ocrBackups", title: "OCR 数据库备份", clearable: false, files: 2, bytes: 8000000, documentKnownBytes: 8000000, documentFiles: 2 },
+  { id: "updates", title: "更新包与恢复备份", clearable: true, files: 30, bytes: 10000000, documentKnownBytes: 0, documentFiles: 0 },
+  { id: "other", title: "其他本地文件", clearable: false, files: 2, bytes: 808185, documentKnownBytes: 808185, documentFiles: 2 },
+  { id: "recycle", title: "回收站（待手动删除）", clearable: false, files: 0, bytes: 0, documentKnownBytes: 0, documentFiles: 0, recyclePath: "/Documents/CardLink/回收站" }
+].map(group => ({ ...group, knownBytes: group.bytes, documentBytes: group.documentKnownBytes, paths: [], scanRoots: ["/Documents/CardLink", "/Caches/CardLink", "/tmp/CardLink"] }))
+
+// Browser-only samples exercise the same accepted-task / progress / result contract.
+let previewCacheTask = null
+function previewCacheStatus(taskId) {
+  const task = previewCacheTask
+  if (!task || task.taskId !== taskId) throw new Error("缓存任务已失效")
+  const elapsed = Date.now() - task.started, duration = task.operation === "clear" ? 1600 : 800
+  if (task.status === "running") {
+    task.progress = { phase: task.operation === "scan" || elapsed < 400 ? "scan" : elapsed < 1200 ? "clear" : "verify", directories: Math.min(12, Math.floor(elapsed / 70)), visited: Math.min(263, Math.floor(elapsed / 3)), processed: Math.min(26, Math.floor(elapsed / 50)), total: 26, removed: 0, failed: 0, skipped: 0 }
+    if (elapsed >= duration) {
+      let removed = 0
+      if (task.operation === "clear") {
+        removed = localCachePreview.filter(group => task.payload.ids.includes(group.id)).reduce((sum, group) => sum + group.files, 0)
+        const bytes = localCachePreview.filter(group => task.payload.ids.includes(group.id)).reduce((sum, group) => sum + group.bytes, 0)
+        const recycle = localCachePreview.find(group => group.id === "recycle")
+        recycle.files += removed; recycle.bytes += bytes; recycle.knownBytes = recycle.bytes; recycle.documentFiles = recycle.files; recycle.documentKnownBytes = recycle.bytes; recycle.documentBytes = recycle.bytes
+        localCachePreview = localCachePreview.map(group => task.payload.ids.includes(group.id) ? { ...group, files: 0, bytes: 0, knownBytes: 0, documentFiles: 0, documentBytes: 0, documentKnownBytes: 0 } : group)
+      }
+      task.status = "done"
+      task.result = { groups: localCachePreview.map(group => ({ ...group })), removed, failed: 0, skipped: 0, failures: [], scanIncomplete: false }
+    }
+  }
+  return { ...task, progress: { ...task.progress } }
 }
 
 export async function previewSend(command, payload = null) {
+  if (command.startsWith('ocrDb')) return ocrPreview(command,payload,records)
+  if (command === "scanLocalCache" || command === "clearLocalCache") {
+    if (previewCacheTask?.status === "running") return previewCacheStatus(previewCacheTask.taskId)
+    if (command === "clearLocalCache" && payload.ids.some(id => !localCachePreview.some(group => group.id === id && group.id !== "recycle" && group.id !== "ocrDatabase" && (group.clearable || payload.allowRetained === true)))) throw new Error("删除保留文件需要明确确认")
+    previewCacheTask = { taskId: `preview-cache-${Date.now()}`, operation: command === "clearLocalCache" ? "clear" : "scan", status: "running", started: Date.now(), payload,
+      progress: { phase: "scan", directories: 0, visited: 0, processed: 0, total: 0, removed: 0, failed: 0, skipped: 0 } }
+    return { ...previewCacheTask }
+  }
+  if (command === "localCacheTaskStatus") return previewCacheStatus(payload.taskId)
+
   if (debugModeEnabled && reviewAlgorithm === "fsrs" && ["saveMistakeReviewCurves", "reviewMistake", "changeMistakeLevel", "reviewMistakes", "changeMistakeLevels", "resumeMistakeReview"].includes(command)) throw new Error("FSRS 模式下固定曲线只读，请在待复习中提交反馈")
   if (command === "setReviewAlgorithm") {
     if (!debugModeEnabled) throw new Error("请先开启调试模式")
@@ -226,65 +267,20 @@ export async function previewSend(command, payload = null) {
   if (command === "startFsrsReviewMode") throw new Error("原生复习模式需要在 MarginNote 中使用")
   if (command === "mistakesRevision") return { revision: workbench().revision || "preview" }
   // AI 配置页与总览 AI 面板的预览 mock：形状与原生 publicSettings/报告索引一致。
-  if (command === "aiConfirmDevelopmentWarning") return { confirmed: true }
-  if (command === "aiGetSettings") return {
-    schemaVersion: 1, enabled: true, defaultProfileId: "openai-main",
-    profiles: [
-      { id: "openai-main", name: "OpenAI", type: "openai", baseUrl: "https://api.openai.com/v1", model: "gpt-5", timeoutMs: 60000, credentialRef: "llm-openai-main" },
-      { id: "deepseek-main", name: "DeepSeek", type: "deepseek", baseUrl: "https://api.deepseek.com", model: "deepseek-chat", timeoutMs: 60000, credentialRef: "llm-deepseek-main" }
-    ],
-    subjects: [{ id: "subject-math", name: "考研数学", studySetIds: ["set-1"], schedule: { enabled: true, frequency: "weekly", hour: 9, weekday: 1, monthday: 1, lastRunAt: "2026-09-05T09:00:00.000Z" } }],
-    ocrEngine: "glm-ocr",
+  if(command==='ocrReadCredential')return {value:previewCredentials[payload.credentialRef]||''}
+  if(command==='ocrSetCredential'){previewCredentials[payload.credentialRef]=payload.value||previewCredentials[payload.credentialRef]||'';return {configured:!!previewCredentials[payload.credentialRef]}}
+  if(command==='ocrClearCredential'){delete previewCredentials[payload.credentialRef];return {configured:false}}
+  if (command === "ocrGetSettings") return {
+    ocrEngine: previewOCREngine,
     mineru: { enabled: true, baseUrl: "https://mineru.net", credentialRef: "ocr-mineru", model: "vlm", language: "ch", enableFormula: true, enableTable: true, policy: "auto" },
     glmOcr: { baseUrl: "https://open.bigmodel.cn/api/paas/v4", credentialRef: "ocr-glm", model: "glm-ocr", timeoutMs: 120000 },
-    privacy: { includeAnswer: true, includeSourcePath: true, includeReviewHistory: true, includeCustomCategories: true, images: "when-needed", handwriting: false, mindMapHandwriting: true },
     credentials: {
-      "llm-openai-main": { configured: true, persistence: "local", maskedSuffix: "8f2a" },
-      "llm-deepseek-main": { configured: false, persistence: "none", maskedSuffix: "" },
-      "ocr-mineru": { configured: false, persistence: "none", maskedSuffix: "" },
-      "ocr-glm": { configured: true, persistence: "local", maskedSuffix: "c913" }
+      "ocr-mineru": { configured: !!previewCredentials['ocr-mineru'], persistence: "local", maskedSuffix: (previewCredentials['ocr-mineru']||'').slice(-4) },
+      "ocr-glm": { configured: !!previewCredentials['ocr-glm'], persistence: "local", maskedSuffix: (previewCredentials['ocr-glm']||'').slice(-4) }
     }
   }
-  if (command === "aiSaveSettings") return payload
-  if (command === "aiListStudySets") return [{ id: "questions", title: "高等数学题集" }, { id: "practice", title: "强化练习" }, { id: "empty", title: "暂未标记错题的学习集" }]
-  if (command === "aiListMistakeStudySets") return [{ id: "questions", title: "高等数学题集", mistakeCount: 2 }, { id: "practice", title: "强化练习", mistakeCount: 1 }]
-  if (command === "aiGetCacheStats") return { ocrEntries: 23, preparedEntries: 18, reportCount: 2 }
-  if (command === "aiListReports") return []
-  if (command === "aiStartQuestionPreparation") {
-    const recordIds = records.filter(item => item.sourceNotebookId === payload?.studySetId).map(item => item.recordId)
-    previewPreparationJob = { id: `preview-prep-${Date.now()}`, studySetId: payload?.studySetId, status: recordIds.length ? "waiting-render" : "done", total: recordIds.length, completed: 0, success: 0, failed: 0, recordIds, current: undefined }
-    previewPreparationJob.current = previewPreparationCurrent()
-    return previewPreparationPublic()
-  }
-  if (command === "aiGetQuestionPreparationJob") return previewPreparationPublic()
-  if (command === "aiGetPreparationQuestion") {
-    if (!previewPreparationJob?.current) throw new Error("题目准备任务不存在")
-    previewPreparationJob.current = { ...previewPreparationJob.current, stage: "rendering", detail: "正在渲染整张题目卡片" }
-    return { recordId: payload?.recordId, title: previewPreparationJob.current.title, questionHtml: detail(String(payload?.recordId || "")).questionHtml }
-  }
-  if (command === "aiSubmitPreparationImage") {
-    if (!previewPreparationJob?.current) throw new Error("题目准备任务不存在")
-    previewPreparationJob.completed += 1
-    previewPreparationJob.success += 1
-    previewPreparationJob.current = { ...previewPreparationJob.current, stage: "success", progress: 100, detail: "识别并保存完成", ocrText: "设二元函数 f(x,y) 在点 (x₀,y₀) 处的两个偏导数存在，判断该函数在该点连续的充分性与必要性。" }
-    previewPreparationJob.status = previewPreparationJob.completed >= previewPreparationJob.total ? "done" : "waiting-advance"
-    return { accepted: true }
-  }
-  if (command === "aiFailPreparationQuestion") {
-    previewPreparationJob.completed += 1
-    previewPreparationJob.failed += 1
-    previewPreparationJob.current = { ...previewPreparationJob.current, stage: "failed", detail: payload?.error || "渲染失败", error: payload?.error || "渲染失败" }
-    previewPreparationJob.status = previewPreparationJob.completed >= previewPreparationJob.total ? "done" : "waiting-advance"
-    return previewPreparationPublic()
-  }
-  if (command === "aiAdvanceQuestionPreparation") {
-    previewPreparationJob.current = previewPreparationCurrent()
-    previewPreparationJob.status = previewPreparationJob.current ? "waiting-render" : "done"
-    return previewPreparationPublic()
-  }
-  if (command === "aiCancelQuestionPreparation") { if (previewPreparationJob) previewPreparationJob.status = "cancelled"; return { cancelled: !!previewPreparationJob } }
-  if (command === "aiPreviewAnalysis") return { subjectId: payload?.subjectId, recordCount: 3, analyzableCount: 3, preparedCount: 2, needsPreparation: 1, withHistory: 2, withoutAnswerBinding: 1 }
-  if (command === "aiRunDueSchedules" || command === "aiGetJob") return { accepted: true, status: "missing" }
+  if (command === "ocrSaveSettings") {if(payload.ocrEngine)previewOCREngine=payload.ocrEngine;return payload}
+  if (command === "ocrListMistakeStudySets") return [{ id: "questions", title: "高等数学题集", mistakeCount: 2 }, { id: "practice", title: "强化练习", mistakeCount: 1 }]
   if (command === "refreshMistakeList") return { refreshed: 0 }
   if (command === "dashboard") return {
     reviewAlgorithm: debugModeEnabled ? reviewAlgorithm : "fixed",
@@ -292,7 +288,6 @@ export async function previewSend(command, payload = null) {
     version: "2.4.0 · 完整界面预览",
     mistakes: workbenchPage(),
     manualTodayIds,
-    aiEnabled: true,
     matching: {
       scopedBinding: true,
       mode: "title",
@@ -518,15 +513,19 @@ export async function previewSend(command, payload = null) {
   if (command === "previewMistakeExport") {
     // 与真机契约一致：recordIds 为严格白名单，空数组 = 零道，绝不回退成全部
     const exportIds = (payload?.recordIds || []).map(String)
-    const chosen = records.filter(item => exportIds.includes(item.recordId))
+    const all = exportIds.flatMap(id => records.find(item => item.recordId === id) || [])
+    const chosen = all.slice(0, 3)
     if (!chosen.length) throw new Error("当前预览范围没有可用错题")
+    const exportInclude = { handwriting: false, comments: false, ...(payload?.include || {}) }
+    const exportExtras = `${exportInclude.handwriting ? '<section aria-label="脑图绑定书写">脑图绑定书写示例</section>' : ''}${exportInclude.comments ? `<details class="card-comment" open><summary>评论</summary><p>卡片子评论示例</p>${exportInclude.handwriting ? '<p>评论书写示例</p>' : ''}</details>` : ''}`
     if (payload?.format === "md") {
       const markdown = [`# MN4 错题导出`, "", ...chosen.flatMap((item, index) => [`## ${index + 1}. ${item.sourceTitle}`, "", `来源：${item.sourceNotebookTitle} › ${item.sourcePathTitles.join(" › ")}`, "", "### 原题卡片", "", "题目卡片正文", "", "### 实时匹配答案", "", "答案卡片正文", "", "---", ""])]
-      return { preview: true, format: "md", count: chosen.length, markdown: markdown.join("\n") }
+      if (exportExtras) markdown.push(exportExtras)
+      return { preview: true, format: "md", count: all.length, previewCount: chosen.length, truncated: all.length > chosen.length, markdown: markdown.join("\n") }
     }
     const include = { question: true, answer: true, source: true, review: false, ...(payload?.include || {}) }
-    const question = (item, index) => `<article class="mistake question-unit"><header><b>${index + 1}.</b><h1>${item.sourceTitle}</h1></header>${include.source ? `<small>来源：${item.sourceNotebookTitle} › ${item.sourcePathTitles.join(" › ")}</small>` : ""}${include.question ? `<div class="card">${questionHtml}</div>` : ""}<div class="writing-space"></div></article>`
-    const answer = (item, index) => `<article class="mistake answer-unit"><header><b>答案 ${index + 1}</b><h1>${item.sourceTitle}</h1></header><div class="card">${answerHtml}</div></article>`
+    const question = (item, index) => `<article class="mistake question-unit"><header><b>${index + 1}.</b><h1>${item.sourceTitle}</h1></header>${include.source ? `<small>来源：${item.sourceNotebookTitle} › ${item.sourcePathTitles.join(" › ")}</small>` : ""}${include.question ? `<div class="card">${questionHtml}${exportExtras}</div>` : ""}<div class="writing-space"></div></article>`
+    const answer = (item, index) => `<article class="mistake answer-unit"><header><b>答案 ${index + 1}</b><h1>${item.sourceTitle}</h1></header><div class="card">${answerHtml}${exportExtras}</div></article>`
     const questions = chosen.map(question)
     const answers = include.answer ? chosen.map(answer) : []
     const perPage = payload?.pageLayout === "one-per-page" ? 1 : payload?.pageLayout === "two-per-page" ? 2 : payload?.pageLayout === "three-per-page" ? 3 : 0
@@ -546,7 +545,7 @@ export async function previewSend(command, payload = null) {
       content = pages.join("") + (payload?.answerLayout === "end" ? flow(answers, "pdf-answer-flow") : "")
     }
     const html = `<!doctype html><html><head><meta charset="utf-8"><style>*{box-sizing:border-box}html,body{margin:0;background:#fff}body{width:186mm;font:12px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#172033}.pdf-flow .pdf-slot+.pdf-slot{margin-top:1.55em}.pdf-flow{width:186mm}.pdf-answer-flow{padding:2mm 1mm}.pdf-page{width:186mm;min-height:273mm;display:grid}.slots-1{grid-template-rows:1fr}.slots-2{grid-template-rows:repeat(2,minmax(0,1fr))}.slots-3{grid-template-rows:repeat(3,minmax(0,1fr))}.pdf-page .pdf-slot{padding:3mm 1mm}.mistake{padding:3mm 1mm}.mistake header{display:flex;align-items:baseline;gap:8px}.mistake h1{font-size:18px;margin:0}.mistake small{color:#7b8494}.card{margin-top:8px;padding:12px;background:#f4f6f9;border-radius:6px}.writing-space{height:${payload?.pageLayout === "one-per-page" ? "80mm" : payload?.pageLayout === "two-per-page" ? "35mm" : payload?.pageLayout === "three-per-page" ? "16mm" : "0"}}.answer-unit{margin-top:8px}</style></head><body class="layout-${payload?.pageLayout || "compact"}">${content}</body></html>`
-    return { preview: true, format: "pdf", count: chosen.length, html }
+    return { preview: true, format: "pdf", count: all.length, previewCount: chosen.length, truncated: all.length > chosen.length, html }
   }
   if (command === "exportMistakes") {
     const exportIds = (payload?.recordIds || []).map(String)

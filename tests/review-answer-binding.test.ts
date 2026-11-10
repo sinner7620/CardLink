@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { runInNewContext } from "node:vm"
 import { createSourceFile, isFunctionDeclaration, ScriptTarget, transpileModule } from "typescript"
+import { normalizeParentTitle } from "../src/ordered-pairing-domain"
 import { getBindingForMode, usesSubcardAnswers } from "../src/binding"
 
 const source = readFileSync("src/plugin.ts", "utf8")
@@ -21,7 +22,7 @@ test("批注复习按队列来源和脑图绑定查子卡/答案脑图，不读�
       constructor(note: any) { this.note = note }
       get title() { return this.note.noteTitle }
       get titles() { return [this.title] }
-      ancestorNodes = []
+      ancestorNodes = [{ title: "章节" }]
       get childNodes(): Node[] { return (this.note.childNotes || []).map((n: any) => new Node(n)) }
     }
     const calls: any[] = [], opened: any[] = []
@@ -32,9 +33,9 @@ test("批注复习按队列来源和脑图绑定查子卡/答案脑图，不读�
       findAnswers: (target: any) => {
         calls.push(target)
         if (calls.length === 1) throw Error('index needs refresh')
-        return [{ id: 'remote', noteId: 'remote', notebookId: target.notebookId, titles: ['答案'] }]
+        return [{ id: 'remote', noteId: 'remote', notebookId: target.notebookId, titles: ['答案'], pathTitles: ['答案脑图', '章节'] }]
       }
-    } : name === './ordered-pairing' ? { pairedAnswerReference: () => undefined } : {} }
+    } : name === './ordered-pairing-domain' ? { normalizeParentTitle } : name === './note-navigation' ? { recordRuntimeState() {} } : name === './ordered-pairing' ? { pairedAnswerReference: () => undefined } : {} }
     runInNewContext(transpileModule(readFileSync('src/answer-lookup.ts', 'utf8'), { compilerOptions: { module: 1, target: 7 } }).outputText, lookup)
     let pending: Promise<void> = Promise.resolve()
     const sandbox: any = {

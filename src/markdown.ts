@@ -1,5 +1,5 @@
 import katex from "katex"
-import { Marked } from "marked"
+import { Marked, Renderer } from "marked"
 import { imageMimeFromBase64 } from "./base64"
 import { escapeHtml } from "./html-utils"
 
@@ -128,4 +128,12 @@ export function hasUnsupportedMarginNoteUrl(source: string): boolean {
 export function renderMarkdown(source: string, resolveMedia?: MarkdownMediaResolver): string {
   const html = markdown.parse(source, { async: false }) as string
   return resolveMedia ? resolveMarginNoteMarkdownImages(html, resolveMedia) : html
+}
+
+export function renderOCRMarkdownPreview(source: string): string {
+  const renderer = new Renderer()
+  renderer.html = ({ text }) => escapeHtml(text)
+  renderer.link = ({ tokens }) => renderer.parser.parseInline(tokens)
+  renderer.image = ({ text }) => `<span class="mdImageNote">[图片：${escapeHtml(text)}]</span>`
+  return markdown.parse(source, { async: false, renderer }) as string
 }

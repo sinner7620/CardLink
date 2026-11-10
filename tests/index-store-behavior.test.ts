@@ -126,3 +126,17 @@ test("空索引快照读写保留“已建立但 0 张卡”语义", async () =>
   // 空数组必须被读回（而不是视为无快照），否则空答案范围每次查找都误报“索引尚未建立”
   assert.deepEqual(store.loadStoredIndex(NOTEBOOK), [])
 })
+
+
+test("旧答案索引路径迁移为根到父级，新快照反复读写不重复倒序", async () => {
+  await loadStore()
+  cachePathValue = "/cache"
+  writesDisabled = false
+  files.clear()
+  files.set(FILE, JSON.stringify([{ ...items[0], pathTitles: ["2013年", "真题年份分类", "信号"] }]))
+  const migrated = store.loadStoredIndex(NOTEBOOK)!
+  assert.deepEqual(migrated[0].pathTitles, ["信号", "真题年份分类", "2013年"])
+  store.saveStoredIndex(NOTEBOOK, migrated)
+  assert.deepEqual(store.loadStoredIndex(NOTEBOOK)![0].pathTitles, migrated[0].pathTitles)
+  assert.deepEqual(store.loadStoredIndex(NOTEBOOK)![0].pathTitles, migrated[0].pathTitles)
+})

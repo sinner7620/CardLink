@@ -1,0 +1,37 @@
+.exportFilterWorkbench { border: 1px solid #e4e4e7; border-radius: 10px; overflow: hidden; color: #18181b; background: #fff; font-size: 13px; }
+.exportFilterTop { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid #e4e4e7; }
+.exportFilterTop > strong { font-weight: 600; }
+.exportFilterTop button { display: inline-flex; align-items: center; gap: 6px; border: 0; padding: 0; background: none; color: inherit; font-size: 12px; cursor: pointer; }
+.exportFilterTop button:disabled { opacity: .4; cursor: default; }
+.exportFilterTop button .uiIcon { width: 13px; height: 13px; }
+.exportFilterSearch { display: flex; align-items: center; gap: 8px; margin: 12px; padding: 0 10px; border: 1px solid #e4e4e7; border-radius: 6px; box-shadow: 0 1px 2px #00000008; }
+.exportFilterSearch .uiIcon { flex: none; width: 15px; height: 15px; color: #71717a; }
+.exportFilterWorkbench .exportFilterSearch input { width: 100%; min-width: 0; height: 36px; padding: 0; border: 0; outline: none; background: transparent; box-shadow: none; font: inherit; }
+.exportFilterSearch:focus-within { outline: 2px solid var(--mn-accent); outline-offset: 2px; }
+.exportFilterSection { border-top: 1px solid #e4e4e7; }
+.exportFilterSection summary { display: flex; align-items: center; gap: 8px; min-height: 46px; padding: 10px 14px; box-sizing: border-box; list-style: none; cursor: pointer; user-select: none; }
+.exportFilterSection summary::-webkit-details-marker { display: none; }
+.exportFilterSection summary strong { flex: 1; font-size: 13px; font-weight: 500; }
+.exportFilterSection summary .uiIcon { width: 14px; height: 14px; color: #71717a; }
+.exportFilterSection[open] summary .uiIcon { transform: rotate(180deg); }
+.exportFilterWorkbench .exportFilterBadge { padding: 1px 6px; border: 1px solid #e4e4e7; border-radius: 4px; font-size: 10px; }
+.exportFilterOptions { padding: 0 12px 12px; }
+.exportFilterChoiceList { overflow: hidden; border: 1px solid #e4e4e7; border-radius: 6px; }
+.exportFilterChoiceList label { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 7px 10px; cursor: pointer; }
+.exportFilterChoiceList label + label { border-top: 1px solid #e4e4e7; }
+.exportFilterChoiceList label:has(input:checked) { background: #f4f4f5; }
+.exportFilterChoiceList input { flex: none; width: 15px; height: 15px; margin: 0; accent-color: var(--mn-accent); }
+.exportFilterChoiceList i { flex: none; width: 9px; height: 9px; border-radius: 3px; }
+.exportFilterChoiceList label > span { flex: 1; }
+.exportFilterChoiceList small { color: #71717a; font-size: 11px; font-variant-numeric: tabular-nums; }
+.exportFilterResult { padding: 12px 14px; border-top: 1px solid #e4e4e7; color: #71717a; font-size: 12px; }
+.exportFilterResult strong { color: #18181b; font-size: 14px; }
+.exportFilterOptions .mindMapSelect, .exportFilterOptions .mindMapSelectTrigger { width: 100%; }
+/* Export uses a single page scroller, including the expanded map list. */
+.exportFilterOptions .mindMapSelectMenu { position: static; inset: auto; width: 100%; max-height: none; margin-top: 8px; box-sizing: border-box; box-shadow: none; }
+.exportFilterOptions .mindMapSelectOptions { max-height: none; overflow: visible; }
+@media (prefers-reduced-motion: reduce) { .exportFilterSection * { transition: none; } }
+
+/* Task actions stay outside the locked settings. */
+.exportSettingsLock { border: 0; padding: 0; margin: 0; min-width: 0; display: contents; }
+.exportSettingsLock[disabled] > section { opacity: .72; pointer-events: none; }

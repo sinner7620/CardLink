@@ -22,16 +22,6 @@ export const ERROR_CODES = [
   "debugModeRequired",
   "network",
   "timeout",
-  "aiDisabled",
-  "aiTaskCancelled",
-  "aiCredentialMissing",
-  "aiProviderMissing",
-  "handwritingUnavailable",
-  "ocrRequired",
-  "questionTextMissing",
-  "studySetMissing",
-  "subjectMissing",
-  "preparationJobMissing"
 ] as const
 
 export type ErrorCode = typeof ERROR_CODES[number]

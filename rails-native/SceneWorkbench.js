@@ -11,7 +11,7 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
     return !!(owner && owner.cardLinkReviewMode && (owner.cardLinkReviewMode.writingMode === "annotation" || owner.cardLinkReviewMode.writingMode === "handwriting") && typeof owner.cardLinkReviewAnnotationClosed === "function");
   }
   function version() { return String(Application.sharedInstance().appVersion || ""); }
-  function eligible() { return CardLinkHostPolicy.versionAtLeast450(version()) && typeof AddonWebPanel !== "undefined"; }
+  function eligible(owner) { return __MN_ANSWER_CORE_GLOBAL__.isSceneMode(owner) && typeof AddonWebPanel !== "undefined"; }
   function log(event, detail) { __MN_ANSWER_CORE_GLOBAL__.annotationLog(event, String(detail || "").slice(0, 400)); }
   function remember(open) { NSUserDefaults.standardUserDefaults().setObjectForKey(open, OPEN_KEY); }
   function opacityLog(current, event, detail) {
@@ -89,9 +89,9 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
     return result.success;
   }
   function startOpacityLock(current) {
-    if (current.opacityTimer) return;
+    if (current.opacityTimer || current.collapsed || current.rejected) return;
     var lastLookup = 0;
-    current.opacityTimer = NSTimer.scheduledTimerWithTimeInterval(1 / 30, true, function () {
+    function checkOpacity() {
       if (current.collapsed || current.rejected) return;
       try {
         var target = current.opacityTarget;
@@ -129,7 +129,8 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
         current.opacityTarget = null;
         opacityLog(current, 'panel.opacityLock', error.message || String(error));
       }
-    });
+    }
+    current.opacityTimer = NSTimer.scheduledTimerWithTimeInterval(0.5, true, checkOpacity);
     try {
       if (typeof NSRunLoop !== 'undefined') {
         var loop = typeof NSRunLoop.mainRunLoop === 'function' ? NSRunLoop.mainRunLoop()
@@ -138,6 +139,10 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
           typeof NSRunLoopCommonModes !== 'undefined' ? NSRunLoopCommonModes : 'kCFRunLoopCommonModes');
       }
     } catch (_) {}
+    checkOpacity();
+  }
+  function stopOpacityLock(current) {
+    if (current.opacityTimer) { current.opacityTimer.invalidate(); current.opacityTimer = null; }
   }
   function clearStartTimer(current) {
     if (current.startTimer) { current.startTimer.invalidate(); current.startTimer = null; }
@@ -153,13 +158,18 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
     if (core && typeof core.closeCardMistakePanel === "function") core.closeCardMistakePanel(owner);
     var current = session(owner);
     if (!current) return;
+    if (current.clipperToolsRequest) {
+      current.clipperToolsRequest.timer.invalidate();
+      current.clipperToolsRequest.reject(new Error("场景面板已关闭，未读取摘录工具"));
+      current.clipperToolsRequest = null;
+    }
     if (current.annotationRequest) {
       current.annotationRequest.timer.invalidate();
       current.annotationRequest.reject(new Error("场景面板已关闭，请检查批注窗口"));
       current.annotationRequest = null;
     }
     clearStartTimer(current);
-    if (current.opacityTimer) { current.opacityTimer.invalidate(); current.opacityTimer = null; }
+    stopOpacityLock(current);
     current.opacityTarget = null;
     finishReady(current, false);
     delete sessions[key(owner)];
@@ -170,6 +180,7 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
   function defer(callback) { NSTimer.scheduledTimerWithTimeInterval(0.05, false, callback); }
   function collapse(current) {
     current.collapsed = true;
+    stopOpacityLock(current);
     clearStartTimer(current);
     remember(false);
     current.panel.post("workbenchCollapse", {});
@@ -184,35 +195,43 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
     }
     if (current.rejected) return;
     current.rejected = true;
+    stopOpacityLock(current);
     current.confirmed = false;
     clearStartTimer(current);
     log("panel.sceneRejected", reason || "回到经典面板");
     defer(function () {
       if (session(current.owner) !== current) return;
-      hide(current.owner, false); originalShow(controller);
+      hide(current.owner, true);
+      if (__MN_ANSWER_CORE_GLOBAL__.isSceneMode(current.owner)) __MN_ANSWER_CORE_GLOBAL__.notifySceneUnavailable(reason || "当前场景无法加载 CardLink");
+      else originalShow(controller);
     });
   }
   function tryShow(controller) {
-    if (!__MN_ANSWER_CORE_GLOBAL__.sceneWorkbenchEnabled()) {
-      if (controller && controller.addon && session(controller.addon)) hide(controller.addon, false);
+    var owner = controller && controller.addon;
+    if (!owner || !eligible(owner)) {
+      if (owner && session(owner)) hide(owner, false);
       return false;
     }
-    var owner = controller && controller.addon;
-    if (!owner || !eligible()) { log("panel.classic", "host=" + version()); return false; }
     var current = session(owner);
     if (current) {
       var wasCollapsed = current.collapsed === true;
       current.collapsed = false;
       remember(true);
       current.panel.showFloatingIn(Application.sharedInstance().studyController(owner.window));
+      startOpacityLock(current);
       current.panel.post("workbenchRequested", {});
       if (current.confirmed) current.panel.post("panelShown", { skipReload: wasCollapsed || !!controller.preserveAcrossNotebookSwitch });
       controller.preserveAcrossNotebookSwitch = false;
       return true;
     }
     // The host only creates panels permitted by the current scene/template.
-    var panel = AddonWebPanel.panel();
-    if (!panel) { log("panel.unavailable", "host=" + version() + "; 当前场景未获面板许可"); return false; }
+    var panel;
+    try { panel = AddonWebPanel.panel(); } catch (error) { log("panel.factoryFailed", String(error)); }
+    if (!panel) {
+      log("panel.unavailable", "host=" + version() + "; 当前场景未获面板许可");
+      __MN_ANSWER_CORE_GLOBAL__.notifySceneUnavailable("当前场景模板未授权 CardLink 面板，请检查模板配置");
+      return false;
+    }
     var token = "cardlink.scene:" + Date.now() + ":" + (++sequence);
     owner.cardLinkSceneToken = token;
     current = { owner: owner, panel: panel, media: __MNAM_SCENE_MEDIA_GLOBAL__.create(panel), confirmed: false, stage: "加载启动资源", appRendered: false };
@@ -227,13 +246,13 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
       if (name === "sceneLog") { log(data && data.event, data && data.detail); return { logged: true }; }
       if (name === "sceneReady") {
         if (current.rejected) return { enabled: false };
-        current.confirmed = CardLinkHostPolicy.sceneEnabled(version(), data);
+        current.confirmed = eligible(owner) && CardLinkHostPolicy.sceneEnabled(version(), data);
         current.stage = "加载并渲染工作台脚本";
         log("panel.sceneReady", "host=" + version() + "; enabled=" + current.confirmed);
         return { enabled: current.confirmed };
       }
       if (name === "sceneRejected") {
-        rejectScene(current, controller, data && (data.stage + ": " + data.reason));
+        rejectScene(current, controller, data && data.reason ? (data.stage ? data.stage + ": " : "") + data.reason : "");
         return reviewing(current) ? { retained: true } : { fallback: true };
       }
       if (name === "sceneClose") {
@@ -250,6 +269,14 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
         else pending.resolve(data.result);
         return { accepted: true };
       }
+      if (name === "clipperToolsReply") {
+        var toolRequest = current.clipperToolsRequest;
+        if (!toolRequest || !data || toolRequest.id !== data.requestId) return { ignored: true };
+        toolRequest.timer.invalidate(); current.clipperToolsRequest = null;
+        if (data.error) toolRequest.reject(new Error(data.error));
+        else toolRequest.resolve(data.result);
+        return { accepted: true };
+      }
       if (name === "reviewAnnotationClosed") {
         var opening = current.annotationRequest;
         if (opening && !opening.operation && data && opening.reviewToken === data.reviewToken) {
@@ -259,20 +286,19 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
         var accepted = typeof owner.cardLinkReviewAnnotationClosed === "function" && owner.cardLinkReviewAnnotationClosed(data) === true;
         return { accepted: accepted };
       }
-      if (!eligible() || !current.confirmed) return { error: { message: "新面板要求软件 4.5.0 及以上，并处于场景页面" } };
+      if (!eligible(owner) || !current.confirmed) return { error: { message: "CardLink 场景面板需要 MarginNote 5 场景模式" } };
       if (name === "sceneMinimize") {
-        current.collapsed = true;
-        remember(false);
-        current.panel.post("workbenchCollapse", {});
+        collapse(current);
         return { minimized: true };
       }
       if (name === "sceneExpand") {
-        if (!__MN_ANSWER_CORE_GLOBAL__.sceneWorkbenchEnabled()) {
+        if (!eligible(owner)) {
           defer(function () { hide(owner, false); originalShow(controller); });
           return { fallback: true };
         }
         current.collapsed = false;
         remember(true);
+        startOpacityLock(current);
         current.panel.post("workbenchRequested", {});
         return { expanded: true };
       }
@@ -329,7 +355,12 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
     };
     try {
       panel.maxContentHeight = 1000;
-      if (panel.loadPanel() === false) { log("panel.loadFailed", "loadPanel返回false"); hide(owner, false); return false; }
+      if (panel.loadPanel() === false) {
+        log("panel.loadFailed", "loadPanel返回false");
+        hide(owner, false);
+        __MN_ANSWER_CORE_GLOBAL__.notifySceneUnavailable("CardLink 场景面板加载失败");
+        return false;
+      }
       originalHide(controller, false);
       panel.showFloatingIn(Application.sharedInstance().studyController(owner.window));
       startOpacityLock(current);
@@ -339,9 +370,22 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
         rejectScene(current, controller, "启动超时：" + current.stage);
       });
       return true;
-    } catch (error) { log("panel.failed", error.message || String(error)); hide(owner, false); return false; }
+    } catch (error) {
+      log("panel.failed", error.message || String(error));
+      hide(owner, false);
+      __MN_ANSWER_CORE_GLOBAL__.notifySceneUnavailable("CardLink 场景面板加载失败");
+      return false;
+    }
   }
-  legacy.showPanel = function (controller) { if (!tryShow(controller)) originalShow(controller); };
+  legacy.showPanel = function (controller) {
+    if (!controller) return;
+    if (__MN_ANSWER_CORE_GLOBAL__.isSceneMode(controller.addon)) {
+      if (!tryShow(controller)) { originalHide(controller, false); remember(false); }
+    } else {
+      if (session(controller.addon)) hide(controller.addon, false);
+      originalShow(controller);
+    }
+  };
   legacy.hidePanel = function (controller, rememberClosed) {
     var current = controller && session(controller.addon);
     if (current && (reviewing(current) || (rememberClosed !== false && current.confirmed && current.appRendered))) {
@@ -351,14 +395,41 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
   };
   legacy.isVisible = function (controller) { var current = controller && session(controller.addon); return !!(current && !current.collapsed) || originalVisible(controller); };
   legacy.restorePanelAfterNotebookSwitch = function (controller) {
-    if (!tryShow(controller)) originalRestore(controller);
+    if (controller && __MN_ANSWER_CORE_GLOBAL__.isSceneMode(controller.addon)) legacy.showPanel(controller);
+    else originalRestore(controller);
   };
   return {
-    eligible: eligible,
+    syncMode: function (owner) {
+      var controller = owner.webController;
+      if (!controller) return;
+      var mode = __MN_ANSWER_CORE_GLOBAL__.isSceneMode(owner);
+      if (controller.cardLinkSceneMode === mode) return;
+      controller.cardLinkSceneMode = mode;
+      var current = session(owner);
+      var visible = current ? !current.collapsed : originalVisible(controller);
+      if (!mode && current) hide(owner, false);
+      if (visible && (mode ? !current : !!current)) legacy.showPanel(controller);
+    },
+    readClipperTools: function (owner) {
+      var current = session(owner);
+      if (!current || !current.confirmed) return Promise.reject(new Error("请先打开当前场景的 CardLink 面板再绑定摘录工具"));
+      if (current.clipperToolsRequest) return Promise.reject(new Error("正在读取场景摘录工具，请稍候"));
+      return new Promise(function (resolve, reject) {
+        var id = "clipper-tools-" + (++sequence);
+        var timer = NSTimer.scheduledTimerWithTimeInterval(15, false, function () {
+          if (!current.clipperToolsRequest || current.clipperToolsRequest.id !== id) return;
+          current.clipperToolsRequest = null;
+          reject(new Error("读取场景摘录工具超时，请重试"));
+        });
+        current.clipperToolsRequest = { id: id, timer: timer, resolve: resolve, reject: reject };
+        try { current.panel.post("clipperToolsRead", { requestId: id }); }
+        catch (error) { timer.invalidate(); current.clipperToolsRequest = null; reject(error); }
+      });
+    },
     ensureReady: function (owner) {
+      if (!owner || !eligible(owner) || !owner.webController) return Promise.resolve(false);
       var current = session(owner);
       if (current && current.confirmed && current.workbenchRendered) return Promise.resolve(true);
-      if (!eligible() || !__MN_ANSWER_CORE_GLOBAL__.sceneWorkbenchEnabled() || !owner || !owner.webController) return Promise.resolve(false);
       if (!current) {
         if (!tryShow(owner.webController)) return Promise.resolve(false);
         current = session(owner);
@@ -371,7 +442,7 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
       if (current.confirmed && current.appRendered) current.panel.post("workbenchRequested", {});
       return ready;
     },
-    enabled: function (owner) { var current = session(owner); return eligible() && !!current && current.confirmed === true; },
+    enabled: function (owner) { var current = session(owner); return eligible(owner) && !!current && current.confirmed === true; },
     openReviewAnnotation: function (owner, target) {
       var current = session(owner);
       if (!current || (!current.confirmed && !reviewing(current))) return Promise.reject(new Error("请在场景面板中开启批注复习"));

@@ -11,7 +11,7 @@ import {
   rankAnswers
 } from "./domain"
 import { readSafeNote } from "./safe-note"
-import { renderCardHtml } from "./card-html"
+import { renderCardHtml, type CardContentOptions } from "./card-html"
 import { loadStoredIndex, saveStoredIndex, storedIndexUpdatedAt, StoredAnswerIndexItem } from "./index-store"
 import { isInMindMap, nodeIdentifier, readMindMapBranch } from "./mindmap-scope"
 import { collectChildMindMapNoteIds } from "./mindmap-candidate"
@@ -42,7 +42,7 @@ export interface RefreshResult {
 
 function pathTitles(node: NodeNote): string[] {
   try {
-    return node.ancestorNodes.map(ancestor => ancestor.title?.trim()).filter(Boolean) as string[]
+    return [...node.ancestorNodes].reverse().map(ancestor => ancestor.title?.trim()).filter(Boolean) as string[]
   } catch {
     return []
   }
@@ -283,7 +283,9 @@ export function answerCardHtml(
   answer: IndexedAnswer,
   questionTitle: string,
   resolveNote: (noteId: string) => MbBookNote | undefined = noteId => MN.db.getNoteById(noteId),
-  includeBoundHandwriting = false
+  includeBoundHandwriting = false,
+  includeRuntime = true,
+  contentOptions: CardContentOptions = {}
 ): string {
   const note = resolveNote(answer.noteId)
   if (!note) throw new CardLinkError("answerNoteMissing")
@@ -309,13 +311,16 @@ export function answerCardHtml(
         return undefined
       }
     },
-    loadMatcherSettings().autoCollapseComments
+    includeRuntime && loadMatcherSettings().autoCollapseComments,
+    true,
+    includeRuntime,
+    contentOptions
   )
-  return includeBoundHandwriting
+  return includeBoundHandwriting && contentOptions.handwriting !== false
     ? appendBoundMindMapHandwriting(
       html,
       readBoundMindMapHandwriting(answer.notebookId, answer.noteId),
-      true
+      includeRuntime
     )
     : html
 }

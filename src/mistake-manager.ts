@@ -1,6 +1,7 @@
+import { distinctAnswers } from "./domain"
 import { delay, MN, NodeNote, popup, setTimeInterval, showHUD, UndoManager } from "marginnote"
 import type { MbBookNote } from "marginnote"
-import { renderCardHtml } from "./card-html"
+import { renderCardHtml, type CardContentOptions } from "./card-html"
 import type { ErrorReason } from './error-reasons'
 import { withMistakeReason } from './mistake-domain'
 import { usesSubcardAnswers } from "./binding"
@@ -112,7 +113,7 @@ function notebookTitle(notebookId: string): string {
 
 function pathTitles(question: NodeNote): string[] {
   try {
-    return question.ancestorNodes.map(node => node.title?.trim()).filter(Boolean) as string[]
+    return [...question.ancestorNodes].reverse().map(node => node.title?.trim()).filter(Boolean) as string[]
   } catch {
     return []
   }
@@ -202,6 +203,7 @@ function applySourceTags(record: MistakeRecord, previousCategories?: string[], u
     ? "unverified"
     : mistakeStateFromSourceTags(written).level === record.level &&
       written.filter(tag => tag.startsWith(MISTAKE_REASON_TAG_PREFIX)).sort().join('\n') === expectedReasons.sort().join('\n') ? "verified" : "failed"
+  if (status !== "failed") record.reasonTags = expectedReasons
   recordRuntimeState("标签", "applySourceTags 完成", `targetNoteId=${record.sourceNoteId} status=${status} readback=${written === undefined ? "不可用" : "正常"}`)
   return status
 }
@@ -226,7 +228,8 @@ function removeSourceTags(record: MistakeRecord): TagWriteStatus {
 
 /** FSRS mirrors causes only; fixed grades/history/schedule remain independent. */
 export function syncMistakeReasonTags(recordId: string, reasons: ErrorReason[]): void {
-  const record = loadMistakeState().records[recordId]
+  const state = loadMistakeState()
+  const record = state.records[recordId]
   if (!record) throw new Error('错题记录不存在')
   const committed = commitSourceTagTasks('更新错因标签', [{ notebookId: record.sourceNotebookId, run: () => {
     const note = MN.db.getNoteById(record.sourceNoteId)
@@ -242,6 +245,8 @@ export function syncMistakeReasonTags(recordId: string, reasons: ErrorReason[]):
     return actual.join('\n') === target.join('\n') ? 'verified' : 'failed'
   } }])
   if (!committed.length) throw new Error('错因标签未能写入原题，请重试')
+  upsertMistakeRecord(state, { ...record, reasonTags: mistakeReasonSourceTags([], reasons) })
+  saveMistakeState(state)
 }
 
 function syncManualTagsFromSource(
@@ -256,7 +261,9 @@ function syncManualTagsFromSource(
   const written = readSourceTags(note)
   if (written === undefined) return { record, changed: false, cancelled: false }
   const tagState = mistakeStateFromSourceTags(written)
-  let synced = record
+  const reasonTags = written.filter(tag => tag.startsWith(MISTAKE_REASON_TAG_PREFIX))
+  let synced = JSON.stringify(reasonTags) === JSON.stringify(record.reasonTags ?? mistakeReasonSourceTags([], record.history.slice(-1).flatMap(entry => entry.errorReason ? [entry.errorReason] : [])))
+    ? record : { ...record, reasonTags }
   if (tagState.isMistake && !synced.tagsWrittenAt) {
     // 卡片上现在带着托管标签，即视为写入成功过（引导旧记录进入标签即身份语义）。
     synced = { ...synced, tagsWrittenAt: new Date().toISOString() }
@@ -382,6 +389,7 @@ function refreshRecord(record: MistakeRecord): MistakeRecord {
     sourceRootNodeId,
     sourceRootTitle: sourceMap.rootTitle,
     sourceTitle: node.title?.trim() || record.sourceTitle || "未命名错题",
+    sourcePathOrder: "root-first",
     sourcePathTitles,
     categoryPath: [notebookTitle(actualNotebookId), ...sourcePathTitles],
     answerNotebookId: binding?.notebookId ?? record.answerNotebookId,
@@ -481,10 +489,12 @@ async function recoverMistakesFromSourceTagsInternal(): Promise<MistakeTagRecove
           sourceRootNodeId,
           sourceRootTitle: sourceMap.rootTitle,
           sourceTitle: question.title?.trim() || "未命名错题",
+          sourcePathOrder: "root-first",
           sourcePathTitles,
           categoryPath: [sourceNotebookTitle, ...sourcePathTitles],
           manualCategories,
           manualCategory: manualCategories[0],
+          reasonTags: cleanMistakeTags(question.tags).filter(tag => tag.startsWith(MISTAKE_REASON_TAG_PREFIX)),
           answerNotebookId: binding?.notebookId,
           answerRootNodeId: binding?.rootNodeId,
           level: tagState.level ?? 0
@@ -548,6 +558,7 @@ export async function markQuestionAsMistake(
     sourceRootNodeId,
     sourceRootTitle: sourceMap.rootTitle,
     sourceTitle: question.title?.trim() || "未命名错题",
+    sourcePathOrder: "root-first" as const,
     sourcePathTitles: pathTitles(question),
     categoryPath: [notebookTitle(sourceNotebookId), ...pathTitles(question)],
     answerNotebookId: binding?.notebookId,
@@ -646,6 +657,7 @@ export async function supplementMistakeReasonById(
     }
   }])
   if (!committed.length) throw new CardLinkError('mistakeTagWriteFailed', { action: '补写错因' })
+  record.reasonTags = mistakeReasonSourceTags([], [reason])
   upsertMistakeRecord(state, withTagsWritten(record))
   saveMistakeState(state)
   return record
@@ -697,6 +709,7 @@ export async function markQuestionsAsMistakes(
         sourceRootNodeId,
         sourceRootTitle: sourceMap.rootTitle,
         sourceTitle: question.title?.trim() || "未命名错题",
+        sourcePathOrder: "root-first" as const,
         sourcePathTitles: pathTitles(question),
         categoryPath: [notebookTitle(sourceNotebookId), ...pathTitles(question)],
         answerNotebookId: binding?.notebookId,
@@ -1171,6 +1184,7 @@ export function mistakeWorkbenchData(): MistakeWorkbenchData {
     return {
       ...stored,
       manualCategories: visibleManualTags,
+      reasonTags: stored.reasonTags ?? mistakeReasonSourceTags([], stored.history.slice(-1).flatMap(entry => entry.errorReason ? [entry.errorReason] : [])),
       manualCategory: visibleManualTags[0],
       noteAvailable: stored.sourceAvailable !== false,
       categoryLabel: mistakeCategoryLabel(stored),
@@ -1379,13 +1393,13 @@ type ScopedNoteResolver = (notebookId: string, noteId: string) => MbBookNote | u
 
 const currentDbNoteResolver: ScopedNoteResolver = (_notebookId, noteId) => MN.db.getNoteById(noteId)
 
-function questionHtml(record: MistakeRecord, resolveNote: ScopedNoteResolver = currentDbNoteResolver): string {
+function questionHtml(record: MistakeRecord, resolveNote: ScopedNoteResolver = currentDbNoteResolver, includeRuntime = true, contentOptions: CardContentOptions = {}): string {
   const note = resolveNote(record.sourceNotebookId, record.sourceNoteId)
   if (!note) throw new CardLinkError("sourceNoteUnavailable")
   const scopeId = record.sourceRootNodeId || MAIN_MINDMAP_SCOPE_ID
   const target = answerBinding(record.sourceNotebookId, scopeId)
   const subcardAnswers = usesSubcardAnswers(target, note.colorIndex)
-  return renderCardHtml(note, "错题原题", id => resolveNote(record.sourceNotebookId, id), media, media, false, !subcardAnswers)
+  return renderCardHtml(note, "错题原题", id => resolveNote(record.sourceNotebookId, id), media, media, false, !subcardAnswers, includeRuntime, contentOptions)
 }
 
 export interface MistakeDetailData {
@@ -1430,7 +1444,7 @@ export function mistakeQuestionById(recordId: string): MistakeQuestionData {
  * 保证两处绑定回退、匹配与渲染规则一致（评审 C 高危项的同源要求）。
  * 答案卡片可能位于非当前学习集，渲染经 resolveNote 解析。
  */
-function answerCandidatesForRecord(record: MistakeRecord, node: NodeNote, resolveNote: ScopedNoteResolver = currentDbNoteResolver): {
+function answerCandidatesForRecord(record: MistakeRecord, node: NodeNote, resolveNote: ScopedNoteResolver = currentDbNoteResolver, includeRuntime = true, contentOptions: CardContentOptions = {}): {
   answers: MistakeDetailData["answers"]
   answerStatus: MistakeDetailData["answerStatus"]
   lookupDurationMs: number
@@ -1444,12 +1458,14 @@ function answerCandidatesForRecord(record: MistakeRecord, node: NodeNote, resolv
   try {
     const lookupStartedAt = Date.now()
     const titles = Array.from(new Set([record.sourceTitle, ...node.titles.map(title => title.trim())])).filter(Boolean)
-    const matches = findAnswersForQuestion(answerTarget, node, titles, pathTitles(node))
+    const rawMatches = findAnswersForQuestion(answerTarget, node, titles, pathTitles(node))
+    const matches = distinctAnswers(rawMatches.filter(answer => answer.noteId !== record.sourceNoteId))
+    recordRuntimeState("答案匹配", "mistake.candidates", `record=${record.recordId} raw=${rawMatches.length} unique=${matches.length} ids=${matches.map(answer => answer.noteId).join("|")}`)
     const lookupDurationMs = Date.now() - lookupStartedAt
     const answerHtmlStartedAt = Date.now()
     const answers = matches.map(answer => ({ id: answer.noteId, title: answer.titles[0] || "答案卡片",
       path: answer.pathTitles.filter(Boolean).join(" › "), html: answerCardHtml(answer, record.sourceTitle,
-        noteId => resolveNote(answer.notebookId, noteId)) }))
+        noteId => resolveNote(answer.notebookId, noteId), contentOptions.handwriting === true, includeRuntime, contentOptions) }))
     const answerStatus: MistakeDetailData["answerStatus"] = answers.length ? "ready" : "not-found"
     return { answers, answerStatus, lookupDurationMs, answerHtmlDurationMs: Date.now() - answerHtmlStartedAt }
   } catch (error) {
@@ -1525,7 +1541,10 @@ export function createMistakeContentReader(): MistakeContentReader {
   }
 }
 
-export function mistakeDetailById(recordId: string, content: "all" | "question" | "answers" = "all"): MistakeDetailData {
+export function mistakeDetailById(recordId: string, content: "all" | "question" | "answers" = "all", forExport = false, exportContent: CardContentOptions = {}): MistakeDetailData {
+  const contentOptions: CardContentOptions = forExport
+    ? { handwriting: exportContent.handwriting === true, comments: exportContent.comments === true }
+    : {}
   const detailStartedAt = Date.now()
   const state = loadMistakeState()
   const stored = state.records[recordId]
@@ -1552,9 +1571,12 @@ export function mistakeDetailById(recordId: string, content: "all" | "question" 
   const node = new NodeNote(note, record.sourceNotebookId)
   const { answers, answerStatus, lookupDurationMs, answerHtmlDurationMs } = content === "question"
     ? { answers: [], answerStatus: "deferred" as const, lookupDurationMs: 0, answerHtmlDurationMs: 0 }
-    : answerCandidatesForRecord(record, node)
+    : answerCandidatesForRecord(record, node, currentDbNoteResolver, !forExport, contentOptions)
   const questionHtmlStartedAt = Date.now()
-  const renderedQuestionHtml = content === "answers" ? "" : previewQuestionHtml(record)
+  let renderedQuestionHtml = content === "answers" ? "" : forExport ? questionHtml(record, currentDbNoteResolver, false, contentOptions) : previewQuestionHtml(record)
+  if (forExport && content !== "answers" && contentOptions.handwriting) {
+    renderedQuestionHtml = appendBoundMindMapHandwriting(renderedQuestionHtml, readBoundMindMapHandwriting(record.sourceNotebookId, record.sourceNoteId))
+  }
   const questionHtmlDurationMs = Date.now() - questionHtmlStartedAt
   const detail = {
     record: {

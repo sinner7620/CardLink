@@ -9,6 +9,8 @@ const REQUEST_TIMEOUT_MS = 30000
 // 这些请求可能等待用户阅读索引信息并进入换绑选择，沿用有界超时但预留交互时间。
 function requestTimeoutMs(command, payload, defaultMs) {
   if (command === "checkUpdates") return 5 * 60 * 1000
+  if (command === "ocrDbSelectBackup") return 5 * 60 * 1000
+  if (command === "recordClipperTool") return 5 * 60 * 1000
   const indexDialog = ["answer", "findCurrentAnswer", "markMistake", "cardMenuCommand"].includes(command) ||
     (command === "mistakeDetail" && payload?.content !== "question")
   if (indexDialog) return 5 * 60 * 1000

@@ -1,0 +1,63 @@
+/* Progressive Acrylic is bundled locally; each surface owns its disposable layers. */
+.mistakeWorkspace .mistakeSidebar .mistakeListHeader {
+  display: flex; flex-direction: column; gap: 0; padding: 4px 0;
+  top: calc(var(--mn-topbar-height) + 8px); margin-top: calc(var(--mn-topbar-height) + 8px);
+  --mistake-glass: rgb(115 115 128 / 13%);
+  --mistake-glass-filter: blur(18px) saturate(1.2);
+  height: auto; min-height: 0; background: transparent; border: 0; box-shadow: none;
+  backdrop-filter: none; -webkit-backdrop-filter: none; overflow: visible;
+}
+.mistakeSearchGroup { width: 100%; min-width: 0; }
+.mistakeSearchGlass {
+  position: relative; border-radius: 28px; background: rgba(246, 246, 248, .56);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 55%); color: #243744;
+}
+.mistakeAcrylic { position: absolute; inset: -9px -8px -8px; pointer-events: none; }
+.mistakeSearchCapsule > :not(.mistakeAcrylic), .mistakeSearchScopes > :not(.mistakeAcrylic), .mistakeListHeader .batchBar > :not(.mistakeAcrylic) { position: relative; z-index: 1; }
+.mistakeSearchCapsule { display: flex; align-items: center; gap: 3px; min-height: 34px; padding: 0 9px 0 16px; }
+.mistakeSearchCapsule > .uiIcon { width: 18px; height: 18px; flex: none; }
+.mistakeSearchCapsule input { flex: 1; min-width: 0; width: 0; height: 34px; padding: 0 5px; border: 0; background: transparent; box-shadow: none; font-size: 14px; color: inherit; outline: none; }
+.mistakeSearchCapsule input::placeholder { color: #637585; opacity: 1; }
+.mistakeSearchGlass:focus-within { box-shadow: inset 0 0 0 1.5px rgb(14 141 253 / 35%); }
+.mistakeListHeader .mistakeSearchCapsule button { display: grid; place-items: center; flex: none; width: 32px; height: 32px; min-height: 32px; margin: 0; padding: 0; border: 0; border-radius: 20px; background: transparent; box-shadow: none; color: #344a59; }
+.mistakeSearchCapsule button svg { width: 17px; height: 17px; }
+.mistakeListHeader .mistakeSearchCapsule button.active { color: var(--mn-accent); }
+.mistakeSearchCapsule button:focus-visible, .mistakeSearchScopes button:focus-visible { outline: 2px solid var(--mn-accent); outline-offset: 1px; }
+.mistakeSearchScopes { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 5px; padding: 1px 8px; border-radius: 0; background: transparent; box-shadow: none; animation: mistake-scope-in .16s ease-out; }
+.mistakeListHeader .mistakeSearchScopes button { min-height: 22px; padding: 2px 8px; border: 1px solid #d9d9de; border-radius: 999px; background: var(--mistake-glass); color: #4b4c51; box-shadow: none; font-size: 12px; }
+.mistakeListHeader .mistakeSearchScopes button[aria-pressed="false"] { background: rgb(242 242 245 / 82%); border-color: rgb(111 111 123 / 22%); color: #606168; }
+.mistakeListHeader .mistakeSearchScopes button[aria-pressed="true"] { background: rgb(127 127 138 / 34%); color: #23242a; border-color: rgb(77 77 88 / 42%); font-weight: 600; }
+
+.mistakeWorkspace .mistakeSidebar .mistakeListHeader .batchBar.active { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-evenly; gap: 4px; width: 100%; padding: 6px 8px; min-height: 42px; border: 0; border-radius: 0; box-sizing: border-box; margin: 0; background: transparent; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+.mistakeListHeader .batchBar.active > .mistakeAcrylic { position: absolute; height: auto; min-height: 0; }
+.mistakeListHeader .batchBar.active > button, .mistakeListHeader .batchBar.active > select.batchLevelSelect { background: transparent; border: 0; box-shadow: none; min-height: 30px; height: 30px; }
+@keyframes mistake-scope-in { from { transform: translateY(-4px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .mistakeSearchScopes { animation: none; } }
+@media (prefers-reduced-transparency: reduce) { .mistakeAcrylic { display: none; } }
+
+.mistakeWorkspace .mistakeSidebar .mistakeListHeader { padding-inline: 0; }
+.mistakeListHeader .batchBar.active > button, .mistakeListHeader .batchBar.active > select.batchLevelSelect { flex: 0 0 auto; width: auto; max-width: 100%; padding-inline: 8px; }
+@container mistakeSidebar (width <= 280px) {
+  .mistakeSearchCapsule { padding-inline: 8px; gap: 1px; }
+  .mistakeListHeader .mistakeSearchCapsule button { width: 26px; }
+  .mistakeSearchCapsule input { font-size: 14px; padding-inline: 3px; }
+  .mistakeSearchCapsule > .uiIcon { width: 18px; height: 18px; }
+  .mistakeSearchScopes { gap: 4px; padding: 1px 8px; }
+  .mistakeListHeader .mistakeSearchScopes button { padding-inline: 9px; }
+
+}
+@container mistakeSidebar (width <= 280px) {
+  .mistakeWorkspace .mistakeSidebar .mistakeListHeader .batchBar.active { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 7px; }
+  .mistakeListHeader .batchBar.active > .filterDivider { display: none; }
+  .mistakeListHeader .batchBar.active > button, .mistakeListHeader .batchBar.active > select.batchLevelSelect { width: 100%; font-size: 11px; }
+}
+
+.mistakeSearchGlass, .mistakeListHeader .mistakeSearchScopes button {
+  -webkit-backdrop-filter: var(--mistake-glass-filter);
+  backdrop-filter: var(--mistake-glass-filter);
+}
+.mistakeListHeader > .mistakeAcrylic { z-index: -1; }
+@media (prefers-reduced-transparency: reduce) {
+  .mistakeSearchGlass { background: #f6f6f8; }
+  .mistakeWorkspace .mistakeSidebar .mistakeListHeader { --mistake-glass: #ececef; --mistake-glass-filter: none; }
+}

@@ -1,8 +1,15 @@
+import { AcrylicSurface } from "./AcrylicSurface"
+import DistributionDonut from "./DistributionDonut"
+import { OCRDatabase } from './OCRDatabase'
+import { OCRBackground } from './OCRCapture'
+import "./ui/distribution-glow.css"
+import LocalCacheSettings from "./LocalCacheSettings"
+import ExportFilters, { FilterSection, FilterChoices } from "./ExportFilters"
+import { matchesExportFilters } from "../../src/export-filters"
 import React, { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { TemplateConverter } from "./TemplateConverter"
 import { createRoot } from "react-dom/client"
-import { ensureHtml2Canvas } from "./lib/html2canvas-loader.mjs"
 import MNBridge from "./lib/mnBridge"
 import { Icon } from "./icons"
 import { ReviewQueueFilters } from "./ReviewQueueFilters"
@@ -10,18 +17,21 @@ import { ReviewStartButton } from "./ReviewStartButton"
 import { sortReviewRecords } from "./lib/reviewQueueControls"
 import { buildMindMapOptions, buildParentInsights, sourceInsightKey } from "../../src/source-insights"
 import { REVIEW_CURVES } from "../../src/mistake-domain"
+import { filterableMistakeTags } from "../../src/export-filters"
 import { isManagedMistakeTag } from "../../src/mistake-tags"
 import { escapeHtml } from "../../src/html-utils"
 import { installWebUiColors } from "../../src/ui-tokens"
 import "./ui/b21-baseline.css"
 import "./ui/selection.css"
+import "./ui/export-select.css"
 import "./ui/sticky-toolbars.css"
+import "./ui/mistake-search.css"
 import "./ui/error-reasons.css"
 import { useDockableBar } from "./detail-dock"
 import { CardPreview } from "./CardPreview"
 import { PreviewFrame, ResourceImage } from "./SceneResources"
 import { SceneWindowControls } from "./SceneWindowControls"
-import { publishSceneImage, releaseSceneImages, sceneCaptureOptions } from "./lib/sceneResources"
+import { publishSceneImage, releaseSceneImages } from "./lib/sceneResources"
 import { MistakeLayout } from "./MistakeLayout"
 import { createReviewDetailCache } from "./lib/reviewDetailCache"
 import { createMorph } from "morphicons/dom"
@@ -445,6 +455,45 @@ function App() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   const [query, setQuery] = useState("")
+  const [searchScopes, setSearchScopes] = useState(["title", "tags", "content"])
+  const searchContent = searchScopes.includes("content")
+  const [contentSearchRevision, refreshContentSearch] = React.useReducer(value => value + 1, 0)
+  const [ocrPulse, requestOCRWork] = React.useReducer(value => value + 1, 0)
+  const refreshOCRTimer = useRef(0)
+  const [ocrQueueActive, setOCRQueueActive] = useState(false)
+  function refreshOCR() {
+    clearTimeout(refreshOCRTimer.current)
+    refreshOCRTimer.current = setTimeout(() => {
+      MNBridge.send('ocrDbRefreshSources').then(result => {
+        if (result.changed) refreshContentSearch()
+        requestOCRWork()
+      }).catch(reason => MNBridge.send('runtimeLog', {event:'ocr.refresh.failed', detail:String(reason.message || reason)}).catch(()=>{}))
+    }, 200)
+  }
+  const [contentSearch, setContentSearch] = useState({ query: "", ids: [], pending: false, error: "" })
+  useEffect(() => {
+    let cancelled = false
+    if (tab !== "mistakes" || !query.trim() || !searchContent) {
+      setContentSearch({ query, ids: [], pending: false, error: "" })
+      return
+    }
+    setContentSearch(current => ({ query, ids: current.query === query ? current.ids : [], pending: true, error: "" }))
+    const timer = setTimeout(async () => {
+      try {
+        const result = await MNBridge.send("ocrDbSearchContent", { query })
+        if (!cancelled) setContentSearch({ query, ids: result.recordIds, pending: false, error: "" })
+      } catch (error) {
+        if (!cancelled) setContentSearch({ query, ids: [], pending: false, error: "内容搜索失败，请重新输入重试" })
+      }
+    }, 180)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [query, searchContent, contentSearchRevision, tab])
+  const hasContentQuery = tab === "mistakes" && searchContent && Boolean(query.trim())
+  const mistakeRevision = data?.mistakes?.revision
+  useEffect(() => {
+    if (hasContentQuery) refreshOCR()
+    return () => clearTimeout(refreshOCRTimer.current)
+  }, [hasContentQuery, mistakeRevision])
   const [dateFilter, setDateFilter] = useState("all")
   const [favoritesOnly, setFavoritesOnly] = useState(false)
   const [level, setLevel] = useState("all")
@@ -472,7 +521,6 @@ function App() {
   const queuedLoadRef = useRef(null)
   const initialLoadCompleteRef = useRef(false)
   const versionTapRef = useRef({ count: 0, lastAt: 0 })
-  const aiWarningPendingRef = useRef(false)
   selectedIdRef.current = selectedId
   dataRef.current = data
 
@@ -523,8 +571,8 @@ function App() {
         await waitForPaint()
       }
       if (quiet) setData(next)
-      // AI 运行时门闸：总开关未开启时不发送任何 AI 命令，调度器保持零加载。
-      if (next?.aiEnabled === true) MNBridge.send("aiRunDueSchedules").catch(() => {})
+      // OCR search reads the index independently of detail and list row patches.
+      refreshContentSearch()
       const records = next?.mistakes?.records || []
       if (!quiet && previousListScroll > 0) {
         // 等最后一次 setData 渲染完成后再恢复，两帧确保列表已按完整数据布局
@@ -600,6 +648,7 @@ function App() {
     setError("")
     try {
       const result = await MNBridge.send(command, payload)
+      if (command === "addManagedAnswerBindingColor" && result?.mismatch) return result
       if (["recordClipperTool", "setClipperTitle", "setClipperAnswer", "openClipperMode", "chooseClipperAnswerPosition", "configureClipperTitleFormat"].includes(command) && result) {
         setData(current => ({ ...current, clipper: result,
           matching: { ...current?.matching, ...(command === "openClipperMode" ? { pluginEnabled: false } : {}) } }))
@@ -671,7 +720,6 @@ function App() {
       }
       else if ((command === "setPersonalSetting" || command === "chooseReviewCommentCount") && result) {
         setData(current => ({ ...current, matching: { ...current?.matching, ...result } }))
-        if (command === "setPersonalSetting" && payload?.key === "sceneWorkbenchEnabled" && payload.value === false) setDetail(current => current ? { ...current, handwritingAvailable: false } : current)
         if (command === "setPersonalSetting" && payload?.key === "boundHandwritingDisplay" && selectedId) await openDetail(selectedId)
       }
       else if (command === "setPanelCloseButtonSide" && result?.side) {
@@ -714,23 +762,6 @@ function App() {
       await load(true)
     } finally {
       if (seq === detailSeqRef.current) setBusy(false)
-    }
-  }
-
-  async function openAISettings() {
-    if (aiWarningPendingRef.current) return
-    aiWarningPendingRef.current = true
-    setError("")
-    try {
-      const result = await MNBridge.send("aiConfirmDevelopmentWarning")
-      if (result?.confirmed === true) {
-        setTab("settings")
-        setSettingsPane("ai")
-      }
-    } catch (reason) {
-      setError(reason.message || String(reason))
-    } finally {
-      aiWarningPendingRef.current = false
     }
   }
 
@@ -777,6 +808,7 @@ function App() {
       delete window.__onPanelShow
       delete window.__onNativeDataChanged
       delete window.__onNativeBindingsChanged
+      clearTimeout(refreshOCRTimer.current)
       clearTimeout(initialTimer)
       clearTimeout(locateHintTimerRef.current)
     }
@@ -789,6 +821,7 @@ function App() {
   }
 
   const [templateConverterOpen, setTemplateConverterOpen] = useState(false)
+  const [cacheSettingsOpen, setCacheSettingsOpen] = useState(false)
   const debugModeEnabled = data?.matching?.debugModeEnabled === true
   const [connectivityResult, setConnectivityResult] = useState(null)
   useEffect(() => {
@@ -832,12 +865,15 @@ function App() {
   const deferredQuery = React.useDeferredValue(query)
   const records = useMemo(() => {
     const needle = normalizeSearch(deferredQuery)
+    const contentIds = new Set(contentSearch.query === deferredQuery ? contentSearch.ids : [])
     const now = new Date()
     const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
     return (data?.mistakes?.records || []).filter(item => {
       if (level !== "all" && String(item.level) !== level) return false
       if (categoryPath.length && !categoryPath.every((part, index) => (item.categoryPath || [])[index] === part)) return false
-      if (needle && !normalizeSearch(`${item.sourceTitle} ${item.sourceNotebookTitle} ${item.categoryLabel} ${(item.sourcePathTitles || []).join(" ")} ${(item.manualCategories || []).join(" ")} ${item.manualCategory || ""}`).includes(needle)) return false
+      if (needle && !(searchScopes.includes("title") && normalizeSearch(item.sourceTitle).includes(needle)
+        || searchScopes.includes("tags") && normalizeSearch(filterableMistakeTags(item).join(" ")).includes(needle)
+        || searchScopes.includes("content") && contentIds.has(item.recordId))) return false
       // B4：日期与收藏筛选从预览层 DOM 隐藏迁入 React 状态（导出/总览同源可继承）
       if (dateFilter !== "all") {
         const added = new Date(item.createdAt).getTime()
@@ -849,7 +885,7 @@ function App() {
       if (favoritesOnly && item.favorite !== true) return false
       return true
     })
-  }, [data, deferredQuery, level, categoryPath, dateFilter, favoritesOnly])
+  }, [data, deferredQuery, level, categoryPath, dateFilter, favoritesOnly, searchScopes, contentSearch])
 
   const entries = [
     ["overview", "总览"],
@@ -872,7 +908,7 @@ function App() {
   }, [tab, data?.mistakes?.totalCount, data?.mistakes?.todayDueCount])
 
   const panelCloseSide = data?.matching?.panelCloseButtonSide === "right" ? "right" : "left"
-  const sceneSizeEnabled = window.__MN_SCENE_ENABLED__ === true && data?.matching?.sceneWorkbenchEnabled === true
+  const sceneSizeEnabled = window.__MN_SCENE_ENABLED__ === true
   const refreshButton = <button className="iconButton" aria-label="刷新错题列表" title="刷新错题列表" onClick={refreshPanel} disabled={busy}><Icon name="refresh" /></button>
   const resetButton = <button className="iconButton" aria-label="重置窗口" title={window.__MN_SCENE_ENABLED__ ? "恢复窗口默认大小" : "重置窗口位置与大小"} onClick={() => action("resetPanelFrame", null, false)}><Icon name="window" /></button>
   const closeButton = <button className="iconButton" aria-label={window.__MN_SCENE_ENABLED__ ? "收起插件窗口" : "关闭插件窗口"} title={window.__MN_SCENE_ENABLED__ ? "收起并保留当前题目，从浮球或插件工具栏恢复" : "关闭插件窗口"} onClick={() => action("closePanel", null, false)}><Icon name="close" /></button>
@@ -910,16 +946,13 @@ function App() {
 
       {locateHint && <div className="locateHintBanner" role="alert">{locateHint}</div>}
       {pendingNotice && <div className="pendingNotice" role="status"><i /><span>{pendingNotice}</span></div>}
-      <div className="pageHeading"><h1>{tab === "overview" ? "错题总览" : tab === "mistakes" ? "错题浏览" : tab === "review" ? "到期复习" : tab === "export" ? "导出错题" : settingsPane === "ai" ? "AI 错题分析（开发中…）" : "设置"}</h1><p>{tab === "overview" ? "掌握情况、到期复习和最近错题概览" : tab === "mistakes" ? "全部错题保留在原脑图中，可添加标签、核对答案并定位原题" : tab === "export" ? "从当前错题记录生成可另存的 PDF 或 Markdown 文件" : settingsPane === "ai" ? "科目、模型与数据范围" : "跨脑图答案与错题工作台"}</p></div>
+      <div className="pageHeading"><h1>{tab === "overview" ? "错题总览" : tab === "mistakes" ? "错题浏览" : tab === "review" ? "到期复习" : tab === "export" ? "导出错题" : settingsPane === "ocr" ? "错题 OCR 数据库" : "设置"}</h1><p>{tab === "overview" ? "掌握情况、到期复习和最近错题概览" : tab === "mistakes" ? "全部错题保留在原脑图中，可添加标签、核对答案并定位原题" : tab === "export" ? "从当前错题记录生成可另存的 PDF 或 Markdown 文件" : settingsPane === "ocr" ? "题干检索、识别任务与人工修订" : "跨脑图答案与错题工作台"}</p></div>
       {error && <div className="workbenchError" role="alert"><span>{error}</span><button type="button" aria-label="关闭错误提示" onClick={() => setError("")}>×</button></div>}
       {busy && <div className="loading"><i />正在读取 MarginNote 数据…</div>}
       {data?.mistakes?.recordsComplete === false && streamLoading && <div className="dataStreamStatus" role="status">正在载入错题 {data.mistakes.records.length}/{data.mistakes.totalCount}…</div>}
 
       {tab === "overview" && <MistakeOverview
         records={data?.mistakes?.records || []}
-        aiReady={data?.mistakes?.recordsComplete === true}
-        aiEnabled={data?.aiEnabled === true}
-        onOpenAISettings={openAISettings}
         onBrowse={() => setTab("mistakes")}
         onOpen={recordId => { setTab("mistakes"); openDetail(recordId) }}
         onSource={path => { setCategoryPath(path); setTab("mistakes") }}
@@ -932,7 +965,7 @@ function App() {
         allRecords={data?.mistakes?.records || []}
         categories={data?.mistakes?.categories || []}
         customCategories={data?.mistakes?.customCategories || []}
-        query={query} setQuery={setQuery}
+        query={query} setQuery={setQuery} searchScopes={searchScopes} setSearchScopes={setSearchScopes}
         level={level} setLevel={setLevel}
         categoryPath={categoryPath} setCategoryPath={setCategoryPath}
         dateFilter={dateFilter}
@@ -975,7 +1008,8 @@ function App() {
         onBack={() => setTab(exportReturnTab)}
       />}
 
-      {tab === "settings" && settingsPane === "ai" && <AIErrorBoundary onBack={() => setSettingsPane("root")}><AISettingsPage onBack={() => setSettingsPane("root")} onEnabledChanged={() => load(true)} /></AIErrorBoundary>}
+      <OCRBackground pulse={ocrPulse} enabled={!ocrQueueActive} onIndexed={refreshContentSearch} />
+      {tab === 'settings' && settingsPane === 'ocr' && <OCRDatabase sourceRevision={contentSearchRevision} onQueueActive={setOCRQueueActive} onIndexed={refreshContentSearch} onPreferencesChanged={refreshOCR} Morph={DetailMorphIcon} Switch={SvgSwitch} Select={ExportSelect} onBack={() => { setSettingsPane('root'); setSettingsSection('mistakes') }} />}
       {tab === "settings" && settingsPane === "root" && <section className="settingsPage settingsPaged">
       <nav className="settingsCapsule" aria-label="设置分类">
         <span className="settingsCapsuleSlider" style={{ transform: `translateX(${["answer", "mistakes", "personal", "about"].indexOf(settingsSection) * 100}%)` }} />
@@ -1007,7 +1041,7 @@ function App() {
           ]} />
           {debugModeEnabled && data?.reviewAlgorithm === "fsrs" ? <React.Suspense fallback={<p>正在读取复习设置…</p>}><FsrsSettings Switch={SvgSwitch} /></React.Suspense> : <MistakeLevelGuide reviewCurves={data?.mistakes?.reviewCurves} action={action} />}
           <SettingsGroup title="其他错题工具" tone="amber" items={[
-            ["sliders", "AI 错题分析（开发中…）", "科目、模型与定期总结", openAISettings]
+            ['book', '错题 OCR 数据库', '同步题干、全文搜索与识别任务', () => setSettingsPane('ocr')],
           ]} />
         </div>}
         {settingsSection === "personal" && <div className="settingsGroups">
@@ -1028,15 +1062,15 @@ function App() {
         </div>}
         {settingsSection === "about" && <div className="settingsGroups">
           <SettingsGroup title="场景功能" tone="accent" items={[
-            ["toggle", "场景面板与批注手写", "需软件5.0.0及以上并启用场景模式，启用后重新打开窗口生效。", () => action("setPersonalSetting", { key: "sceneWorkbenchEnabled", value: data?.matching?.sceneWorkbenchEnabled !== true }), <SvgSwitch checked={data?.matching?.sceneWorkbenchEnabled === true} label="场景面板与批注手写" />],
-            ...(data?.matching?.sceneWorkbenchEnabled === true ? [["fileText", "模板转换", "上传自己的场景模板，转换为支持CardLink 配置模板并导出。", () => setTemplateConverterOpen(value => !value)]] : [])
-          ]}>{data?.matching?.sceneWorkbenchEnabled === true && templateConverterOpen && <TemplateConverter />}</SettingsGroup>
+            ["fileText", "模板转换", "上传自己的场景模板，转换为支持 CardLink 的模板并导出。", () => setTemplateConverterOpen(value => !value)]
+          ]}>{templateConverterOpen && <TemplateConverter />}</SettingsGroup>
           <SettingsGroup title="关于插件" tone="green" items={[
             ["info", "当前版本", `v${data?.version || "…"} · frank`, handleVersionTap],
             ["reset", data?.features?.scenePanel ? "重置窗口大小" : "重置窗口位置", data?.features?.scenePanel ? "恢复插件窗口默认大小" : "恢复插件窗口默认位置与大小", () => action("resetPanelFrame", null, false)],
             ["guide", "插件使用说明", "查看 CardLink 使用说明", () => action("openPluginGuide", null, false)],
-            ["update", "检查插件更新", "检查可用的新版本", () => action("checkUpdates", null, false)]
-          ]} />
+            ["update", "检查插件更新", "检查可用的新版本", () => action("checkUpdates", null, false)],
+            ["cache", "缓存清理", cacheSettingsOpen ? "收起缓存清理" : "查看存储占用与清理本地缓存", () => setCacheSettingsOpen(value => !value)]
+          ]}>{cacheSettingsOpen && <LocalCacheSettings />}</SettingsGroup>
           {connectivityResult && <ConnectivityResult result={connectivityResult} />}
           {debugModeEnabled && <SettingsGroup title="调试功能" tone="red" items={[
             ["toggle", "FSRS 智能复习", "仅调试模式生效；两套进度独立保存，关闭后返回固定曲线", () => action("setReviewAlgorithm", { algorithm: data?.reviewAlgorithm === "fsrs" ? "fixed" : "fsrs" }), <SvgSwitch checked={data?.reviewAlgorithm === "fsrs"} label="FSRS 智能复习" />],
@@ -1092,12 +1126,49 @@ function DateFilterButton({ value, onChange }) {
   </span>
 }
 
+function ReviewSortOptions({ value, onChange }) {
+  return [["reviewed", "最后复习", "最近优先"], ["map", "脑图", "名称顺序"], ["added", "添加日期", "最新优先"], ["level", "等级", "由低到高"], ["remaining", "剩余天数", "由少到多"]].map(([key, label, hint]) => <button type="button" key={key} aria-pressed={value === key} onClick={() => onChange(key)}><span>{label}<small>{hint}</small></span><span aria-hidden="true">{value === key ? "✓" : ""}</span></button>)
+}
+
 function MistakeBrowser(props) {
-  const { records, allRecords, selectedId, detail, openDetail, action, reloadDetail, onRemoved, onExportSelected } = props
+  const { records: inputRecords, allRecords, selectedId, detail, openDetail, action, reloadDetail, onRemoved, onExportSelected } = props
+  const [searchFocused, setSearchFocused] = useState(false)
   const [selecting, setSelecting] = useState(false)
   const [selectedIds, setSelectedIds] = useState([])
   const [removeArmed, setRemoveArmed] = useState(false)
   const [filtersOpen, setFiltersOpen] = useState(false)
+  const [sortOpen, setSortOpen] = useState(false)
+  const [sortOrder, setSortOrder] = useState("remaining")
+  const [levels, setLevels] = useState(null)
+  const [sources, setSources] = useState(null)
+  const toolbarRef = useRef(null)
+  const menuRef = useRef(null)
+  useEffect(() => {
+    if (!searchFocused) return
+    const dismiss = event => {
+      if (event.type === "keydown" ? event.key === "Escape" : !toolbarRef.current?.contains(event.target)) setSearchFocused(false)
+    }
+    document.addEventListener("click", dismiss)
+    document.addEventListener("keydown", dismiss)
+    return () => { document.removeEventListener("click", dismiss); document.removeEventListener("keydown", dismiss) }
+  }, [searchFocused])
+  const menuWidth = Math.min(filtersOpen ? 350 : 210, typeof window !== "undefined" ? window.innerWidth - 36 : 350)
+  const popoverPos = useAnchoredPopover(filtersOpen || sortOpen, toolbarRef, menuWidth, "end")
+  useScrollDismiss(filtersOpen || sortOpen, () => { setFiltersOpen(false); setSortOpen(false) }, menuRef)
+  useEffect(() => {
+    if (!filtersOpen && !sortOpen) return
+    const close = event => {
+      if (event.type === "keydown" ? event.key === "Escape" : !toolbarRef.current?.contains(event.target) && !menuRef.current?.contains(event.target)) {
+        setFiltersOpen(false); setSortOpen(false)
+      }
+    }
+    document.addEventListener("pointerdown", close, true)
+    document.addEventListener("keydown", close)
+    return () => { document.removeEventListener("pointerdown", close, true); document.removeEventListener("keydown", close) }
+  }, [filtersOpen, sortOpen])
+  const records = useMemo(() => sortReviewRecords(inputRecords.filter(item =>
+    (levels === null || levels.includes(item.level)) && (sources === null || sources.has(item.recordId))), sortOrder), [inputRecords, levels, sources, sortOrder])
+  const filtered = levels !== null || sources !== null || props.favoritesOnly
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds])
   const allVisibleSelected = records.length > 0 && records.every(record => selectedSet.has(record.recordId))
   useEffect(() => {
@@ -1150,19 +1221,15 @@ function MistakeBrowser(props) {
   return <section className="mistakeWorkspace">
     <MistakeLayout autoHide={props.listDisplay === "autoHide"} hasDetail={Boolean(detail?.record && detail.record.noteAvailable !== false)}>
       <aside className="mistakeSidebar">
-        <div className={`filterBar mistakeListHeader ${filtersOpen ? "" : "filtersClosed"} ${selecting ? "selectionOpen" : ""}`}>
-          <div className="listToolbar">
+        <div ref={toolbarRef} className={`filterBar mistakeListHeader filtersClosed ${selecting ? "selectionOpen" : ""}`}>
+          <div className="mistakeSearchGroup" onFocus={event => { if (event.target.tagName === "INPUT" || event.target.closest(".mistakeSearchScopes")) setSearchFocused(true) }}>
+          <div className="mistakeSearchGlass">
+          <div className="mistakeSearchCapsule"><Icon name="search" />
+            <input aria-label="搜索错题" value={props.query} onChange={event => props.setQuery(event.target.value)} placeholder="搜索" onKeyDown={event => { if (event.key === "Escape") event.currentTarget.blur() }} />
+            <button type="button" className={`reviewFilterToggle ${filtered || filtersOpen ? "active" : ""}`} aria-expanded={filtersOpen} aria-label="筛选" title="筛选" aria-controls="mistakeFilterPanel" onClick={() => { setFiltersOpen(value => !value); setSortOpen(false) }}><Icon name="filter" />{filtered && <span className="reviewFilterCount" aria-label={`筛选后 ${records.length} 道题`}>{records.length}</span>}</button>
+            <button type="button" className={sortOpen ? "active" : ""} aria-expanded={sortOpen} aria-label="排序" title="排序" aria-controls="mistakeSortPanel" onClick={() => { setSortOpen(value => !value); setFiltersOpen(false) }}><Icon name="sort" /></button>
             <button className={`batchToggle svgIconButton ${selecting ? "active" : ""}`} aria-label={selecting ? "完成多选" : "进入多选"} title={selecting ? "完成多选" : "多选"} onClick={toggleSelecting}><MorphIcon from="checkbox" to="checkboxChecked" active={selecting} /></button>
-            <span className="filterCount" title={props.fsrsActive ? "固定曲线档案；FSRS 进度见待复习" : undefined}>{props.fsrsActive && !selecting ? "固定档案 · " : ""}{selecting ? `${selectedIds.length}/${records.length}` : `共${records.length}道`}</span>
           </div>
-          <div className="searchRow"><input value={props.query} onChange={event => props.setQuery(event.target.value)} placeholder="搜索题名、脑图、章节或标签" /><button type="button" className="filterCollapseButton" aria-expanded={filtersOpen} aria-label={filtersOpen ? "折叠筛选" : "展开筛选"} title={filtersOpen ? "折叠筛选" : "展开筛选"} onClick={() => setFiltersOpen(value => !value)}><Icon name={filtersOpen ? "up" : "down"} /></button></div>
-          {filtersOpen && <div className="filterSelectors">
-            <CategoryCascade records={allRecords} path={props.categoryPath} setPath={props.setCategoryPath} favoritesActive={props.favoritesOnly} favoritesCount={allRecords.filter(function (item) { return item.favorite === true }).length} onFavoritesToggle={props.setFavoritesOnly} />
-            <span className="filterDivider" aria-hidden="true" />
-            <select className="levelNarrow" aria-label={props.fsrsActive ? "固定曲线历史等级" : "掌握等级"} value={props.level} onChange={function (event) { props.setLevel(event.target.value) }}><option value="all">全部</option>{levelNames.map(function (name, index) { return <option value={String(index)} key={name}>{name}</option> })}</select>
-            <span className="filterDivider" aria-hidden="true" />
-            <DateFilterButton value={props.dateFilter} onChange={props.setDateFilter} />
-          </div>}
           {selecting && <div className="batchBar active">
           <button data-select-all-state={allVisibleSelected ? "all" : "none"} onClick={toggleVisible} disabled={!records.length}><MorphIcon from="checkbox" to="checkboxChecked" active={allVisibleSelected} /><span>{allVisibleSelected ? "全不选" : "全选"}</span></button>
           <span className="filterDivider" aria-hidden="true" />
@@ -1172,6 +1239,16 @@ function MistakeBrowser(props) {
           <span className="filterDivider" aria-hidden="true" />
           <button className={`batchRemove ${removeArmed ? "confirming" : ""}`} onClick={removeSelected} disabled={!selectedIds.length}>{removeArmed ? `确认取消 ${selectedIds.length} 道` : "取消错题"}</button>
           </div>}
+          </div>
+          {(searchFocused || props.query) && <div className="mistakeSearchScopes" role="group" aria-label="搜索范围">
+            {[["title", "标题"], ["tags", "标签"], ["content", "内容"]].map(([key, label]) => <button key={key} type="button" aria-pressed={props.searchScopes.includes(key)} onClick={() => props.setSearchScopes(current => current.includes(key) ? current.filter(scope => scope !== key) : [...current, key])}>{label}</button>)}
+          </div>}
+          </div>
+          {(filtersOpen || sortOpen) && popoverPos && createPortal(<div ref={menuRef} className="reviewToolbar mistakeQueuePopover" style={{ ...POPOVER_ABSOLUTE(popoverPos), width: menuWidth }}>
+            {filtersOpen ? <div id="mistakeFilterPanel" className="reviewFilterDropdown"><ReviewQueueFilters favoritesOnly={props.favoritesOnly} onFavoritesToggle={() => props.setFavoritesOnly(!props.favoritesOnly)} records={allRecords} names={levelNames.map((name, level) => [level, name])} levels={levels} setLevels={setLevels} selected={sources} setSelected={setSources} onReset={() => { setLevels(null); setSources(null); props.setLevel("all"); props.setCategoryPath([]); props.setDateFilter("all"); props.setFavoritesOnly(false) }} /></div>
+              : <div id="mistakeSortPanel" className="reviewSortDropdown" role="group" aria-label="排序方式"><ReviewSortOptions value={sortOrder} onChange={value => { setSortOrder(value); setSortOpen(false) }} /></div>}
+          </div>, document.body)}
+          <AcrylicSurface />
         </div>
         <div className="mistakeList mistakeListBody">{records.map(item => <MistakeListItem key={item.recordId} item={item} selected={selectedId === item.recordId} selectable={selecting} checked={selectedSet.has(item.recordId)} onPreview={() => openDetail(item.recordId)} onToggle={() => toggleRecord(item.recordId)} />)}{!records.length && <Empty title="没有符合条件的错题" text="清空搜索或筛选条件后重试。" />}</div>
       </aside>
@@ -1314,7 +1391,7 @@ function StudyHistoryChart({ records }) {
   </div>
 }
 
-function MistakeOverview({ records, onBrowse, onOpen, onSource, aiReady, aiEnabled, onOpenAISettings }) {
+function MistakeOverview({ records, onBrowse, onOpen, onSource }) {
   const now = Date.now()
   const due = records.filter(item => item.noteAvailable && !item.reviewCompleted && new Date(item.nextReviewAt).getTime() < endOfTodayTs()).length
   const weak = records.filter(item => item.level <= 1).length
@@ -1342,12 +1419,6 @@ function MistakeOverview({ records, onBrowse, onOpen, onSource, aiReady, aiEnabl
   const otherCount = remainingSources.reduce((sum, source) => sum + source.count, 0)
   const otherWeak = remainingSources.reduce((sum, source) => sum + source.weak, 0)
   const chartSources = [...topSources, ...(otherCount ? [{ key: "other", name: "其他父节点", mapName: `${remainingSources.length} 个父节点`, notebook: "", count: otherCount, weak: otherWeak, path: null }] : [])]
-  let sourceOffset = 0
-  const sourceGradient = chartSources.length ? chartSources.map((source, index) => {
-    const start = sourceOffset
-    sourceOffset += source.count / Math.max(1, parentInsights.classifiedRecords) * 100
-    return `${sourceColors[index]} ${start}% ${sourceOffset}%`
-  }).join(",") : "#e9edf5 0 100%"
   const mastery = records.length ? Math.round(mastered / records.length * 100) : 0
   const cards = [
     ["total", "错题总数", records.length, `${mindMaps.length} 棵题目脑图`],
@@ -1359,7 +1430,7 @@ function MistakeOverview({ records, onBrowse, onOpen, onSource, aiReady, aiEnabl
   return <section className="overviewPage">
     <div className="overviewHero"><div><span className="overviewKicker">学习概览</span><strong>错题本学习进度</strong><small>{due ? `有 ${due} 道错题已经到期，建议从薄弱状态开始复习` : "当前没有到期任务"}</small></div><div className="masteryRing" style={{ "--progress": `${mastery * 3.6}deg` }}><span><strong>{mastery}%</strong><small>掌握</small></span></div><div className="previewLearningProgress" data-preview-learning-progress="1"><div className="previewProgressHeading"><span>共 {records.length} 道</span></div><div className="previewProgressTrack" role="img" aria-label={levelNames.map((name, index) => `${name} ${levelCounts[index]} 道`).join("，")}>{levelCounts.map((count, index) => ({ count, index })).filter(item => item.count > 0).map(({ count, index }) => <i className={`level${index}`} key={levelNames[index]} style={{ width: `${records.length ? count / records.length * 100 : 0}%` }} />)}</div><div className="previewProgressLegend">{levelCounts.map((count, index) => <span key={levelNames[index]}><i className={`level${index}`} />{levelNames[index]}<b>{count}</b><em>{records.length ? Math.round(count / records.length * 100) : 0}%</em></span>)}</div></div></div>
     <div className="overviewCards">{cards.map(([icon, label, value, note], index) => <div className={`overviewCard tone${index}`} key={label}><i><Icon name={icon} /></i><span><small>{label}</small><strong>{value}</strong><em>{note}</em></span></div>)}</div>
-    <div className="overviewPanel sourcePanel"><header><div><strong>错题来源分布</strong></div>{mindMaps.length ? <MindMapMultiSelect options={mindMaps} selectedKeys={effectiveMapKeys} setSelectedKeys={setSelectedMapKeys} /> : null}</header>{sources.length ? <div className="sourceChart"><div className="sourceDonut" style={{ background: `conic-gradient(${sourceGradient})` }}><span><strong>{parentInsights.classifiedRecords}</strong><small>有效分类</small></span></div><div className="sourceBars">{chartSources.map((source, index) => {
+    <div className="overviewPanel sourcePanel"><header><div><strong>错题来源分布</strong></div>{mindMaps.length ? <MindMapMultiSelect options={mindMaps} selectedKeys={effectiveMapKeys} setSelectedKeys={setSelectedMapKeys} /> : null}</header>{sources.length ? <div className="sourceChart"><DistributionDonut segments={chartSources.map((source, index) => ({ value: source.count, color: sourceColors[index] }))} total={parentInsights.classifiedRecords} label="错题来源分布"><span><strong>{parentInsights.classifiedRecords}</strong><small>有效分类</small></span></DistributionDonut><div className="sourceBars">{chartSources.map((source, index) => {
       const percent = Math.round(source.count / Math.max(1, parentInsights.classifiedRecords) * 100)
       return <button key={source.key} disabled={!source.path?.length} onClick={() => source.path?.length && onSource(source.path)}><i style={{ background: sourceColors[index] }} /><span><strong>{source.name}</strong><small>{source.mapName}{source.weak ? ` · ${source.weak} 道薄弱` : ""}</small><em><b style={{ width: `${percent}%`, background: sourceColors[index] }} /></em></span><b>{source.count}<small>{percent}%</small></b></button>
     })}</div></div> : mindMaps.length ? <Empty title="暂无有效父节点分类" text="所选脑图的父节点当前会形成“一题一类”或“全部一类”，已自动跳过无效统计。" icon={false} /> : <Empty title="暂无来源数据" text="标记错题后可按题目脑图内父节点统计。" icon={false} />}
@@ -1369,332 +1440,9 @@ function MistakeOverview({ records, onBrowse, onOpen, onSource, aiReady, aiEnabl
       <div className="overviewPanel"><header><strong>三档掌握情况</strong><small>不会、不熟、掌握</small></header><div className="levelChart">{levelCounts.map((count, level) => <div className="levelRow" key={level}><span>{levelNames[level]}</span><div><i className={`levelBar level${level}`} style={{ width: `${Math.max(count ? 8 : 0, count / maxLevelCount * 100)}%` }} /></div><b>{count}</b></div>)}</div></div>
       <div className="overviewPanel recentPanel"><header><strong>最近添加</strong><button onClick={onBrowse}>浏览全部</button></header><div>{recent.map(item => <button className="recentItem" key={item.recordId} onClick={() => onOpen(item.recordId)}><span className={`level level${item.level}`}>{levelNames[item.level]}</span><span><strong>{item.sourceTitle}</strong><small>{formatDate(item.createdAt)} · {item.reviewCompleted ? "已结束" : reviewCountdown(item.nextReviewAt)}</small></span><b><Icon name="right" /></b></button>)}{!recent.length && <Empty title="还没有错题" text="从卡片侧边标记第一道错题。" />}</div></div>
     </div>
-    <AIErrorBoundary><AIOverview ready={aiReady} enabled={aiEnabled === true} onOpenSettings={onOpenAISettings} /></AIErrorBoundary>
   </section>
 }
 
-class AIErrorBoundary extends React.Component {
-  constructor(props) { super(props); this.state = { error: "" } }
-  static getDerivedStateFromError(error) { return { error: error?.message || "AI 模块载入失败" } }
-  componentDidCatch(error) { MNBridge.send("runtimeLog", { event: "ai.ui.error", detail: String(error?.message || error) }).catch(() => {}) }
-  render() { return this.state.error ? <section className="overviewPanel aiOverview"><div className="aiInlineError">{this.state.error}</div>{this.props.onBack && <button className="aiBackFallback" onClick={this.props.onBack}>返回设置</button>}</section> : this.props.children }
-}
-
-function AIOverview({ ready, enabled, onOpenSettings }) {
-  const [settings, setSettings] = useState(null), [reports, setReports] = useState([])
-  const [subjectId, setSubjectId] = useState(""), [preview, setPreview] = useState(null)
-  const [job, setJob] = useState(null), [report, setReport] = useState(null), [error, setError] = useState("")
-  async function load() {
-    try {
-      const [nextSettings, nextReports] = await Promise.all([MNBridge.send("aiGetSettings"), MNBridge.send("aiListReports")])
-      setSettings(nextSettings); setReports(nextReports || [])
-      setSubjectId(current => current || nextSettings.subjects?.[0]?.id || "")
-    } catch (reason) { setError(reason.message || String(reason)) }
-  }
-  useEffect(() => { if (ready && enabled) load() }, [ready, enabled])
-  const selected = settings?.subjects?.find(item => item.id === subjectId)
-  const latest = reports.find(item => item.subjectId === subjectId)
-  useEffect(() => { setPreview(null); if (!latest) return setReport(null); MNBridge.send("aiGetReport", { reportId: latest.id }).then(setReport).catch(() => setReport(null)) }, [subjectId, latest?.id])
-  useEffect(() => {
-    if (!job?.id || ["done", "failed", "cancelled"].includes(job.status)) return
-    const timer = setInterval(async () => {
-      const next = await MNBridge.send("aiGetJob", { jobId: job.id }); setJob(next)
-      if (next.status === "done") { const value = await MNBridge.send("aiGetReport", { reportId: next.reportId }); setReport(value); setPreview(null); load() }
-      if (next.status === "failed") setError(next.error || "分析失败")
-    }, 900)
-    return () => clearInterval(timer)
-  }, [job?.id, job?.status])
-  async function inspect() { setError(""); try { setPreview(await MNBridge.send("aiPreviewAnalysis", { subjectId })) } catch (reason) { setError(reason.message || String(reason)) } }
-  async function start() { setError(""); try { setJob(await MNBridge.send("aiStartAnalysis", { subjectId })) } catch (reason) { setError(reason.message || String(reason)) } }
-  const running = job && !["done", "failed", "cancelled"].includes(job.status)
-  const openEvidence = reference => report && MNBridge.send("aiOpenEvidence", { reportId: report.id, reference }).catch(reason => setError(reason.message || String(reason)))
-  if (!ready) return <section className="overviewPanel aiOverview"><header><strong>AI 错题总结（开发中…）</strong></header><div className="aiEmpty">错题加载完成后可用</div></section>
-  if (!enabled) return <section className="overviewPanel aiOverview"><header><strong>AI 错题总结（开发中…）</strong></header><div className="aiEmpty"><span>AI 分析未开启</span><button className="aiBackFallback" onClick={onOpenSettings}>前往配置</button></div></section>
-  return <section className="overviewPanel aiOverview">
-    <header><strong>AI 错题总结（开发中…）</strong><div className="aiOverviewActions"><select value={subjectId} onChange={event => setSubjectId(event.target.value)} aria-label="选择科目"><option value="">选择科目</option>{(settings?.subjects || []).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button disabled={!selected || running || !settings?.enabled} onClick={inspect}>生成总结</button></div></header>
-    {!settings?.enabled ? <div className="aiEmpty">AI 分析未开启</div> : !selected ? <div className="aiEmpty">请先在设置中配置科目</div> : <>
-      {latest && <div className="aiReportMeta"><span>{latest.stale ? "数据已变化" : "最新报告"}</span><b>{new Date(latest.createdAt).toLocaleDateString()}</b><em>{latest.model}</em></div>}
-      {preview && <div className="aiPreflight"><b>{preview.recordCount} 道错题</b><span>本次候选 {preview.analyzableCount} 道 · 可用 {preview.preparedCount} 道</span><span>{preview.needsPreparation || 0} 道需准备或检查发送范围</span><span>{preview.withHistory} 道有复习记录</span><span>{preview.withoutAnswerBinding} 道未绑定答案</span><button disabled={!preview.preparedCount} onClick={start}>确认生成</button></div>}
-      {running && <div className="aiJob"><i style={{ width: `${job.progress || 0}%` }} /><span>{job.detail || (job.status === "preparing" ? "读取错题" : job.status === "ocr" ? "识别图片" : job.status === "analyzing" ? "生成总结" : "保存报告")} · {job.progress || 0}%</span><button onClick={() => MNBridge.send("aiCancelJob", { jobId: job.id })}>取消</button></div>}
-      {error && <div className="aiInlineError">{error}</div>}
-      {report && <AIReport report={report} openEvidence={openEvidence} />}
-      {!report && !preview && !running && <div className="aiEmpty">尚无总结</div>}
-    </>}
-  </section>
-}
-
-function EvidenceLinks({ values, onOpen }) { return <span className="aiEvidence">{(values || []).slice(0, 6).map(value => <button key={value} onClick={() => onOpen(value)}>{value}</button>)}</span> }
-function AIReport({ report, openEvidence }) {
-  const content = report.content || {}
-  return <div className="aiReport">
-    <section className="aiSummary"><strong>{content.summary}</strong><div>{(content.strengths || []).map(item => <span key={item}>{item}</span>)}</div></section>
-    <ReportSection title="薄弱点" items={content.weakPoints} render={item => <><header><strong>{item.title}</strong><b>{item.severity}</b></header><p>{item.reason}</p><small>{item.suggestion}</small><EvidenceLinks values={item.evidence} onOpen={openEvidence} /></>} />
-    <ReportSection title="错误模式" items={content.errorPatterns} render={item => <><strong>{item.title}</strong><p>{item.detail}</p><EvidenceLinks values={item.evidence} onOpen={openEvidence} /></>} />
-    <ReportSection title="复习建议" items={content.reviewAdvice} render={item => <><header><b>{item.priority}</b><strong>{item.title}</strong></header><p>{item.action}</p><EvidenceLinks values={item.evidence} onOpen={openEvidence} /></>} />
-    <ReportSection title="分析依据" items={(content.limitations || []).map(title => ({ title }))} render={item => <span>{item.title}</span>} />
-  </div>
-}
-function ReportSection({ title, items = [], render }) { if (!items.length) return null; return <section className="aiReportSection"><h3>{title}</h3><div>{items.map((item, index) => <article key={`${title}-${index}`}>{render(item)}</article>)}</div></section> }
-
-function normalizeAISettingsView(value) {
-  const input = value && typeof value === "object" ? value : {}
-  const profiles = Array.isArray(input.profiles) ? input.profiles : []
-  const subjects = Array.isArray(input.subjects) ? input.subjects.map(subject => ({
-    ...subject,
-    studySetIds: Array.isArray(subject?.studySetIds) ? subject.studySetIds : [],
-    schedule: { enabled: false, frequency: "weekly", hour: 9, weekday: 1, monthday: 1, ...(subject?.schedule || {}) },
-  })) : []
-  return {
-    ...input,
-    enabled: input.enabled === true,
-    profiles,
-    subjects,
-    credentials: input.credentials && typeof input.credentials === "object" ? input.credentials : {},
-    ocrEngine: input.ocrEngine === "glm-ocr" ? "glm-ocr" : "mineru",
-    mineru: { enabled: false, enableFormula: true, enableTable: true, credentialRef: "mineru-token", ...(input.mineru || {}) },
-    glmOcr: { baseUrl: "https://open.bigmodel.cn/api/paas/v4", credentialRef: "ocr-glm", model: "glm-ocr", timeoutMs: 120000, ...(input.glmOcr || {}) },
-    privacy: { includeAnswer: true, includeSourcePath: true, includeReviewHistory: true, includeCustomCategories: true,
-      handwriting: input.privacy?.handwriting === true || input.privacy?.mindMapHandwriting === true || input.privacy?.handwritingToModel === true, ...(input.privacy || {}) },
-  }
-}
-
-const AI_FREQUENCY_LABELS = { daily: "每天", weekly: "每周", monthly: "每月" }
-const AI_POLICY_LABELS = { auto: "有图片或手写时识别", all: "整卡识别", "image-only": "仅无题干文字的图片题", never: "不使用 OCR" }
-const AI_IMAGE_LABELS = { "when-needed": "有图片时允许 OCR", always: "允许整卡 OCR", never: "禁止图片上传（含手写）" }
-
-const OCR_STAGE_LABELS = {
-  "waiting-render": "等待渲染",
-  rendering: "正在渲染",
-  queued: "等待 OCR",
-  uploading: "正在上传",
-  ocr: "正在识别",
-  success: "识别成功",
-  failed: "识别失败"
-}
-
-const BOUND_HANDWRITING_LABELS = {
-  included: "已加入脑图绑定手写",
-  none: "此题没有脑图绑定手写",
-  unsupported: "当前 MarginNote 版本不支持读取脑图绑定手写",
-  unreadable: "检测到脑图绑定手写，但媒体数据不可读"
-}
-
-function QuestionPreparationWorkspace({ studySets, ocrEngine, includeHandwriting, onStorageChanged, onStatus }) {
-  const [studySetId, setStudySetId] = useState("")
-  const [job, setJob] = useState(null)
-  const [questionHtml, setQuestionHtml] = useState("")
-  const [handwritingRender, setHandwritingRender] = useState(false)
-  const [nativeOnly, setNativeOnly] = useState(false)
-  const [previewImage, setPreviewImage] = useState("")
-  const [busy, setBusy] = useState(false)
-  const requestedRef = useRef("")
-  const submittedRef = useRef("")
-  const advancedRef = useRef("")
-
-  useEffect(() => {
-    if (!studySetId && studySets[0]?.id) setStudySetId(studySets[0].id)
-  }, [studySets, studySetId])
-
-  useEffect(() => {
-    if (!job?.id || ["done", "cancelled", "missing"].includes(job.status)) return undefined
-    let disposed = false
-    let timer = 0
-    async function poll() {
-      try {
-        const fresh = await MNBridge.send("aiGetQuestionPreparationJob", { jobId: job.id })
-        if (disposed) return
-        setJob(fresh)
-        if (!["done", "cancelled", "missing"].includes(fresh.status)) timer = window.setTimeout(poll, 700)
-        else if (fresh.status === "done") onStorageChanged?.()
-      } catch (reason) {
-        if (!disposed) onStatus(reason?.message || String(reason))
-      }
-    }
-    timer = window.setTimeout(poll, 350)
-    return () => { disposed = true; window.clearTimeout(timer) }
-  }, [job?.id])
-
-  useEffect(() => {
-    const current = job?.current
-    if (!job?.id || !current || current.stage !== "waiting-render") return
-    const key = `${job.id}:${current.recordId}`
-    if (requestedRef.current === key) return
-    requestedRef.current = key
-    submittedRef.current = ""
-    advancedRef.current = ""
-    setQuestionHtml("")
-    setPreviewImage("")
-    MNBridge.send("aiGetPreparationQuestion", { jobId: job.id, recordId: current.recordId })
-      .then(result => { setQuestionHtml(result.questionHtml || ""); setHandwritingRender(result.includeHandwriting === true); setNativeOnly(result.nativeOnly === true) })
-      .catch(reason => onStatus(reason?.message || String(reason)))
-  }, [job?.id, job?.current?.recordId, job?.current?.stage])
-
-  useEffect(() => {
-    const current = job?.current
-    if (!job?.id || job.status !== "waiting-advance" || !current || !["success", "failed"].includes(current.stage)) return undefined
-    const key = `${job.id}:${current.recordId}:${current.stage}`
-    if (advancedRef.current === key) return undefined
-    advancedRef.current = key
-    const timer = window.setTimeout(async () => {
-      try { setJob(await MNBridge.send("aiAdvanceQuestionPreparation", { jobId: job.id })) }
-      catch (reason) { onStatus(reason?.message || String(reason)) }
-    }, 1600)
-    return () => window.clearTimeout(timer)
-  }, [job?.id, job?.status, job?.current?.recordId, job?.current?.stage])
-
-  async function start() {
-    if (!studySetId || busy) return
-    setBusy(true)
-    onStatus("正在创建 OCR 题目准备任务…")
-    try {
-      requestedRef.current = ""
-      submittedRef.current = ""
-      advancedRef.current = ""
-      setQuestionHtml("")
-      setPreviewImage("")
-      const next = await MNBridge.send("aiStartQuestionPreparation", { studySetId })
-      setJob(next)
-      onStatus(next.total ? `已加入 ${next.total} 道错题` : "所选学习集没有错题")
-    } catch (reason) { onStatus(reason?.message || String(reason)) }
-    finally { setBusy(false) }
-  }
-
-  async function cancel() {
-    if (!job?.id) return
-    await MNBridge.send("aiCancelQuestionPreparation", { jobId: job.id })
-    setJob(current => current ? { ...current, status: "cancelled" } : current)
-    onStatus("题目准备任务已取消")
-  }
-
-  async function renderAndSubmit(event) {
-    const current = job?.current
-    if (!job?.id || !current || !questionHtml) return
-    const key = `${job.id}:${current.recordId}`
-    if (submittedRef.current === key) return
-    submittedRef.current = key
-    try {
-      const doc = event.currentTarget.contentDocument
-      if (!doc?.body) throw new Error("题目卡片渲染窗口不可用")
-      const html2canvas = await ensureHtml2Canvas()
-      await doc.fonts?.ready
-      await Promise.all(Array.from(doc.images || []).map(image => image.complete
-        ? image.naturalWidth ? Promise.resolve() : Promise.reject(new Error("题目图片读取失败，已停止截图上传"))
-        : new Promise((resolve, reject) => {
-          const timer = window.setTimeout(() => finish(false), 5000)
-          function finish(ok) {
-            window.clearTimeout(timer); image.removeEventListener("load", loaded); image.removeEventListener("error", broken)
-            if (ok) resolve(); else reject(new Error("题目图片读取失败，已停止截图上传"))
-          }
-          function loaded() { finish(true) }
-          function broken() { finish(false) }
-          image.addEventListener("load", loaded, { once: true })
-          image.addEventListener("error", broken, { once: true })
-        })))
-      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
-      // 先逐个捕获手写内容元素，再隐藏后截整卡：OCR 截图永远不含手写。
-      const handwritingDataUris = []
-      const handwritingNodes = []
-      if (handwritingRender) {
-        const boundSection = doc.querySelector(".bound-mindmap-handwriting")
-        if (boundSection) handwritingNodes.push(boundSection)
-        for (const drawing of Array.from(doc.querySelectorAll("canvas[data-drawing]"))) {
-          const holder = drawing.closest("figure") || drawing
-          if (!handwritingNodes.includes(holder)) handwritingNodes.push(holder)
-        }
-        for (const node of handwritingNodes) {
-          try {
-            const nodeScale = Math.max(.75, Math.min(1.5, 6000 / Math.max(1, node.scrollHeight || 1)))
-            const nodeCanvas = await html2canvas(node, { ...sceneCaptureOptions(doc), backgroundColor: "#ffffff", logging: false, useCORS: true, scale: nodeScale })
-            handwritingDataUris.push(nodeCanvas.toDataURL("image/jpeg", .9))
-          } catch {}
-        }
-      }
-      for (const node of handwritingNodes) node.style.visibility = "hidden"
-      const width = Math.max(640, doc.documentElement.scrollWidth, doc.body.scrollWidth)
-      const height = Math.max(1, doc.documentElement.scrollHeight, doc.body.scrollHeight)
-      const scale = Math.max(.5, Math.min(1.5, 12000 / height))
-      const canvas = await html2canvas(doc.body, { ...sceneCaptureOptions(doc), backgroundColor: "#ffffff", logging: false, useCORS: true, scale, width, height, windowWidth: width, windowHeight: height })
-      const imageDataUri = canvas.toDataURL("image/jpeg", .9)
-      setPreviewImage(imageDataUri)
-      // 原生文字直读题不上传截图；图片题才提交整卡（截图内已隐藏手写）。
-      await MNBridge.send("aiSubmitPreparationImage", { jobId: job.id, recordId: current.recordId, imageDataUri: nativeOnly ? "" : imageDataUri, handwritingDataUris })
-    } catch (reason) {
-      const message = reason?.message || String(reason)
-      onStatus(message)
-      try { await MNBridge.send("aiFailPreparationQuestion", { jobId: job.id, recordId: current.recordId, error: message }) } catch {}
-    }
-  }
-
-  const current = job?.current
-  const running = job && !["done", "cancelled", "missing"].includes(job.status)
-  const itemProgress = Math.max(0, Math.min(100, Number(current?.progress || 0)))
-  const totalProgress = Math.max(0, Math.min(100, Number(job?.totalProgress || 0)))
-  return <div className="aiPreparationWorkspace">
-    <div className="aiPreparationControls">
-      <label><span>选择含错题的学习集</span><select value={studySetId} disabled={running} onChange={event => setStudySetId(event.target.value)}>{studySets.map(set => <option key={set.id} value={set.id}>{set.title}（{set.mistakeCount} 题）</option>)}</select></label>
-      <p>有题干文字的题目直接读取原生文字；含图片的题目才渲染去除手写后的整张卡片，交给 {ocrEngine === "glm-ocr" ? "GLM-OCR" : "MinerU"} 识别成文字。{includeHandwriting ? "已开启手写内容：手写部分另存为独立图片随对应题目发送给分析模型，不进入 OCR。" : "未开启手写内容：手写不会以任何形式发送。"}分析前会核对题目、手写和发送范围，旧 OCR 可能需要重新准备。</p>
-      <div className="aiEditorActions"><button type="button" disabled={!studySetId || busy || running} onClick={start}>{busy ? "正在启动…" : "开始准备错题"}</button>{running && <button type="button" className="aiDangerButton" onClick={cancel}>取消</button>}</div>
-      {!studySets.length && <small className="aiPreparationEmpty">当前没有包含错题的学习集，无需 OCR。</small>}
-      {job && <dl className="aiPreparationCounts"><div><dt>题目总数</dt><dd>{job.total || 0}</dd></div><div><dt>成功</dt><dd>{job.success || 0}</dd></div><div><dt>失败</dt><dd>{job.failed || 0}</dd></div></dl>}
-    </div>
-    <div className="aiPreparationMonitor">
-      <div className="aiPreparationPreview">
-        {previewImage ? <ResourceImage src={previewImage} alt={`当前上传的题目卡片：${current?.title || ""}`} /> : questionHtml ? <PreviewFrame title="待上传题目卡片" html={questionHtml} onLoad={renderAndSubmit} onError={reason => {
-          onStatus(reason.message)
-          if (job?.id && current?.recordId) void MNBridge.send("aiFailPreparationQuestion", { jobId: job.id, recordId: current.recordId, error: reason.message }).catch(() => {})
-        }} /> : <div><Icon name="image" /><span>{job?.status === "done" ? "题目准备已完成" : "当前上传的题目卡片会显示在这里"}</span></div>}
-      </div>
-      {job && <div className="aiPreparationProgress">
-        <div className="aiPreparationProgressLabel"><span>单题进度 · {OCR_STAGE_LABELS[current?.stage] || (job.status === "done" ? "已完成" : "等待开始")}</span><b>{Math.round(itemProgress)}%</b></div>
-        <progress max="100" value={itemProgress} />
-        <small>{current ? `${current.index}/${current.total} · ${current.title} · ${current.detail || ""}` : "没有待处理题目"}</small>
-        {current?.boundHandwritingStatus && current.boundHandwritingStatus !== "disabled" && <small>{BOUND_HANDWRITING_LABELS[current.boundHandwritingStatus] || "脑图绑定手写状态未知"}{current.boundHandwritingCount ? `（${current.boundHandwritingCount} 项）` : ""}</small>}
-        <div className="aiPreparationProgressLabel"><span>总进度</span><b>{Math.round(totalProgress)}%</b></div>
-        <progress max="100" value={totalProgress} />
-        <div className="aiPreparationOcr"><strong>OCR 返回文本</strong><pre>{current?.ocrText || (current?.error ? `识别失败：${current.error}` : "识别完成后将在这里显示")}</pre></div>
-      </div>}
-    </div>
-  </div>
-}
-
-function OCRResultBrowser({ items, onStatus }) {
-  const [selectedId, setSelectedId] = useState("")
-  const [detail, setDetail] = useState(null)
-  const [loading, setLoading] = useState(false)
-
-  useEffect(() => {
-    if (!items.length) { setSelectedId(""); setDetail(null); return }
-    if (!items.some(item => item.recordId === selectedId)) setSelectedId(items[0].recordId)
-  }, [items, selectedId])
-
-  useEffect(() => {
-    if (!selectedId) return undefined
-    let disposed = false
-    setLoading(true)
-    MNBridge.send("aiGetPreparedQuestion", { recordId: selectedId }).then(value => {
-      if (!disposed) setDetail(value)
-    }).catch(reason => {
-      if (!disposed) onStatus(reason?.message || String(reason))
-    }).finally(() => { if (!disposed) setLoading(false) })
-    return () => { disposed = true }
-  }, [selectedId])
-
-  if (!items.length) return <div className="aiOcrBrowserEmpty"><Icon name="image" /><span>完成题目 OCR 后，可在这里逐题核对原题卡片与识别文本。</span></div>
-  const selected = items.find(item => item.recordId === selectedId) || items[0]
-  return <section className="aiOcrBrowser" aria-label="OCR 结果对比">
-    <header>
-      <label><span>选择题目</span><select value={selectedId} onChange={event => setSelectedId(event.target.value)}>{items.map((item, index) => <option key={item.recordId} value={item.recordId}>{index + 1}. {item.sourceTitle}</option>)}</select></label>
-      <small>{selected?.sourceNotebookTitle || "原学习集"} · {selected?.provider === "local" ? "直接读取文字" : selected?.provider === "bigmodel" ? "GLM-OCR" : "MinerU"}{selected?.includedMindMapHandwriting ? ` · 含 ${selected.boundHandwritingCount || 1} 项脑图手写` : ""}</small>
-    </header>
-    <div className="aiOcrCompare">
-      <figure><figcaption>发送给 OCR 的原题卡片</figcaption>{detail?.imageDataUri ? <ResourceImage src={detail.imageDataUri} alt={`${selected?.sourceTitle || "题目"} OCR 原图`} /> : <div className="aiOcrMissingImage">{loading ? "正在读取图片…" : detail?.provider === "local" ? "此题直接读取文字，未上传图片" : "历史记录未保存原题图片，请重新 OCR 此题"}</div>}</figure>
-      <section><h3>OCR 文本渲染</h3>{loading ? <div className="aiOcrRenderedEmpty">正在读取 OCR 文本…</div> : detail?.questionText ? <div className="markdownPreview aiOcrRenderedText" dangerouslySetInnerHTML={{ __html: renderMarkdownPreview(detail.questionText) }} /> : <div className="aiOcrRenderedEmpty">没有可显示的 OCR 文本</div>}</section>
-    </div>
-    {detail?.processedAt && <footer>识别时间：{new Date(detail.processedAt).toLocaleString()}</footer>}
-  </section>
-}
-
-/** 导出快速预览：A4 版面（760px）按固定 60% 等比缩放显示。 */
 const EXPORT_PREVIEW_FRAME_WIDTH = 760
 const EXPORT_PREVIEW_SCALE = 0.6
 function ExportHtmlPreview({ html }) {
@@ -1711,131 +1459,8 @@ function ExportHtmlPreview({ html }) {
   </div>
 }
 
-function AISwitch({ checked, onChange, label }) {
-  return <button type="button" role="switch" aria-checked={checked} aria-label={label} className={`aiSwitch${checked ? " on" : ""}`} onClick={() => onChange(!checked)}><i /></button>
-}
-
-function AISettingsPage({ onBack, onEnabledChanged }) {
-  const [settings, setSettings] = useState(null), [studySets, setStudySets] = useState([]), [mistakeStudySets, setMistakeStudySets] = useState([]), [newSubject, setNewSubject] = useState(""), [status, setStatus] = useState(""), [cacheStats, setCacheStats] = useState(null), [reportList, setReportList] = useState([]), [preparedQuestions, setPreparedQuestions] = useState([])
-  const [expandedKey, setExpandedKey] = useState("")
-  const pageRef = useRef(null)
-  const toggleEditor = key => setExpandedKey(current => current === key ? "" : key)
-  async function loadStorage() { const [stats, list, questions] = await Promise.all([MNBridge.send("aiGetCacheStats"), MNBridge.send("aiListReports"), MNBridge.send("aiListPreparedQuestions")]); setCacheStats(stats); setReportList(list || []); setPreparedQuestions(Array.isArray(questions) ? questions : []) }
-  useEffect(() => { Promise.all([MNBridge.send("aiGetSettings"), MNBridge.send("aiListStudySets"), MNBridge.send("aiListMistakeStudySets")]).then(([a, b, c]) => { const next = normalizeAISettingsView(a); setSettings(next); setStudySets(Array.isArray(b) ? b : []); setMistakeStudySets(Array.isArray(c) ? c : []); if (next.enabled) loadStorage() }).catch(reason => setStatus(reason.message || String(reason))) }, [])
-  useLayoutEffect(() => { pageRef.current?.scrollTo?.({ top: 0, left: 0 }) }, [])
-  async function save(next) { const normalized = normalizeAISettingsView(next); const previousEnabled = settings?.enabled === true; setSettings(normalized); try { const savedState = normalizeAISettingsView(await MNBridge.send("aiSaveSettings", normalized)); setSettings(savedState); setStatus("已保存"); if (savedState.enabled) loadStorage(); if (savedState.enabled !== previousEnabled) onEnabledChanged?.() } catch (reason) { setStatus(reason.message || String(reason)) } }
-  if (!settings) return <section className="aiSettingsPage" ref={pageRef}><div className="aiEmpty">正在读取…</div></section>
-  const profiles = Array.isArray(settings.profiles) ? settings.profiles : []
-  const subjects = Array.isArray(settings.subjects) ? settings.subjects : []
-  const activeProfile = profiles.find(item => item.id === settings.defaultProfileId)
-  function patchProfile(id, change) { save({ ...settings, profiles: profiles.map(item => item.id === id ? { ...item, ...change } : item) }) }
-  function patchSubject(id, change) { save({ ...settings, subjects: subjects.map(item => item.id === id ? { ...item, ...change } : item) }) }
-  function addSubject() { const name = newSubject.trim(); if (!name) return; save({ ...settings, subjects: [...subjects, { id: `subject-${Date.now().toString(36)}`, name, studySetIds: [], schedule: { enabled: false, frequency: "weekly", hour: 9, weekday: 1, monthday: 1 } }] }); setNewSubject("") }
-  function credentialLabel(ref) { const state = settings.credentials?.[ref]; return state?.configured ? `已配置 ····${state.maskedSuffix || ""}` : "未配置" }
-  async function clearCredential(ref) { try { await MNBridge.send("aiClearCredential", { credentialRef: ref }); setSettings(normalizeAISettingsView(await MNBridge.send("aiGetSettings"))); setStatus("已清除密钥") } catch (reason) { setStatus(reason?.message || String(reason)) } }
-  async function testProvider(profile) {
-    setStatus(`正在测试 ${profile.name}…`)
-    try {
-      const result = await MNBridge.send("aiTestProvider", { profileId: profile.id })
-      setStatus(result?.connected ? `${profile.name} 连接成功 · ${result.model}` : `${profile.name} 未返回测试结果`)
-    } catch (reason) {
-      setStatus(reason?.message || String(reason))
-    }
-  }
-  const privacyRows = [
-    ["includeAnswer", "参考答案", "第一个绑定的参考答案文字"],
-    ["includeSourcePath", "章节路径", "题目在原脑图中的位置"],
-    ["includeReviewHistory", "复习历史", "掌握等级与复测记录"],
-    ["includeCustomCategories", "自定义标签", "错题上手动添加的标签"]
-  ]
-  return <section className="aiSettingsPage" ref={pageRef}>
-    <header className="aiSettingsToolbar">
-      <button onClick={onBack} aria-label="返回设置">‹ 返回</button>
-      <div><h1>AI 错题分析</h1><p>科目、AI 服务与发送范围</p></div>
-      <span role="status">{status}</span>
-    </header>
-    <div className="aiSettingsComposer">
-      <div className="settingsGroup aiEnableGroup">
-        <div className="aiRow">
-          <span className="aiRowMain"><strong>启用 AI 错题分析</strong><small>关闭后不加载 AI 模块，也不会发送任何内容</small></span>
-          <AISwitch checked={settings.enabled} onChange={value => save({ ...settings, enabled: value })} label="启用 AI 错题分析" />
-        </div>
-      </div>
-      <div className="settingsGroup aiServiceGroup"><h2>AI 服务</h2>
-        <div className="aiRow">
-          <span className="aiRowMain"><strong>分析错题 AI</strong><small>选择用于生成错题总结的服务</small></span>
-          <select value={settings.defaultProfileId} aria-label="选择分析错题 AI" onChange={event => save({ ...settings, defaultProfileId: event.target.value })}>{profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select>
-        </div>
-        {activeProfile && <>
-          <button type="button" className="aiRow aiRowButton" aria-expanded={expandedKey === "profile"} onClick={() => toggleEditor("profile")}>
-            <span className="aiRowMain"><strong>分析服务配置</strong><small>{activeProfile.type === "deepseek" ? "DeepSeek" : "OpenAI 兼容"} · {activeProfile.model} · {credentialLabel(activeProfile.credentialRef)}</small></span>
-            <b>{expandedKey === "profile" ? "收起" : "编辑"}</b>
-          </button>
-          {expandedKey === "profile" && <div className="aiEditor">
-            <label className="aiEditorField"><span>名称</span><input value={activeProfile.name} aria-label="服务名称" onChange={event => patchProfile(activeProfile.id, { name: event.target.value })} /></label>
-            <label className="aiEditorField"><span>API 地址</span><input value={activeProfile.baseUrl} aria-label="API 地址" onChange={event => patchProfile(activeProfile.id, { baseUrl: event.target.value })} /></label>
-            <label className="aiEditorField"><span>模型</span><input value={activeProfile.model} aria-label="模型" onChange={event => patchProfile(activeProfile.id, { model: event.target.value })} /></label>
-            <div className="aiEditorActions">
-              <button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: activeProfile.credentialRef, persistence: "session" }).then(() => MNBridge.send("aiGetSettings")).then(value => setSettings(normalizeAISettingsView(value)))}>本次密钥</button>
-              <button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: activeProfile.credentialRef, persistence: "local" }).then(() => MNBridge.send("aiGetSettings")).then(value => setSettings(normalizeAISettingsView(value)))}>本地保存</button>
-              <button className="aiDangerButton" onClick={() => clearCredential(activeProfile.credentialRef)}>清除密钥</button>
-              <button onClick={() => testProvider(activeProfile)}>测试</button>
-              <span className="aiCredentialState">{credentialLabel(activeProfile.credentialRef)}</span>
-            </div>
-          </div>}
-        </>}
-        <button type="button" className="aiRow aiRowButton" aria-expanded={expandedKey === "ocr"} onClick={() => toggleEditor("ocr")}>
-          <span className="aiRowMain"><strong>题目识别（OCR）</strong><small>{settings.mineru.enabled ? `${settings.ocrEngine === "glm-ocr" ? "GLM-OCR · 智谱" : "MinerU"} · 公式${settings.mineru.enableFormula ? "开" : "关"} · 表格${settings.mineru.enableTable ? "开" : "关"}` : "已关闭 · 图片题不会发送"}</small></span>
-          <b>{expandedKey === "ocr" ? "收起" : "编辑"}</b>
-        </button>
-        {expandedKey === "ocr" && <div className="aiEditor">
-          <div className="aiRow"><span className="aiRowMain"><strong>启用题目识别</strong><small>整张题目卡片（不含手写）识别成文字后发送；关闭后图片题不会发送，文字题仍直接读取</small></span><AISwitch checked={settings.mineru.enabled} onChange={value => save({ ...settings, mineru: { ...settings.mineru, enabled: value } })} label="启用题目识别" /></div>
-          <label className="aiRow"><span className="aiRowMain"><strong>识别引擎</strong></span><select value={settings.ocrEngine} onChange={event => save({ ...settings, ocrEngine: event.target.value })}><option value="mineru">MinerU</option><option value="glm-ocr">GLM-OCR（智谱）</option></select></label>
-          {settings.ocrEngine === "mineru" ? <>
-            <div className="aiRow"><span className="aiRowMain"><strong>公式识别</strong></span><AISwitch checked={settings.mineru.enableFormula} onChange={value => save({ ...settings, mineru: { ...settings.mineru, enableFormula: value } })} label="公式识别" /></div>
-            <div className="aiRow"><span className="aiRowMain"><strong>表格识别</strong></span><AISwitch checked={settings.mineru.enableTable} onChange={value => save({ ...settings, mineru: { ...settings.mineru, enableTable: value } })} label="表格识别" /></div>
-            <div className="aiEditorActions"><button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: settings.mineru.credentialRef, persistence: "session" }).then(() => MNBridge.send("aiGetSettings")).then(value => setSettings(normalizeAISettingsView(value)))}>本次 Token</button><button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: settings.mineru.credentialRef, persistence: "local" }).then(() => MNBridge.send("aiGetSettings")).then(value => setSettings(normalizeAISettingsView(value)))}>本地保存</button><button className="aiDangerButton" onClick={() => clearCredential(settings.mineru.credentialRef)}>清除密钥</button><button onClick={() => MNBridge.send("aiTestMinerU").then(() => setStatus("MinerU 已连接")).catch(reason => setStatus(reason.message || String(reason)))}>测试</button><span className="aiCredentialState">{credentialLabel(settings.mineru.credentialRef)}</span></div>
-          </> : <>
-            <label className="aiEditorField"><span>API 地址</span><input value={settings.glmOcr.baseUrl} aria-label="GLM-OCR API 地址" onChange={event => save({ ...settings, glmOcr: { ...settings.glmOcr, baseUrl: event.target.value } })} /></label>
-            <label className="aiEditorField"><span>模型</span><input value="glm-ocr" aria-label="GLM-OCR 模型" disabled /></label>
-            <small className="aiOcrHint">整张题目卡片以 JPG 发送给 OCR 服务识别为文字；官方限制单图不超过 10 MB。</small>
-            <div className="aiEditorActions"><button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: settings.glmOcr.credentialRef, persistence: "session" }).then(() => MNBridge.send("aiGetSettings")).then(value => setSettings(normalizeAISettingsView(value)))}>本次 API Key</button><button onClick={() => MNBridge.send("aiSetCredential", { credentialRef: settings.glmOcr.credentialRef, persistence: "local" }).then(() => MNBridge.send("aiGetSettings")).then(value => setSettings(normalizeAISettingsView(value)))}>本地保存</button><button className="aiDangerButton" onClick={() => clearCredential(settings.glmOcr.credentialRef)}>清除密钥</button><span className="aiCredentialState">{credentialLabel(settings.glmOcr.credentialRef)}</span></div>
-          </>}
-        </div>}
-
-      </div>
-      <div className="settingsGroup aiPrivacyGroup"><h2>发送内容</h2>
-        {privacyRows.map(([key, label, hint]) => <div key={key} className="aiRow"><span className="aiRowMain"><strong>{label}</strong><small>{hint}</small></span><AISwitch checked={settings.privacy[key]} onChange={value => save({ ...settings, privacy: { ...settings.privacy, [key]: value } })} label={label} /></div>)}
-        <div className="aiRow"><span className="aiRowMain"><strong>手写内容</strong><small>卡片内手写与脑图绑定手写统一处理；手写不进入 OCR，开启后以图片随对应题目发送给分析模型</small></span><AISwitch checked={settings.privacy.handwriting} onChange={value => save({ ...settings, privacy: { ...settings.privacy, handwriting: value } })} label="手写内容" /></div>
-        <small className="aiOcrHint">题目始终以整卡识别文字发送；图片只可能是手写内容，且仅发送给分析模型，不会发给识别服务。</small>
-      </div>
-      <div className="settingsGroup aiSubjectGroup"><h2>科目与学习集</h2>
-        <div className="aiSubjectAdd"><input value={newSubject} onChange={event => setNewSubject(event.target.value)} placeholder="新科目名称" aria-label="新科目名称" /><button onClick={addSubject}>添加</button></div>
-        {subjects.map(subject => { const key = `subject-${subject.id}`; return <article key={subject.id}>
-          <button type="button" className="aiRow aiRowButton" aria-expanded={expandedKey === key} onClick={() => toggleEditor(key)}>
-            <span className="aiRowMain"><strong>{subject.name}</strong><small>{subject.studySetIds.length} 个学习集 · {subject.schedule.enabled ? `按${AI_FREQUENCY_LABELS[subject.schedule.frequency] || "周"}间隔检查生成` : "未开启定期检查"}</small></span>
-            <b>{expandedKey === key ? "收起" : "编辑"}</b>
-          </button>
-          {expandedKey === key && <div className="aiEditor">
-            <label className="aiEditorField"><span>科目名称</span><input value={subject.name} onChange={event => patchSubject(subject.id, { name: event.target.value })} /></label>
-            <div className="aiEditorField"><span>所属学习集（每个学习集只能归属一个科目）</span><div className="aiStudySets">{studySets.map(set => { const owner = subjects.find(item => item.id !== subject.id && item.studySetIds.includes(set.id)); return <label key={set.id} className={owner ? "owned" : ""}><input type="checkbox" disabled={!!owner} checked={subject.studySetIds.includes(set.id)} onChange={event => patchSubject(subject.id, { studySetIds: event.target.checked ? [...subject.studySetIds, set.id] : subject.studySetIds.filter(id => id !== set.id) })} /><span>{set.title}</span></label> })}</div></div>
-            <div className="aiRow"><span className="aiRowMain"><strong>定期检查生成</strong><small>打开插件时按间隔检查；不会在后台准点运行，内容无变化不重复生成</small></span><AISwitch checked={subject.schedule.enabled} onChange={value => patchSubject(subject.id, { schedule: { ...subject.schedule, enabled: value } })} label="定期检查生成" /></div>
-            {subject.schedule.enabled && <label className="aiEditorField"><span>检查间隔</span><select value={subject.schedule.frequency} onChange={event => patchSubject(subject.id, { schedule: { ...subject.schedule, frequency: event.target.value } })}><option value="daily">每天</option><option value="weekly">每周</option><option value="monthly">每月</option></select></label>}
-            <div className="aiEditorActions"><button className="aiDangerButton" onClick={() => save({ ...settings, subjects: subjects.filter(item => item.id !== subject.id) })}>删除科目</button></div>
-          </div>}
-        </article> })}
-        {!subjects.length && <small className="aiOcrHint">添加科目并把学习集归入其中，才能按科目生成总结。</small>}
-      </div>
-      {settings.enabled && <div className="settingsGroup aiAdvancedGroup"><h2>高级</h2>
-        <section className="aiAdvancedSection aiPreparationSettings"><h3>错题题目准备</h3><QuestionPreparationWorkspace studySets={mistakeStudySets} ocrEngine={settings.ocrEngine} includeHandwriting={settings.privacy.handwriting} onStorageChanged={loadStorage} onStatus={setStatus} /></section>
-        <section className="aiAdvancedSection aiStorageSettings"><h3>缓存与报告</h3><div className="aiStorageSummary"><span><strong>OCR 缓存</strong><small>API 缓存 {cacheStats?.ocrEntries || 0} · 已准备题目 {cacheStats?.preparedEntries || 0} · 报告 {cacheStats?.reportCount || 0}</small></span><button onClick={() => MNBridge.send("aiClearOCRCache").then(loadStorage)}>清空 OCR</button></div><OCRResultBrowser items={preparedQuestions} onStatus={setStatus} />{reportList.slice(0, 8).map(item => <article key={item.id}><span><strong>{item.subjectName}</strong><small>{new Date(item.createdAt).toLocaleDateString()}</small></span><button onClick={() => MNBridge.send("aiDeleteReport", { reportId: item.id }).then(loadStorage)}>删除</button></article>)}</section>
-      </div>}
-    </div>
-  </section>
-}
-
 const MistakeListItem = React.memo(function MistakeListItem({ item, selected, selectable, checked, onPreview, onToggle }) {
-  const manualTags = Array.from(new Set(manualTagsOf(item).map(tag => String(tag).trim().replace(/^#+/, "")).filter(Boolean)))
+  const manualTags = Array.from(new Set(filterableMistakeTags(item)))
   const reviewState = compactReviewStatus(item)
   return <div role="button" tabIndex={0} className={`mistakeItem ${selected ? "selected" : ""} ${checked ? "checked" : ""} ${selectable ? "selectable" : ""} ${item.noteAvailable ? "" : "unavailable"}`} onClick={onPreview} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onPreview() } }}>{selectable && <AnimatedCheckbox className="batchCheckControl" label={`选择 ${item.sourceTitle}`} checked={checked} onChange={onToggle} />}<span className="mistakeItemBody"><span className="mistakeTitleRow"><strong>{item.sourceTitle}</strong><span className={`level level${item.level}`}>{levelNames[item.level]}</span></span><small className="mistakeSourceLine">{item.categoryLabel}{item.noteAvailable ? "" : " · 原卡片不可用"}</small><span className={`mistakeItemFooter ${manualTags.length ? "hasTags" : "noTags"}`}><small className={`mistakeReviewState ${reviewState === "已逾期" ? "overdue" : item.reviewCompleted ? "completed" : ""}`}>{reviewState}</small>{item.favorite === true && <><span className="mistakeMetaDivider" aria-hidden="true">·</span><span className="mistakeFavoriteSlot" title="已收藏"><span className="mistakeFavoriteMark"><Icon name="star" /></span><span className="mistakeFavoriteText">已收藏</span></span></>}{manualTags.length > 0 && <span className="mistakeMetaDivider" aria-hidden="true">·</span>}<span className="mistakeItemTags">{manualTags.map(tag => <em key={tag}>#{tag}</em>)}</span></span></span></div>
 }, (previous, next) => previous.item === next.item && previous.selected === next.selected && previous.selectable === next.selectable && previous.checked === next.checked)
@@ -2262,7 +1887,7 @@ function DueReviewList({ adapter, records, reviewCurves, action, manualTodayIds,
       <ReviewStartButton disabled={!visibleRecords.length} onStart={beginReviewMode} />
       <button type="button" className={`reviewIconButton ${allQuestionsOpen ? "active" : ""}`} aria-label={allQuestionsOpen ? "收起全部题目" : "展开全部题目"} title={allQuestionsOpen ? "收起全部题目" : "展开全部题目"} disabled={!visibleRecords.length} onClick={toggleAllQuestions}><MorphIcon from="collapse" to="expand" active={!allQuestionsOpen} /></button>
       {filtersOpen && <div id="reviewFilterPanel" className="reviewFilterDropdown"><ReviewQueueFilters records={records} names={filterNames} levels={customLevels} setLevels={setLevels} selected={selectedIds} setSelected={setSelectedIds} onReset={() => { setLevels(null); setSelectedIds(null) }} /></div>}
-      {menuOpen && <div id="reviewSortPanel" className="reviewSortDropdown" role="group" aria-label="排序方式">{[["reviewed", "最后复习", "最近优先"], ["map", "脑图", "名称顺序"], ["added", "添加日期", "最新优先"], ["level", "等级", "由低到高"], ["remaining", "剩余天数", "由少到多"]].map(([key, label, hint]) => <button type="button" key={key} aria-pressed={sortOrder === key} onClick={() => { setSortOrder(key); setMenuOpen(false) }}><span>{label}<small>{hint}</small></span><span aria-hidden="true">{sortOrder === key ? "✓" : ""}</span></button>)}</div>}
+      {menuOpen && <div id="reviewSortPanel" className="reviewSortDropdown" role="group" aria-label="排序方式"><ReviewSortOptions value={sortOrder} onChange={key => { setSortOrder(key); setMenuOpen(false) }} /></div>}
       </div></div>
   return <section data-review-algorithm={adapter ? "fsrs" : undefined} className={`reviewPage ${filtersOpen ? "reviewFiltersOpen" : ""} ${menuOpen ? "reviewMenuOpen" : ""}`} ref={reviewPageRef}>
     {toolbar}
@@ -2347,6 +1972,7 @@ function MistakeDetail({ fsrsActive = false, detail, customCategories, action, r
   const tagMenuRef = useRef(null)
   const tagMenuPos = useAnchoredPopover(tagPickerOpen, tagTriggerRef, 280, "end")
   useScrollDismiss(tagPickerOpen, () => setTagPickerOpen(false), tagMenuRef)
+  const reasonTags = detail.record.reasonTags ?? []
   const detailTagSignature = manualTagsOf(detail.record).join("\u001f")
   useEffect(() => {
     const saved = event => { if (event.detail?.recordId === detail.record.recordId) reloadDetail() }
@@ -2377,7 +2003,7 @@ function MistakeDetail({ fsrsActive = false, detail, customCategories, action, r
     const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null
     observer?.observe(trigger)
     return () => observer?.disconnect()
-  }, [detail.record.recordId, tags.join("\u001f")])
+  }, [detail.record.recordId, tags.join("\u001f"), reasonTags.join("\u001f")])
   useEffect(() => {
     if (!tagPickerOpen) return undefined
     const close = event => {
@@ -2466,8 +2092,8 @@ function MistakeDetail({ fsrsActive = false, detail, customCategories, action, r
           <button type="button" className={`detailDueChip ${dueTone}`} onClick={() => onReview?.(detail.record.recordId)} title={fsrsActive ? "打开该题的 FSRS 复习记录" : "查看该题复习记录"}>{fsrsActive ? "FSRS 复习" : reviewStatus}</button>
         </div>
     <div ref={tagPickerRef} className={`detailTagPicker detailTagBar ${tagPickerOpen ? "open" : ""}`}>
-      <button ref={tagTriggerRef} type="button" className="detailTagBarTrigger" aria-label="编辑自定义标签" onClick={() => setTagPickerOpen(value => !value)} aria-expanded={tagPickerOpen} title={tags.length ? tags.map(tag => `#${tag}`).join(" ") : "添加自定义标签"}>
-        {tags.map(tag => <em key={tag}>#{tag}</em>)}<DetailMorphIcon icon={Plus} target={ChevronDown} active={tagPickerOpen} />
+      <button ref={tagTriggerRef} type="button" className="detailTagBarTrigger" aria-label="编辑自定义标签" onClick={() => setTagPickerOpen(value => !value)} aria-expanded={tagPickerOpen} title={[...reasonTags, ...tags].map(tag => `#${tag}`).join(" ") || "添加自定义标签"}>
+        {reasonTags.map(tag => <em key={tag}>#{tag}</em>)}{tags.map(tag => <em key={tag}>#{tag}</em>)}<DetailMorphIcon icon={Plus} target={ChevronDown} active={tagPickerOpen} />
       </button>
       {tagPickerOpen && tagMenuPos && createPortal(<div className="detailCategoryMenu" ref={tagMenuRef} style={POPOVER_ABSOLUTE(tagMenuPos)}><strong>自定义标签</strong><div className="detailCategoryOptions">{(customCategories || []).length ? (customCategories || []).map(tag => <div className="detailTagOptionRow" key={tag}><button type="button" role="checkbox" aria-checked={tags.includes(tag)} data-tag={tag} className={`detailTagOption ${tags.includes(tag) ? "checked" : ""}`} onClick={() => toggleTag(tag)}><i className="detailTagCheck" aria-hidden="true">{tags.includes(tag) ? "✓" : ""}</i><span>#{tag}</span></button><button type="button" className="detailTagDelete" title={`删除标签 #${tag}`} aria-label={`删除标签 ${tag}`} onClick={event => { event.stopPropagation(); setDeleteTagTarget(tag) }}><Icon name="trash" /></button></div>) : <small>暂无标签</small>}</div><div className="detailCategoryCreate"><input value={newTag} onChange={event => setNewTag(event.target.value)} onKeyDown={event => { if (event.key === "Enter") createTag() }} placeholder="新建标签" /><button type="button" onClick={createTag} disabled={!newTag.trim()}>新建</button></div></div>, document.body)}
     </div>
@@ -2559,9 +2185,11 @@ function ClipperSettings({ clipper, action }) {
   const [pendingSlot, setPendingSlot] = useState("")
   const [saving, setSaving] = useState(false)
   const toolPrompts = { title: "摘录标题", question: "摘录题目", answer: "摘录答案" }
+  const sceneBinding = clipper?.toolBindingMode === "scene"
+  const pendingTool = sceneBinding ? "" : pendingSlot
   async function bind(slot) {
     if (saving) return
-    if (pendingSlot !== slot) {
+    if (!sceneBinding && pendingSlot !== slot) {
       setPendingSlot(slot)
       await action("notify", { message: `请选择“${toolPrompts[slot]}”的工具，再点击“确认”绑定。` }, false)
       return
@@ -2573,8 +2201,8 @@ function ClipperSettings({ clipper, action }) {
     } finally { setSaving(false) }
   }
   return <div className="clipSettings">
-    <div className="clipSettingHeading"><strong>工具绑定</strong><small role="status" aria-live="polite">{pendingSlot ? `请选择“${toolPrompts[pendingSlot]}”的工具，再次点击“确认”绑定。` : "点击对应步骤，选择工具后再次确认绑定。"}</small></div>
-    <div className="clipToolBindings">{[["title", "标题"], ["question", "题目"], ["answer", "答案"]].map(([slot, label]) => <button type="button" key={slot} className={pendingSlot === slot ? "confirming" : clipper?.tools?.[slot] ? "bound" : ""} disabled={saving || clipper?.started || (slot === "title" && clipper?.excerptTitle === false) || (slot === "answer" && clipper?.excerptAnswer === false)} onClick={() => bind(slot)} aria-label={pendingSlot === slot ? `确认绑定${label}工具` : label + "工具：" + (clipper?.toolLabels?.[slot] || "未绑定")}><span>{pendingSlot === slot ? "确认" : label + " | " + (clipper?.toolLabels?.[slot] || "未绑定")}</span></button>)}</div>
+    <div className="clipSettingHeading"><strong>工具绑定</strong><small role="status" aria-live="polite">{sceneBinding ? "点击对应步骤，从当前场景笔盒选择摘录工具。" : pendingSlot ? `请选择“${toolPrompts[pendingSlot]}”的工具，再次点击“确认”绑定。` : "点击对应步骤，选择工具后再次确认绑定。"}</small></div>
+    <div className="clipToolBindings">{[["title", "标题"], ["question", "题目"], ["answer", "答案"]].map(([slot, label]) => <button type="button" key={slot} className={pendingTool === slot ? "confirming" : clipper?.tools?.[slot] ? "bound" : ""} disabled={saving || clipper?.started || (slot === "title" && clipper?.excerptTitle === false) || (slot === "answer" && clipper?.excerptAnswer === false)} onClick={() => bind(slot)} aria-label={pendingTool === slot ? `确认绑定${label}工具` : label + "工具：" + (clipper?.toolLabels?.[slot] || "未绑定")}><span>{pendingTool === slot ? "确认" : label + " | " + (clipper?.toolLabels?.[slot] || "未绑定")}</span></button>)}</div>
     <button type="button" className="clipSettingRow" onClick={() => action("chooseClipperAnswerPosition", null, false)}><span>答案位置</span><span className="clipPosition">子卡片<Icon name="right" /></span></button>
     <button type="button" className="clipSettingRow" onClick={() => { setPendingSlot(""); action("setClipperTitle", { enabled: clipper?.excerptTitle === false }, false) }}><span>摘录标题</span><SvgSwitch checked={clipper?.excerptTitle !== false} label="摘录标题" /></button>
     <button type="button" className="clipSettingRow" onClick={() => { setPendingSlot(""); action("setClipperAnswer", { enabled: clipper?.excerptAnswer === false }, false) }}><span>摘录答案</span><SvgSwitch checked={clipper?.excerptAnswer !== false} label="摘录答案" /></button>
@@ -2592,7 +2220,7 @@ export function ReviewFeedbackSettings({ matching, action }) {
 
 function SettingsGroup({ title, items, tone = "accent", children }) {
   return <div className="settingsGroup"><h2>{title}</h2><div>{items.map(([icon, name, description, onClick, trailing]) =>
-    <button key={name} className={trailing ? "hasTrailing" : ""} onClick={onClick}><i><SFTileIcon name={icon} tone={tone} /></i><span><strong>{name}</strong>{description && <small>{description}</small>}</span>{trailing}</button>)}</div>{children}</div>
+    <button key={name} disabled={!onClick} className={trailing ? "hasTrailing" : ""} onClick={onClick}><i><SFTileIcon name={icon} tone={tone} /></i><span><strong>{name}</strong>{description && <small>{description}</small>}</span>{trailing}</button>)}</div>{children}</div>
 }
 
 function GlobalAnswerColors({ colors, action }) {
@@ -2602,7 +2230,7 @@ function GlobalAnswerColors({ colors, action }) {
     setSaving(true)
     try { if (await action("addGlobalAnswerBindingColor")) setAdding(false) } finally { setSaving(false) }
   }
-  return <div className="answerBindingColors"><header><strong>全局颜色绑定</strong><span>{adding ? "请在脑图选中一张卡片，再点击对勾。" : "始终作用于下方所有脑图。"}</span></header><div>
+  return <div className="answerBindingColors"><header><strong>全局颜色绑定</strong><span>{adding ? "请在脑图选中一张卡片，再点击对勾。" : "仅作用于子卡片及混合模式。"}</span></header><div>
     {colors.map(color => <button key={color} className="selected" disabled={saving} aria-label={`删除全局颜色 ${color + 1}`} onClick={() => action("setPersonalSetting", { key: "globalQuestionColors", value: colors.filter(v => v !== color) })}><span className="answerBindingColorSwatch" style={{ backgroundColor: cardColorSwatches[color] }} />颜色 {color + 1}<Icon name="close" /></button>)}
     <button className="answerBindingAddColor" aria-label={adding ? "确认全局颜色" : "添加全局颜色"} disabled={saving} onClick={adding ? confirm : () => setAdding(true)}><DetailMorphIcon icon={Plus} target={Check} active={adding} /></button>
     {adding && <button aria-label="取消添加全局颜色" disabled={saving} onClick={() => setAdding(false)}><Icon name="close" /></button>}
@@ -2625,7 +2253,7 @@ function AnswerBindingsManager({ rows, colors, action }) {
     <dialog ref={matchingHelpRef} className="answerMatchingDialog" aria-labelledby="answer-matching-help-title">
       <h2 id="answer-matching-help-title">答案匹配方式说明</h2>
       <h3>答案脑图</h3>
-      <p>适用于题目和答案分别整理在不同的脑图中的情况。绑定答案脑图后，插件会按照你设置的匹配规则，为题目查找对应答案。</p>
+      <p>适用于题目和答案分别整理在不同的脑图中的情况。绑定答案脑图后，插件会按照你设置的匹配规则，为题目查找对应答案。题目脑图默认全部卡片为题目，无需绑定颜色。</p>
       <h3>子卡片</h3>
       <p>题目和答案放在同一张脑图中，直接放在题目下面的子卡片就是答案，无需按标题匹配。需要先添加题目卡片颜色，插件才会识别哪些卡片是题目。</p>
       <p>这种方式支持做题时遮住子卡片答案，查看答案时可选择揭开遮盖或打开答案窗口。</p>
@@ -2635,11 +2263,20 @@ function AnswerBindingsManager({ rows, colors, action }) {
 }
 
 function AnswerBindingRow({ row, globalColors = [], action }) {
+  const answerMindMapOnly = row.selectionMode !== "mixed" && row.designatedAnswer !== "subcard"
   const [filterOpen, setFilterOpen] = useState(false)
+  const [colorNotice, setColorNotice] = useState(false)
   const [addingColor, setAddingColor] = useState(false)
+  const [colorMismatch, setColorMismatch] = useState(false)
   const [colorSaving, setColorSaving] = useState(false)
   const [removeArmed, setRemoveArmed] = useState(false)
   const [removing, setRemoving] = useState(false)
+  useEffect(() => {
+    setFilterOpen(false)
+    setAddingColor(false)
+    setColorMismatch(false)
+    setColorNotice(false)
+  }, [answerMindMapOnly])
   useEffect(() => {
     if (!removeArmed) return
     const timer = setTimeout(() => setRemoveArmed(false), 15000)
@@ -2655,6 +2292,7 @@ function AnswerBindingRow({ row, globalColors = [], action }) {
     } finally { setRemoving(false) }
   }
   async function toggleFilter() {
+    if (answerMindMapOnly) { setColorNotice(true); return }
     setFilterOpen(value => !value)
   }
   async function removeColor(color) {
@@ -2670,8 +2308,9 @@ function AnswerBindingRow({ row, globalColors = [], action }) {
     if (colorSaving) return
     setColorSaving(true)
     try {
-      const result = await action("addManagedAnswerBindingColor", "addGlobalAnswerBindingColor", { key: row.key })
-      if (result) setAddingColor(false)
+      const result = await action("addManagedAnswerBindingColor", { key: row.key })
+      setColorMismatch(result?.mismatch === true)
+      if (result && !result.mismatch) setAddingColor(false)
     } finally { setColorSaving(false) }
   }
   const designated = row.selectionMode === "designated"
@@ -2700,10 +2339,12 @@ function AnswerBindingRow({ row, globalColors = [], action }) {
       </span>
     </div>
     {(!designated || row.designatedAnswer === "subcard") && !row.questionColors.length && !globalColors.length && <p className="answerBindingColorHint">子卡片答案匹配需要先绑定题目卡片颜色。<button type="button" onClick={() => { setFilterOpen(true); setAddingColor(true) }}>绑定题目颜色</button></p>}
-    {filterOpen && <div className="answerBindingColors"><header><strong>题目卡片颜色</strong>{addingColor && <span>请在当前脑图选中一张题目卡片，再点击对勾。</span>}</header>
+    {answerMindMapOnly && colorNotice && <p className="answerBindingColorHint" role="status">答案脑图无需绑定颜色</p>}
+    {!answerMindMapOnly && filterOpen && <div className="answerBindingColors"><header><strong>题目卡片颜色</strong>{addingColor && <span>请在当前脑图选中一张题目卡片，再点击对勾。</span>}</header>
+      {addingColor && colorMismatch && <p className="answerBindingColorHint" role="alert">所选卡片不在当前绑定的{row.sourceTitle === "整个学习集" ? "学习集" : "题目脑图"}「{row.sourceTitle === "整个学习集" ? row.notebookTitle : row.sourceTitle}」中，请重新选择。</p>}
       <div>{row.questionColors.map(color => <button key={color} type="button" className="selected" aria-label={`删除颜色 ${color + 1}`} title={`删除颜色 ${color + 1}`} disabled={colorSaving} onClick={() => removeColor(color)}><span className="answerBindingColorSwatch" style={{ backgroundColor: cardColorSwatches[color] ?? "#d8dee8" }} aria-hidden="true" /><span>颜色 {color + 1}</span><Icon name="close" /></button>)}
         <button type="button" className="answerBindingAddColor" aria-label={addingColor ? "确认添加所选卡片颜色" : "添加颜色"} title={addingColor ? "确认添加" : "添加颜色"} onClick={addingColor ? confirmAddColor : () => setAddingColor(true)} disabled={colorSaving}><DetailMorphIcon icon={Plus} target={Check} active={addingColor} /></button>
-        {addingColor && <button type="button" className="answerBindingCancelColor" aria-label="取消添加颜色" title="取消" onClick={() => setAddingColor(false)} disabled={colorSaving}><Icon name="close" /></button>}</div>
+        {addingColor && <button type="button" className="answerBindingCancelColor" aria-label="取消添加颜色" title="取消" onClick={() => { setAddingColor(false); setColorMismatch(false) }} disabled={colorSaving}><Icon name="close" /></button>}</div>
     </div>}
   </article>
 }
@@ -2839,6 +2480,30 @@ function renderMarkdownPreview(markdown) {
   return out.join(String.fromCharCode(10))
 }
 
+function ExportSelect({ value, onChange, children, "aria-label": ariaLabel }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  const options = React.Children.toArray(children).filter(React.isValidElement)
+  const optionValue = option => String(option.props.value ?? option.props.children)
+  const current = options.find(option => optionValue(option) === String(value))
+  useEffect(() => {
+    if (!open) return
+    const close = event => { if (!ref.current?.contains(event.target)) setOpen(false) }
+    document.addEventListener("mousedown", close, true)
+    document.addEventListener("touchstart", close, true)
+    return () => { document.removeEventListener("mousedown", close, true); document.removeEventListener("touchstart", close, true) }
+  }, [open])
+  return <div className="exportSelect" ref={ref} onKeyDown={event => {
+    if (event.key === "Escape") { setOpen(false); ref.current?.querySelector("button")?.focus() }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault()
+      const index = options.findIndex(option => optionValue(option) === String(value))
+      const option = options[(index + (event.key === "ArrowDown" ? 1 : options.length - 1)) % options.length]
+      if (option) onChange({ target: { value: optionValue(option) } })
+    }
+  }}><button type="button" className="exportSelectTrigger" aria-label={ariaLabel} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(!open)}>{current?.props.children}<Icon name="down" /></button>{open && <div className="exportSelectMenu" role="listbox">{options.map(option => <button type="button" role="option" aria-selected={optionValue(option) === String(value)} key={optionValue(option)} onClick={() => { onChange({ target: { value: optionValue(option) } }); setOpen(false); ref.current?.querySelector("button")?.focus() }}>{option.props.children}</button>)}</div>}</div>
+}
+
 function ExportSection({ step, title, description, trailing, children, className = "" }) {
   return <section className={`exportSection ${className}`}><header><span className="exportStep" aria-hidden="true">{step}</span><span><h2>{title}</h2><p>{description}</p></span>{trailing}</header><div className="exportSectionBody">{children}</div></section>
 }
@@ -2854,7 +2519,7 @@ function MistakeExport({ allRecords, action, onBack, initialRecordIds = [] }) {
   const pdfTaskPollRef = useRef(0)
   const exportCancelRequestedRef = useRef(false)
   const [filename, setFilename] = useState(`MN4错题导出-${new Date().toISOString().slice(0, 10)}`)
-  const [include, setInclude] = useState({ question: true, answer: true, source: true, review: false })
+  const [include, setInclude] = useState({ question: true, answer: true, source: true, review: false, handwriting: false, comments: false })
   const [reviewDetail, setReviewDetail] = useState("summary")
   const [result, setResult] = useState("")
   const [answerLayout, setAnswerLayout] = useState("after-each")
@@ -2863,13 +2528,12 @@ function MistakeExport({ allRecords, action, onBack, initialRecordIds = [] }) {
   const [previewLoading, setPreviewLoading] = useState(false)
   const [exportLoading, setExportLoading] = useState(false)
   const [stoppingExport, setStoppingExport] = useState(false)
-  const [reviewStatusFilter, setReviewStatusFilter] = useState("all")
-  const [createdFilter, setCreatedFilter] = useState("all")
-  const [tagFilter, setTagFilter] = useState("all")
+  const [reviewStatusFilter, setReviewStatusFilter] = useState([])
+  const [createdFilter, setCreatedFilter] = useState([])
+  const [tagFilter, setTagFilter] = useState([])
   const [sortOrder, setSortOrder] = useState("current")
   const [exportQuery, setExportQuery] = useState("")
-  const [exportLevel, setExportLevel] = useState("all")
-  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [exportLevel, setExportLevel] = useState([])
   useEffect(() => {
     if (exportPageRef.current) exportPageRef.current.scrollTop = 0
   }, [])
@@ -2895,34 +2559,13 @@ function MistakeExport({ allRecords, action, onBack, initialRecordIds = [] }) {
   const endToday = startToday + 86400000
   const availableRecords = useMemo(() => scopedRecords.filter(item => item.noteAvailable !== false), [scopedRecords])
   const invalidCount = scopedRecords.length - availableRecords.length
-  const tagOptions = useMemo(() => Array.from(new Set(scopedRecords.flatMap(item => Array.isArray(item.manualCategories) ? item.manualCategories : item.manualCategory ? [item.manualCategory] : []).filter(Boolean))).sort((a, b) => a.localeCompare(b, "zh-CN")), [scopedRecords])
+  const tagOptions = useMemo(() => Array.from(new Set(scopedRecords.flatMap(filterableMistakeTags).filter(Boolean))).sort((a, b) => a.localeCompare(b, "zh-CN")), [scopedRecords])
   const exportCandidates = useMemo(() => {
-    const filtered = availableRecords.filter(item => {
-    const time = new Date(item.nextReviewAt).getTime()
-    if (reviewStatusFilter === "today") return !item.reviewCompleted && time >= startToday && time < endToday
-    if (reviewStatusFilter === "overdue") return !item.reviewCompleted && time < startToday
-    if (reviewStatusFilter === "upcoming") return !item.reviewCompleted && time >= endToday
-    if (reviewStatusFilter === "completed") return item.reviewCompleted === true
-    return true
-    }).filter(item =>
-    (exportLevel === "all" || item.level === Number(exportLevel)) &&
-    effectiveMapSet.has(sourceInsightKey(item))
-    ).filter(item => {
-      if (tagFilter !== "all") {
-        const tags = Array.isArray(item.manualCategories) ? item.manualCategories : item.manualCategory ? [item.manualCategory] : []
-        if (tagFilter === "untagged" ? tags.length : !tags.includes(tagFilter)) return false
-      }
-      if (createdFilter !== "all") {
-        const created = new Date(item.createdAt).getTime()
-        if (!Number.isFinite(created)) return false
-        if (createdFilter === "today" && created < startToday) return false
-        if (createdFilter === "7" && created < startToday - 6 * 86400000) return false
-        if (createdFilter === "30" && created < startToday - 29 * 86400000) return false
-      }
-      return true
-    }).filter(item => {
+    const filtered = availableRecords.filter(item => effectiveMapSet.has(sourceInsightKey(item)) && matchesExportFilters(item, {
+      levels: exportLevel, statuses: reviewStatusFilter, created: createdFilter, tags: tagFilter
+    }, startToday)).filter(item => {
     const needle = normalizeSearch(exportQuery)
-    return !needle || normalizeSearch([item.sourceTitle, item.sourceNotebookTitle, ...(item.sourcePathTitles || []), ...(item.manualCategories || []), item.manualCategory || ""].join(" ")).includes(needle)
+    return !needle || normalizeSearch([item.sourceTitle, item.sourceNotebookTitle, ...(item.sourcePathTitles || []), ...filterableMistakeTags(item)].join(" ")).includes(needle)
     })
     if (sortOrder === "current") return filtered
     return [...filtered].sort((a, b) => {
@@ -2936,12 +2579,12 @@ function MistakeExport({ allRecords, action, onBack, initialRecordIds = [] }) {
   const selected = exportCandidates
 
   const mapFilterActive = hasInitialRecords ? effectiveMapKeys.length !== mindMaps.length : effectiveMapKeys.length > 0
-  const activeFilterCount = [reviewStatusFilter !== "all", createdFilter !== "all", tagFilter !== "all", exportLevel !== "all", mapFilterActive, Boolean(exportQuery.trim())].filter(Boolean).length
+  const activeFilterCount = [reviewStatusFilter.length > 0, createdFilter.length > 0, tagFilter.length > 0, exportLevel.length > 0, mapFilterActive, Boolean(exportQuery.trim())].filter(Boolean).length
   const filterSummary = [
-    reviewStatusFilter !== "all" ? { today: "今日到期", overdue: "已逾期", upcoming: "未来复习", completed: "已结束" }[reviewStatusFilter] : "",
-    createdFilter !== "all" ? { today: "今天添加", 7: "最近 7 天", 30: "最近 30 天" }[createdFilter] : "",
-    exportLevel !== "all" ? levelNames[Number(exportLevel)] : "",
-    tagFilter !== "all" ? (tagFilter === "untagged" ? "无标签" : `#${tagFilter}`) : "",
+    ...reviewStatusFilter.map(value => ({ today: "今日到期", overdue: "已逾期", upcoming: "未来复习", completed: "已结束" })[value]),
+    ...createdFilter.map(value => ({ today: "今天添加", 7: "最近 7 天", 30: "最近 30 天" })[value]),
+    ...exportLevel.map(value => levelNames[Number(value)]),
+    ...tagFilter.map(value => value === "untagged" ? "无标签" : `#${value}`),
     effectiveMapKeys.length !== mindMaps.length ? `${effectiveMapKeys.length} 个脑图` : "",
     exportQuery.trim() ? `“${exportQuery.trim()}”` : ""
   ].filter(Boolean)
@@ -2965,21 +2608,21 @@ function MistakeExport({ allRecords, action, onBack, initialRecordIds = [] }) {
   useEffect(() => setActualPreview(null), [previewSignature])
 
   function exportPayload() {
-    return { format, filename, recordIds: selected.map(item => item.recordId), answerLayout, pageLayout, reviewDetail, include }
+    return { format, filename, recordIds: selected.map(item => item.recordId), answerLayout, pageLayout, reviewDetail, include, filters: { reviewStatusFilter, createdFilter, tagFilter, sortOrder, exportQuery, exportLevel, selectedMapKeys } }
   }
 
-  async function runPreview(full = false) {
+  async function runPreview() {
     const signature = previewSignatureRef.current
     setResult("")
     setPreviewLoading(true)
     try {
-      const payload = { ...exportPayload(), previewLimit: full ? undefined : 3 }
+      const payload = { ...exportPayload(), previewLimit: 3 }
       const response = await action("previewMistakeExport", payload, false)
       // 发起后筛选/设置又变过：过期响应直接丢弃，不允许旧预览覆盖新设置
       if (previewSignatureRef.current !== signature) return
       if (response?.pdfUrl || response?.html || response?.markdown) {
         setActualPreview(response)
-        if (response?.truncated) setResult(`快速预览仅渲染前 ${response.previewCount} 题（共 ${response.count} 道）；点「完整预览」生成全部。`)
+        if (response?.truncated) setResult(`快速预览仅渲染前 ${response.previewCount} 题（共 ${response.count} 道）；全部题目请使用「导出文件」。`)
       }
     } finally {
       setPreviewLoading(false)
@@ -2987,7 +2630,7 @@ function MistakeExport({ allRecords, action, onBack, initialRecordIds = [] }) {
   }
 
   // PDF 导出任务式：受理后轮询进度，前端 30s 超时不再掐断长任务
-  const taskActive = pdfTask && (pdfTask.status === "rendering" || pdfTask.status === "saving")
+  const taskActive = pdfTask && (pdfTask.status === "preparing" || pdfTask.status === "rendering" || pdfTask.status === "saving")
 
   function pollPdfTask(id) {
     const token = ++pdfTaskPollRef.current
@@ -3002,14 +2645,14 @@ function MistakeExport({ allRecords, action, onBack, initialRecordIds = [] }) {
       } catch {
         failures += 1
         if (failures < 4) { setTimeout(tick, 2500); return }
-        setPdfTask(null)
-        setResult("无法获取导出任务状态，原生任务可能仍在后台，请重进导出页查看")
+        setResult("暂时无法获取导出任务状态，正在重试；本次配置保持锁定")
+        setTimeout(tick, 5000)
         return
       }
       if (token !== pdfTaskPollRef.current) return
       if (!status?.exists) { setPdfTask(null); return }
-      setPdfTask(current => ({ ...(current || { id }), status: status.status, progress: status.progress, pages: status.pages, error: status.error }))
-      if (status.status === "saved") { setResult(`PDF 已生成（${status.pages || "?"} 页），已打开系统保存面板`); setPdfTask(null); return }
+      setPdfTask(current => ({ ...(current || { id }), status: status.status, progress: status.progress, pages: status.pages, stage: status.stage, completed: status.completed, total: status.total, snapshot: status.snapshot, error: status.error }))
+      if ((status.status === "generated" || status.status === "saved")) { setResult(`PDF 已生成（${status.pages || "?"} 页），已打开系统保存面板`); setPdfTask(null); return }
       if (status.status === "error") { setResult(`PDF 生成失败：${status.error || "未知错误"}`); setPdfTask(null); return }
       if (status.status === "cancelled") { setResult("已取消导出"); setPdfTask(null); return }
       setTimeout(tick, 1500)
@@ -3028,10 +2671,16 @@ function MistakeExport({ allRecords, action, onBack, initialRecordIds = [] }) {
       return
     }
     pdfTaskPollRef.current += 1
-    await action("pdfTaskCancel", { id: pdfTask.id }, false)
+    const cancelled = await action("pdfTaskCancel", { id: pdfTask.id }, false)
+    if (!cancelled) {
+      setStoppingExport(false)
+      setResult("停止请求未确认，正在重新读取任务状态")
+      pollPdfTask(pdfTask.id)
+      return
+    }
     setPdfTask(null)
     setStoppingExport(false)
-    setResult("已停止导出")
+    setResult(cancelled?.cancelled ? "已停止导出" : "任务已结束或已更新，请查看导出结果")
   }
 
   async function runExport() {
@@ -3043,15 +2692,21 @@ function MistakeExport({ allRecords, action, onBack, initialRecordIds = [] }) {
     try {
       const response = await action("exportMistakes", exportPayload(), false)
       if (exportCancelRequestedRef.current && response?.taskAccepted) {
-        await action("pdfTaskCancel", { id: response.taskId }, false)
+        const cancelled = await action("pdfTaskCancel", { id: response.taskId }, false)
         setStoppingExport(false)
-        setResult("已停止导出")
+        if (!cancelled) {
+          setPdfTask({ id: response.taskId, status: response.status || "preparing", progress: response.progress || 6, snapshot: response.snapshot })
+          pollPdfTask(response.taskId)
+          setResult("停止请求未确认，正在重新读取任务状态")
+          return
+        }
+        setResult(cancelled.cancelled ? "已停止导出" : "任务已结束或已更新，请查看导出结果")
         return
       }
       if (response?.saved) { setResult(`已打开系统另存面板：${response.filename}（${response.count} 道）`); return }
       if (response?.printCompleted) { setResult(`已生成 ${response.filename}（浏览器预览模拟，共 ${response.count} 道）`); return }
       if (response?.taskAccepted) {
-        setPdfTask({ id: response.taskId, status: response.status || "rendering", progress: response.progress || 5 })
+        setPdfTask({ id: response.taskId, status: response.status || "rendering", progress: response.progress || 5, snapshot: response.snapshot })
         pollPdfTask(response.taskId)
       }
     } finally {
@@ -3061,10 +2716,10 @@ function MistakeExport({ allRecords, action, onBack, initialRecordIds = [] }) {
   }
 
   function resetFilters() {
-    setReviewStatusFilter("all")
-    setCreatedFilter("all")
-    setTagFilter("all")
-    setExportLevel("all")
+    setReviewStatusFilter([])
+    setCreatedFilter([])
+    setTagFilter([])
+    setExportLevel([])
     setSelectedMapKeys(hasInitialRecords ? mindMaps.map(map => map.key) : [])
     setExportQuery("")
   }
@@ -3077,8 +2732,21 @@ function MistakeExport({ allRecords, action, onBack, initialRecordIds = [] }) {
         const status = await MNBridge.send("pdfTaskStatus", null)
         if (cancelled) return
         // 预览任务随请求即时终账，不存在在途预览；只恢复真正的导出任务
-        if (status?.exists && !status.preview && (status.status === "rendering" || status.status === "saving")) {
-          setPdfTask({ id: status.id, status: status.status, progress: status.progress })
+        if (status?.exists && !status.preview && (status.status === "preparing" || status.status === "rendering" || status.status === "saving")) {
+          const snapshot = status.snapshot
+          if (snapshot) {
+            setFormat(snapshot.format || "pdf"); setFilename(snapshot.filename || "")
+            setInclude(snapshot.include || {}); setAnswerLayout(snapshot.answerLayout || "after-each")
+            setPageLayout(snapshot.pageLayout || "auto"); setReviewDetail(snapshot.reviewDetail || "summary")
+            if (snapshot.filters) {
+              const filters = snapshot.filters
+              setReviewStatusFilter(filters.reviewStatusFilter || []); setCreatedFilter(filters.createdFilter || [])
+              setTagFilter(filters.tagFilter || []); setSortOrder(filters.sortOrder || "current")
+              setExportQuery(filters.exportQuery || ""); setExportLevel(filters.exportLevel || [])
+              setSelectedMapKeys(filters.selectedMapKeys || [])
+            }
+          }
+          setPdfTask({ id: status.id, status: status.status, progress: status.progress, snapshot: status.snapshot, stage: status.stage, pages: status.pages })
           pollPdfTask(status.id)
         }
       } catch { /* 忽略 */ }
@@ -3088,40 +2756,48 @@ function MistakeExport({ allRecords, action, onBack, initialRecordIds = [] }) {
   }, [])
 
   const contentOptions = [
-    ["question", "完整原题", "题干、图片与手写内容"],
+    ["question", "完整原题", "题干与摘录图片"],
     ["answer", "实时匹配答案", "按当前答案脑图重新匹配"],
     ["source", "来源路径", "学习集、脑图与章节路径"],
-    ["review", "复习信息", "等级、时间与复习次数"]
+    ["review", "复习信息", "等级、时间与复习次数"],
+    ["handwriting", "脑图绑定书写"],
+    ["comments", "子评论"]
   ]
-  const canSubmit = selected.length > 0 && Object.values(include).some(Boolean)
+  const canSubmit = selected.length > 0 && ["question", "answer", "source", "review"].some(key => include[key])
   const pageLabel = { auto: "自动分页 · 卡片 60% 宽度", "one-per-page": "一页一题", "two-per-page": "一页两题", "three-per-page": "一页三题" }[pageLayout]
   const answerLabel = answerLayout === "end" ? "答案文末集中" : "答案紧随题目"
   const exportInProgress = exportLoading || taskActive
   const exportProgress = Math.max(4, Math.min(100, Number(pdfTask?.progress) || (pdfTask?.status === "saving" ? 96 : exportLoading ? 6 : 32)))
   const exportProgressLabel = stoppingExport
     ? "正在停止导出…"
+    : pdfTask?.status === "preparing"
+      ? "正在准备题目与答案…"
     : pdfTask?.status === "saving"
       ? "PDF 已生成，正在打开保存面板…"
       : taskActive
-        ? "正在生成 PDF…"
+        ? pdfTask?.stage === "sizing" ? `正在读取图片尺寸 ${pdfTask.completed || 0}/${pdfTask.total || "…"}` : pdfTask?.stage === "planning" ? `正在分页 ${pdfTask.completed || 0}/${pdfTask.total || "…"}` : pdfTask?.stage === "rendering" ? `正在生成 PDF ${pdfTask.completed || 0}/${pdfTask.total || "…"} 页` : pdfTask?.stage === "serializing" ? "正在完成 PDF 文件…" : "正在生成 PDF…"
         : "正在准备导出内容…"
 
   return <section className="exportPage exportRedesign" ref={exportPageRef}>
     <header className="exportPageHeader"><button type="button" className="exportBackButton" onClick={onBack}><Icon name="left" /> 返回</button><span><h1>导出错题</h1></span></header>
     <div className="exportLayout">
       <div className="exportComposer">
-        <ExportSection step="1" title="筛选题目" description="符合下列条件的可用错题将全部导出。" trailing={<button type="button" className="exportResetButton" disabled={!activeFilterCount} onClick={resetFilters}>重置筛选{activeFilterCount ? ` (${activeFilterCount})` : ""}</button>}>
-          <label className="exportSearchField"><span>搜索题目</span><input value={exportQuery} onChange={event => setExportQuery(event.target.value)} placeholder="标题、脑图、章节或标签" /></label>
-          <div className="exportPrimaryFilters"><label><span>复习状态</span><select value={reviewStatusFilter} onChange={event => setReviewStatusFilter(event.target.value)}><option value="all">全部状态</option><option value="today">今日到期</option><option value="overdue">已逾期</option><option value="upcoming">未来复习</option><option value="completed">已结束复习</option></select></label><label><span>错题等级</span><select value={exportLevel} onChange={event => setExportLevel(event.target.value)}><option value="all">全部等级</option>{levelNames.map((name, level) => <option key={level} value={String(level)}>{name}</option>)}</select></label><label><span>学习集 / 脑图</span>{mindMaps.length ? <MindMapMultiSelect options={mindMaps} selectedKeys={effectiveMapKeys} setSelectedKeys={setSelectedMapKeys} title="筛选脑图" allowEmpty emptyLabel="请选择脑图" /> : <small className="exportEmptyValue">暂无脑图</small>}</label></div>
-          <button type="button" className="exportDisclosure" aria-expanded={advancedOpen} onClick={() => setAdvancedOpen(value => !value)}><span><strong>更多筛选与排序</strong><small>添加时间、标签和导出顺序</small></span><Icon name={advancedOpen ? "up" : "down"} /></button>
-          {advancedOpen && <div className="exportAdvancedFilters"><label><span>添加时间</span><select value={createdFilter} onChange={event => setCreatedFilter(event.target.value)}><option value="all">不限时间</option><option value="today">今天添加</option><option value="7">最近 7 天</option><option value="30">最近 30 天</option></select></label><label><span>自定义标签</span><select value={tagFilter} onChange={event => setTagFilter(event.target.value)}><option value="all">全部标签</option><option value="untagged">无标签</option>{tagOptions.map(tag => <option key={tag}>{tag}</option>)}</select></label><label><span>导出顺序</span><select value={sortOrder} onChange={event => setSortOrder(event.target.value)}><option value="current">错题本当前顺序</option><option value="created-desc">最近添加优先</option><option value="due-asc">最早到期优先</option><option value="level">按错题等级</option><option value="source">按来源路径</option></select></label></div>}
-          <div className={`exportSelectionResult ${selected.length ? "ready" : "empty"}`}><span>{!effectiveMapKeys.length ? "请选择至少一个学习集 / 脑图" : `筛选得到 ${selected.length} 道可用错题`}</span>{filterSummary.length > 0 && <span className="exportFilterTokens">{filterSummary.map(text => <em key={text}>{text}</em>)}</span>}</div>
+        <fieldset className="exportSettingsLock" disabled={exportInProgress} inert={exportInProgress ? true : undefined}>
+        <ExportSection step="1" title="筛选题目" description="符合下列条件的可用错题将全部导出。">
+          <ExportFilters query={exportQuery} setQuery={setExportQuery} activeCount={activeFilterCount} onReset={resetFilters} count={selected.length} emptyMaps={!effectiveMapKeys.length}>
+            <FilterSection title="错题等级" count={exportLevel.length} open><FilterChoices multiple title="导出错题等级" value={exportLevel} onChange={setExportLevel} options={[{ value: "all", label: "全部等级", count: availableRecords.length }, ...levelNames.map((label, level) => ({ value: String(level), label, color: ["#ef4444", "#f59e0b", "#22c55e"][level], count: availableRecords.filter(item => item.level === level).length }))]} /></FilterSection>
+            <FilterSection title="学习集 / 脑图" count={effectiveMapKeys.length} open>{mindMaps.length ? <MindMapMultiSelect options={mindMaps} selectedKeys={effectiveMapKeys} setSelectedKeys={setSelectedMapKeys} title="筛选脑图" allowEmpty emptyLabel="请选择脑图" /> : <small>暂无脑图</small>}</FilterSection>
+            <FilterSection title="复习状态" count={reviewStatusFilter.length}><FilterChoices multiple title="导出复习状态" value={reviewStatusFilter} onChange={setReviewStatusFilter} options={[{ value: "all", label: "全部状态" }, { value: "today", label: "今日到期" }, { value: "overdue", label: "已逾期" }, { value: "upcoming", label: "未来复习" }, { value: "completed", label: "已结束复习" }]} /></FilterSection>
+            <FilterSection title="添加时间" count={createdFilter.length}><FilterChoices multiple title="导出添加时间" value={createdFilter} onChange={setCreatedFilter} options={[{ value: "all", label: "不限时间" }, { value: "today", label: "今天添加" }, { value: "7", label: "最近 7 天" }, { value: "30", label: "最近 30 天" }]} /></FilterSection>
+            <FilterSection title="自定义标签" count={tagFilter.length}><FilterChoices multiple title="导出标签" value={tagFilter} onChange={setTagFilter} options={[{ value: "all", label: "全部标签" }, { value: "untagged", label: "无标签" }, ...tagOptions.map(tag => ({ value: tag, label: tag }))]} /></FilterSection>
+            <FilterSection title="导出顺序"><FilterChoices title="导出顺序" value={sortOrder} onChange={setSortOrder} options={[{ value: "current", label: "错题本当前顺序" }, { value: "created-desc", label: "最近添加优先" }, { value: "due-asc", label: "最早到期优先" }, { value: "level", label: "按错题等级" }, { value: "source", label: "按来源路径" }]} /></FilterSection>
+          </ExportFilters>
         </ExportSection>
 
         <ExportSection step="2" title="选择内容" description="决定每道题在导出文件中包含什么。">
-          <div className="exportContentChoices">{contentOptions.map(([key, label, detail]) => <label key={key} className={include[key] ? "selected" : ""}><AnimatedCheckbox checked={include[key]} label={label} onChange={() => toggle(key)} /><span><strong>{label}</strong><small>{detail}</small></span></label>)}</div>
-          {include.review && <label className="exportInlineSetting"><span><strong>复习信息详细程度</strong><small>概要更适合打印，完整历史适合归档。</small></span><select value={reviewDetail} onChange={event => setReviewDetail(event.target.value)}><option value="summary">概要</option><option value="full">完整历史</option></select></label>}
-          {!Object.values(include).some(Boolean) && <p className="exportInlineWarning">请至少选择一项导出内容。</p>}
+          <div className="exportContentChoices">{contentOptions.map(([key, label, detail]) => <label key={key} className={include[key] ? "selected" : ""}><AnimatedCheckbox checked={include[key]} label={label} onChange={() => toggle(key)} /><span><strong>{label}</strong>{detail && <small>{detail}</small>}</span></label>)}</div>
+          {include.review && <label className="exportInlineSetting"><span><strong>复习信息详细程度</strong><small>概要更适合打印，完整历史适合归档。</small></span><ExportSelect value={reviewDetail} onChange={event => setReviewDetail(event.target.value)}><option value="summary">概要</option><option value="full">完整历史</option></ExportSelect></label>}
+          {!["question", "answer", "source", "review"].some(key => include[key]) && <p className="exportInlineWarning">请至少选择一项导出内容。</p>}
         </ExportSection>
 
         <ExportSection step="3" title="设置文件" description="选择格式；PDF 可继续设置题目密度与答案位置。">
@@ -3130,11 +2806,13 @@ function MistakeExport({ allRecords, action, onBack, initialRecordIds = [] }) {
           <label className="exportFilenameField"><span>文件名</span><div className="filenameInput"><input value={filename} onChange={event => setFilename(event.target.value)} /><b>{format === "md" ? ".zip" : ".pdf"}</b></div></label>
         </ExportSection>
 
-        {exportInProgress ? <div className="exportCommitBar exportCommitProgress" role="status" aria-live="polite"><span className="exportProgressCopy"><strong>{exportProgressLabel}</strong><small>{pdfTask?.pages > 0 ? `${pdfTask.pages} 页` : `${selected.length} 道题`} · {Math.round(exportProgress)}%</small></span><span className="exportProgressTrack" role="progressbar" aria-label="导出进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(exportProgress)}><i style={{ width: `${exportProgress}%` }} /></span><button type="button" className="exportStopButton" onClick={cancelPdfTask} disabled={stoppingExport}>停止导出</button></div> : <div className="exportCommitBar" role="status"><span className="exportCountBadge"><strong>{selected.length}</strong><small>道将导出</small></span><span className="exportCommitSummary"><strong>{canSubmit ? "筛选结果已准备好" : selected.length ? "请选择导出内容" : "当前没有可导出的题目"}</strong><small>{filterSummary.length ? filterSummary.join(" · ") : "未添加额外筛选"}{invalidCount ? ` · 已排除 ${invalidCount} 道失效记录` : ""} · {format === "pdf" ? `${pageLabel} · ${include.answer ? answerLabel : "不含答案"} · 预计约 ${estimatePages()} 页` : "Markdown + assets"}</small></span><div><button className="exportPreviewButton" disabled={!canSubmit || previewLoading} onClick={() => runPreview(false)}><Icon name="eye" /> {previewLoading ? "正在生成…" : actualPreview ? "更新预览" : "快速预览"}</button><button className="exportPrimary" disabled={!canSubmit || previewLoading} onClick={runExport}><Icon name="download" /> 导出文件</button></div></div>}
+        </fieldset>
+        {exportInProgress && <p className="exportResult">本次导出配置已锁定</p>}
+        {exportInProgress ? <div className="exportCommitBar exportCommitProgress" role="status" aria-live="polite"><span className="exportProgressCopy"><strong>{exportProgressLabel}</strong><small>{pdfTask?.pages > 0 ? `${pdfTask.pages} 页` : `${pdfTask?.snapshot?.recordIds?.length ?? selected.length} 道题`} · {Math.round(exportProgress)}%</small></span><span className="exportProgressTrack" role="progressbar" aria-label="导出进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(exportProgress)}><i style={{ width: `${exportProgress}%` }} /></span><button type="button" className="exportStopButton" onClick={cancelPdfTask} disabled={stoppingExport}>停止导出</button></div> : <div className="exportCommitBar" role="status"><span className="exportCountBadge"><strong>{selected.length}</strong><small>道将导出</small></span><span className="exportCommitSummary"><strong>{canSubmit ? "筛选结果已准备好" : selected.length ? "请选择导出内容" : "当前没有可导出的题目"}</strong><small>{filterSummary.length ? filterSummary.join(" · ") : "未添加额外筛选"}{invalidCount ? ` · 已排除 ${invalidCount} 道失效记录` : ""} · {format === "pdf" ? `${pageLabel} · ${include.answer ? answerLabel : "不含答案"} · 预计约 ${estimatePages()} 页` : "Markdown + assets"}</small></span><div><button className="exportPrimary" disabled={!canSubmit || previewLoading} onClick={runExport}><Icon name="download" /> 导出文件</button></div></div>}
         {result && <p className="exportResult" role="status">{result}</p>}
       </div>
 
-      <aside className={`exportPreview ${actualPreview ? "hasPreview" : ""}`}><header><span><strong>导出预览</strong><small>{format === "pdf" ? `A4 · ${pageLabel} · ${include.answer ? answerLabel : "不含答案"}` : "Markdown 文档"}</small></span><b>{actualPreview?.pages ? `${actualPreview.pages} 页` : `${selected.length} 道`}</b></header>{actualPreview?.previewPages?.length ? <div className="actualPreviewViewport actualPreviewPages">{actualPreview.previewPages.map((page, index) => <figure key={`${page}:${index}`}><ResourceImage src={page} alt={`PDF 第 ${index + 1} 页`} /><figcaption>第 {index + 1} 页</figcaption></figure>)}</div> : actualPreview?.html ? <ExportHtmlPreview html={actualPreview.html} /> : actualPreview?.pdfUrl ? <div className="actualPreviewViewport"><iframe title="实际 PDF 导出预览" src={actualPreview.pdfUrl} /></div> : actualPreview?.markdown ? <div className="actualMarkdownPreview markdownPreview" dangerouslySetInnerHTML={{ __html: renderMarkdownPreview(actualPreview.markdown) }} /> : <div className="actualPreviewEmpty"><span className="exportPreviewGlyph"><Icon name="eye" /></span><strong>预览最终文件</strong><span>快速预览只生成前 3 道题，适合调整布局；完整文件会在导出时生成。</span><button type="button" disabled={!canSubmit || previewLoading || taskActive || exportLoading} onClick={() => runPreview(false)}>{previewLoading ? "正在生成预览…" : "生成快速预览"}</button></div>}</aside>
+      <aside className={`exportPreview ${actualPreview ? "hasPreview" : ""}`}><header><span><strong>导出预览</strong><small>{format === "pdf" ? `A4 · ${pageLabel} · ${include.answer ? answerLabel : "不含答案"}` : "Markdown 文档"}</small></span><b>{actualPreview?.pages ? `${actualPreview.pages} 页` : `${selected.length} 道`}</b>{actualPreview && <button type="button" className="exportPreviewButton" disabled={!canSubmit || previewLoading || taskActive || exportLoading} onClick={() => runPreview()}>{previewLoading ? "正在生成预览…" : "更新预览"}</button>}</header>{actualPreview?.previewPages?.length ? <div className="actualPreviewViewport actualPreviewPages">{actualPreview.previewPages.map((page, index) => <figure key={`${page}:${index}`}><ResourceImage src={page} alt={`PDF 第 ${index + 1} 页`} /><figcaption>第 {index + 1} 页</figcaption></figure>)}</div> : actualPreview?.html ? <ExportHtmlPreview html={actualPreview.html} /> : actualPreview?.pdfUrl ? <div className="actualPreviewViewport"><iframe title="实际 PDF 导出预览" src={actualPreview.pdfUrl} /></div> : actualPreview?.markdown ? <div className="actualMarkdownPreview markdownPreview" dangerouslySetInnerHTML={{ __html: renderMarkdownPreview(actualPreview.markdown) }} /> : <div className="actualPreviewEmpty"><span className="exportPreviewGlyph"><Icon name="eye" /></span><strong>预览最终文件</strong><span>快速预览只生成前 3 道题，适合调整布局；完整文件会在导出时生成。</span><button type="button" disabled={!canSubmit || previewLoading || taskActive || exportLoading} onClick={() => runPreview()}>{previewLoading ? "正在生成预览…" : "生成快速预览"}</button></div>}</aside>
     </div>
   </section>
 }
@@ -3146,6 +2824,7 @@ if (typeof document !== "undefined" && document.getElementById("root")) {
 // 供渲染冒烟测试（tests/web-render-smoke.test.ts）逐页签 renderToString；
 // 生产入口不受影响，这些导出在打包时会被 tree-shake。
 export {
+  OCRDatabase,
   App,
   MistakeRefreshConsent,
   MistakeOverview,

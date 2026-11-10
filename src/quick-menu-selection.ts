@@ -45,7 +45,8 @@ function titleOf(note: NoteLike): string {
 export function collectQuestionTree(
   notes: Iterable<NoteLike>,
   questionColorIndex: number | readonly number[] | undefined,
-  belongsToCurrentMindMap: (note: NoteLike) => boolean
+  belongsToCurrentMindMap: (note: NoteLike) => boolean,
+  options: { excludeQuestionDescendants?: boolean } = {}
 ): QuestionTreeNode[] {
   const colors = Array.isArray(questionColorIndex) ? new Set(questionColorIndex) :
     questionColorIndex === undefined ? undefined : new Set([questionColorIndex])
@@ -59,16 +60,17 @@ export function collectQuestionTree(
   const roots: QuestionTreeNode[] = []
   const visible = new Map<string, QuestionTreeNode>()
   for (const question of all) {
-    if (typeof question.colorIndex !== "number" || !Number.isInteger(question.colorIndex) ||
-      (colors && !colors.has(question.colorIndex as number)) ||
+    if ((colors && (typeof question.colorIndex !== "number" || !Number.isInteger(question.colorIndex) ||
+      !colors.has(question.colorIndex as number))) ||
       !belongsToCurrentMindMap(question)) continue
     const questionId = String(question.noteId ?? "").trim()
     if (!questionId) continue
-    // A question's descendants are its content/answers, never extra questions.
+    // Only subcard answers own the descendants; independent answer maps can
+    // contain real questions beneath other same-colored questions/groups.
     const ancestors = new Set<string>([questionId])
     let parent = question.parentNote
     let insideQuestion = false
-    while (parent) {
+    while (options.excludeQuestionDescendants !== false && parent) {
       const id = String(parent.noteId ?? "").trim()
       if (!id || ancestors.has(id)) break
       ancestors.add(id)
@@ -110,4 +112,21 @@ export function collectQuestionTree(
 
 export function questionIdsInTree(nodes: QuestionTreeNode[]): string[] {
   return Array.from(new Set(nodes.flatMap(node => node.questionIds)))
+}
+
+/** A selected group contributes its questions; answers/content never become questions. */
+export function selectedQuestionIds(nodes: QuestionTreeNode[], selectedCardIds: ReadonlySet<string>, includeDescendants = true): string[] {
+  const selected = new Set<string>()
+  const visit = (items: QuestionTreeNode[]) => items.forEach(node => {
+    if (selectedCardIds.has(node.id)) {
+      if (!includeDescendants && node.question) {
+        selected.add(node.id)
+        visit(node.children)
+      }
+      else node.questionIds.forEach(id => selected.add(id))
+    }
+    else visit(node.children)
+  })
+  visit(nodes)
+  return questionIdsInTree(nodes).filter(id => selected.has(id))
 }

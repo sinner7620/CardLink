@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs"
 import { runInNewContext } from "node:vm"
 import { transpileModule } from "typescript"
 import { collectQuestionTree, questionIdsInTree } from "../src/quick-menu-selection"
+import { normalizeParentTitle } from "../src/ordered-pairing-domain"
 import { normalizeBinding, usesSubcardAnswers } from "../src/binding"
 import { renderCardHtml } from "../src/card-html"
 
@@ -47,9 +48,11 @@ test("旧绑定保留默认答案脑图；子卡模式只匹配指定颜色的�
     exports: {},
     require: (name: string) => name === "./matcher" ? {
       toIndexedAnswer: (note: any, notebookId: string) => ({ answer: { id: note.noteId, noteId: note.noteId, notebookId } }),
-      findAnswers: () => { calls.push("mindmap"); return [{ id: "remote", noteId: "remote" }] },
+      findAnswers: () => { calls.push("mindmap"); return [{ id: "remote", noteId: "remote", pathTitles: ["答案脑图", "章节"] }] },
       findAnswersByRegex: () => [], findAnswerByReference: () => undefined
-    } : name === "./binding" ? { usesSubcardAnswers }
+    } : name === "./ordered-pairing-domain" ? { normalizeParentTitle }
+      : name === "./note-navigation" ? { recordRuntimeState() {} }
+      : name === "./binding" ? { usesSubcardAnswers }
       : name === "./ordered-pairing" ? { pairedAnswerReference: () => undefined }
       : name === "marginnote" ? { MN: { currnetNotebookId: "source" } } : {}
   }
@@ -59,7 +62,7 @@ test("旧绑定保留默认答案脑图；子卡模式只匹配指定颜色的�
   assert.deepEqual(Array.from(sandbox.exports.findAnswersForQuestion(configured, question, [], []), (item: any) => item.noteId), ["a", "b"])
   assert.deepEqual(calls, [])
   assert.deepEqual(Array.from(sandbox.exports.findAnswersForQuestion({ ...configured, questionColors: [2] }, question, [], [])), [])
-  assert.deepEqual(Array.from(sandbox.exports.findAnswersForQuestion({ ...configured, selectionMode: "mixed" }, question, [], []), (item: any) => item.noteId), ["a", "b", "remote"])
+  assert.deepEqual(Array.from(sandbox.exports.findAnswersForQuestion({ ...configured, selectionMode: "mixed" }, question, [], ["题目脑图", "章节"]), (item: any) => item.noteId), ["a", "b", "remote"])
   assert.deepEqual(calls, ["mindmap"])
 })
 

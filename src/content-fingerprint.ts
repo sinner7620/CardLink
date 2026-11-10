@@ -35,7 +35,12 @@ export function utf8Bytes(input: string): number[] {
 const rotr = (value: number, bits: number): number => (value >>> bits) | (value << (32 - bits))
 
 export function sha256Hex(input: string): string {
-  const bytes = utf8Bytes(input)
+  return sha256Bytes(utf8Bytes(input))
+}
+
+/** Hash actual image bytes, not their Base64 or UTF-8 re-encoding. */
+export function sha256Bytes(input: ArrayLike<number>): string {
+  const bytes = Array.from(input)
   const bitLength = bytes.length * 8
   bytes.push(0x80)
   while (bytes.length % 64 !== 56) bytes.push(0)

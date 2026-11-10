@@ -238,6 +238,10 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
 
   function restorePanelAfterNotebookSwitch(controller) {
     if (!controller) return;
+    if (!controller.panelSurface) {
+      controller.preserveAcrossNotebookSwitch = false;
+      return showPanel(controller);
+    }
     var host = panelHost(controller);
     var frame = savedFrame(controller);
     controller.panelSurface.autoresizingMask = 0;
@@ -469,6 +473,10 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
         var url = request.URL();
         if (String(url.scheme || "").toLowerCase() !== SCHEME) return true;
         var absolute = String(url.absoluteString());
+        if (webView === self.exportWebView && absolute.indexOf("mnaddon://pdf-progress?") === 0) {
+          __MNAM_WEB_BRIDGE_GLOBAL__.pdfProgress(self, webView, absolute);
+          return false;
+        }
         if (webView === self.exportWebView && absolute.indexOf("mnaddon://pdf-render-ready") === 0) {
           __MNAM_WEB_BRIDGE_GLOBAL__.pdfRenderReady(self, webView);
           return false;
@@ -522,10 +530,6 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
     var controller = PanelClass.new();
     controller.mainPath = mainPath;
     controller.addon = addon;
-    // 提前装载同一 WebView，隐藏期间也可解析脚本；不打开窗口、不发送重复 dashboard。
-    // Load the delegate controller without replacing its UIKit-owned root view.
-    controller.view.hidden = true;
-    controller.panelSurface.hidden = true;
     return controller;
   }
 
@@ -538,6 +542,8 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
     if (!controller) return;
     var host = panelHost(controller);
     if (!host) return;
+    // 仅经典面板首次显示时触发 viewDidLoad，场景面板只复用控制器上的会话状态。
+    if (!controller.panelSurface) controller.view.hidden = true;
     var frame = savedFrame(controller);
     controller.panelSurface.autoresizingMask = 0;
     if (controller.panelSurface.superview !== host) {

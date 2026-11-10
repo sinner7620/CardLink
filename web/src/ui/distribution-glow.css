@@ -1,0 +1,4 @@
+/* The overview progress bar's existing three-pass glow, shared with storage. */
+.previewProgressTrack > i, .distributionSegment, .cacheDonutSector {
+  --distribution-glow: drop-shadow(0 0 3px rgba(var(--distribution-glow-rgb), .7)) drop-shadow(0 0 8px rgba(var(--distribution-glow-rgb), .5)) drop-shadow(0 0 15px rgba(var(--distribution-glow-rgb), .32));
+}

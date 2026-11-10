@@ -7,7 +7,7 @@ import { build } from "esbuild"
 import { mountCardPreview } from "../src/card-preview"
 import { pkDrawingRendererScript } from "../src/pkdrawing-renderer"
 import { transpileModule } from "typescript"
-import { collectQuestionTree, mindMapScopeOf, questionIdsInTree, renderedMindMapNoteIds } from "../src/quick-menu-selection"
+import { collectQuestionTree, mindMapScopeOf, questionIdsInTree, renderedMindMapNoteIds, selectedQuestionIds } from "../src/quick-menu-selection"
 import { reviewToolbarHorizontal } from "../src/review-toolbar-layout"
 import * as reviewToolbarLayoutApi from "../src/review-toolbar-layout"
 import { quickMenuGeometry } from "../src/quick-menu-geometry"
@@ -181,6 +181,7 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
   const question: any = { noteId: "question", noteTitle: "题目", colorIndex: 1, parentNote: root }
   const answer: any = { noteId: "answer", noteTitle: "答案", colorIndex: 2, parentNote: question }
   const directory: any = { noteId: "directory", noteTitle: "文档目录", colorIndex: 3 }
+  let selectedCards = [question]
   const notes = [root, { ...question, colorIndex: 9 }, answer, directory]
   const mindmap = { mindmapNodes: [root, question, answer].map(note => ({ note })) }
   let visible = false, shown = 0
@@ -245,7 +246,7 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
       : name === "./question-clipper" ? { clipperModeActive: () => false, exitClipperMode() {} }
       : name === "./review-mode" ? { updateReviewToolbarOrientation() {}, startPracticeMode: (_book: string, ids: string[], _root: string, mask: boolean, mode: string) => { if (startError) throw new Error("native selection failed"); startedSelection = [...ids]; startedModes.push(mask); writingModes.push(mode); return { started: true, count: ids.length } } }
       : name === "./same-map-practice" ? { sameMapPracticeActive: () => practiceActive, sameMapPracticeCurrentQuestionId: () => practiceCurrentId, sameMapPracticeQuestionIds: () => startedSelection, stopSameMapPractice() {}, startSameMapPractice: (_book: string, ids: Set<string>, options: { maskAnswers: boolean }) => { if (startError) throw new Error("native selection failed"); startedSelection = [...ids]; startedModes.push(options.maskAnswers); return { started: true, answerCount: options.maskAnswers ? 1 : 0, maskAnswers: options.maskAnswers } } }
-      : name === "./quick-menu-selection" ? { collectQuestionTree, mindMapScopeOf, questionIdsInTree, renderedMindMapNoteIds }
+      : name === "./quick-menu-selection" ? { collectQuestionTree, mindMapScopeOf, questionIdsInTree, renderedMindMapNoteIds, selectedQuestionIds }
       : name === "./note-tree" ? { notebookNotes: () => notes }
       : name === "./mindmap-candidate" ? { MAIN_MINDMAP_SCOPE_ID: "__mn4_main_mindmap__", mindMapScopeIdForNote: (note: any) => note?.childMindMap?.noteId || "__mn4_main_mindmap__" }
       : name === "./store" ? { loadBindings: () => ({ "book::root::__mn4_main_mindmap__": answerBinding }) }
@@ -253,7 +254,7 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
       : name === "marginnote" ? {
         select: async (choices: string[]) => { assert.deepEqual(Array.from(choices), ["脑图内书写", "批注窗口书写"]); if (writingChoice === 1) windowTap(-1, 10); return { index: writingChoice } },
         showHUD(message: string) { hudMessages.push(message) }, MN: { currnetNotebookId: "book", db: { getNotebookById: () => ({ notes }) }, notebookController: { mindmapView: mindmap } },
-        NodeNote: { getSelectedNodes: () => [{ note: question }] }
+        NodeNote: { getSelectedNodes: () => selectedCards.map(note => ({ note })) }
       }
       : { showHUD() {} }
   }
@@ -305,6 +306,10 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
   const segmentFrame = owner.mnutilsQuickMenu.segment.frame
   windowTap(segmentFrame.x + filterFrame.x + 10, segmentFrame.y + filterFrame.y + 10)
   assert.equal(owner.mnutilsQuickMenu.open, true)
+  assert.equal(owner.mnutilsQuickMenu.mode, "selected")
+  assert.equal(owner.mnutilsQuickMenu.selectedIds.has("question"), true)
+  sandbox.exports.onMnutilsQuickMenuFilter()
+  assert.equal(owner.mnutilsQuickMenu.mode, "all")
   sandbox.exports.onMnutilsQuickMenuFilter()
   assert.equal(owner.mnutilsQuickMenu.mode, "filter")
   assert.match(owner.mnutilsQuickMenu.segmentVisual.html, /transition:transform 0\.45s var\(--ease-main\)/)
@@ -327,8 +332,8 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
   assert.equal(owner.mnutilsQuickMenu.listContainer.alpha, 1)
   assert.equal(previousList.superview, owner.mnutilsQuickMenu.controls)
   assert.equal(owner.mnutilsQuickMenu.content.frame.width, 272)
-  sandbox.exports.onMnutilsQuickMenuSelectAll()
-  assert.equal(owner.mnutilsQuickMenu.selectedIds.size, 1)
+  sandbox.exports.onMnutilsQuickMenuSelectAll({ tag: 1 })
+  assert.equal(owner.mnutilsQuickMenu.selectedIds.size, 3)
   assert.equal(owner.mnutilsQuickMenu.expandedIds.size, 0)
   // 收起全部后重新筛选、关闭重开都保留空集合，不恢复默认顶层展开。
   sandbox.exports.onMnutilsQuickMenuFilter()
@@ -337,6 +342,7 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
   await new Promise(resolve => setImmediate(resolve))
   sandbox.exports.onMnutilsEntranceClick({})
   sandbox.exports.onMnutilsQuickMenuFilter()
+  sandbox.exports.onMnutilsQuickMenuFilter()
   assert.equal(owner.mnutilsQuickMenu.expandedIds.size, 0)
   sandbox.exports.onMnutilsQuickMenuToggleBranch({ tag: 0 })
   assert.equal(owner.mnutilsQuickMenu.expandedIds.has("root"), true)
@@ -344,8 +350,9 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
   await new Promise(resolve => setImmediate(resolve))
   sandbox.exports.onMnutilsEntranceClick({})
   sandbox.exports.onMnutilsQuickMenuFilter()
+  sandbox.exports.onMnutilsQuickMenuFilter()
   assert.equal(owner.mnutilsQuickMenu.expandedIds.has("root"), true)
-  sandbox.exports.onMnutilsQuickMenuSelectAll()
+  sandbox.exports.onMnutilsQuickMenuSelectAll({ tag: 1 })
   sandbox.exports.onMnutilsEntrancePan({ state: 1, translationInView: () => ({ x: 0, y: 0 }), setTranslationInView() {} })
   sandbox.exports.onMnutilsEntrancePan({ state: 2, translationInView: () => ({ x: -30, y: 20 }), setTranslationInView() {} })
   assert.equal(owner.mnutilsQuickMenu.open, true)
@@ -380,14 +387,14 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(shown, 1)
   sandbox.exports.onMnutilsEntranceClick({})
-  sandbox.exports.onMnutilsQuickMenuSelectAll()
+  sandbox.exports.onMnutilsQuickMenuSelectAll({ tag: 1 })
   writingChoice = -1
   await sandbox.exports.onMnutilsQuickMenuStart()
   assert.equal(startedSelection.length, 0)
   assert.equal(owner.mnutilsQuickMenu.open, true)
   writingChoice = 0
   await sandbox.exports.onMnutilsQuickMenuStart()
-  assert.deepEqual(startedSelection, ["question"])
+  assert.deepEqual(startedSelection, ["root", "question", "answer"])
   assert.equal(owner.mnutilsQuickMenu.open, true)
   assert.deepEqual(startedModes, [false])
   assert.ok(hudMessages.includes("已开始做题"))
@@ -516,7 +523,8 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
   owner.mnutilsEntranceSuppressClick = 0
   sandbox.exports.onMnutilsEntranceClick({})
   sandbox.exports.onMnutilsQuickMenuFilter()
-  sandbox.exports.onMnutilsQuickMenuSelectAll()
+  sandbox.exports.onMnutilsQuickMenuFilter()
+  sandbox.exports.onMnutilsQuickMenuSelectAll({ tag: 1 })
   assert.ok(owner.mnutilsQuickMenu.selectedIds.has('q25'), JSON.stringify({ selected: [...owner.mnutilsQuickMenu.selectedIds], logs: menuLogs.slice(-7) }))
   await sandbox.exports.onMnutilsQuickMenuStart()
   practiceActive = true
@@ -540,20 +548,80 @@ test("悬浮球快捷区展开、收起并从快捷项打开插件页面", async
   answerBinding = { notebookId: 'answers', selectionMode: 'designated', designatedAnswer: 'mindmap', questionColors: [] } as any
   sandbox.exports.onMnutilsEntranceClick({})
   sandbox.exports.onMnutilsQuickMenuFilter()
-  sandbox.exports.onMnutilsQuickMenuSelectAll()
+  sandbox.exports.onMnutilsQuickMenuFilter()
+  sandbox.exports.onMnutilsQuickMenuSelectAll({ tag: 1 })
   assert.ok(owner.mnutilsQuickMenu.selectedIds.has('chapter-two'), '答案脑图无颜色绑定时包含所有卡片')
   assert.ok(owner.mnutilsQuickMenu.selectedIds.has('q25'))
   assert.equal(owner.mnutilsQuickMenu.maskAnswers, false)
   globalColors = [1]
   sandbox.exports.onMnutilsQuickMenuFilter()
-  sandbox.exports.onMnutilsQuickMenuSelectAll()
-  assert.equal(owner.mnutilsQuickMenu.selectedIds.has('chapter-two'), false, '全局颜色筛选排除其他颜色')
+  sandbox.exports.onMnutilsQuickMenuSelectAll({ tag: 1 })
+  assert.equal(owner.mnutilsQuickMenu.selectedIds.has('chapter-two'), true, '答案脑图不受全局颜色限制')
   assert.ok(owner.mnutilsQuickMenu.selectedIds.has('q25'))
 
   answerBinding.questionColors = [1]
   globalColors = [0]
   sandbox.exports.onMnutilsQuickMenuFilter()
+  sandbox.exports.onMnutilsQuickMenuSelectAll({ tag: 1 })
+  assert.ok(owner.mnutilsQuickMenu.selectedIds.has('chapter-two'), '答案脑图忽略旧局部与全局颜色')
+  globalColors = [1]
   sandbox.exports.onMnutilsQuickMenuSelectAll()
-  assert.ok(owner.mnutilsQuickMenu.selectedIds.has('chapter-two'), '全局颜色即使局部有配置也必须有效')
+  assert.equal(owner.mnutilsQuickMenu.mode, "selected")
+  assert.deepEqual([...owner.mnutilsQuickMenu.selectedIds], ["question"])
+  assert.equal(owner.mnutilsQuickMenu.customAllButton.hidden, true)
+  sandbox.exports.onMnutilsQuickMenuFilter()
+  assert.equal(owner.mnutilsQuickMenu.customAllButton.hidden, false)
+  assert.equal(owner.mnutilsQuickMenu.filterButton.frame.width, owner.mnutilsQuickMenu.customAllButton.frame.width)
+  sandbox.exports.closeMnutilsQuickMenu()
+  await new Promise(resolve => setImmediate(resolve))
+  selectedCards = []
+  sandbox.exports.onMnutilsEntranceClick({})
+  assert.equal(owner.mnutilsQuickMenu.mode, "all")
+  assert.equal(owner.mnutilsQuickMenu.customAllButton, undefined)
+  sandbox.exports.onMnutilsQuickMenuFilter()
+  assert.equal(owner.mnutilsQuickMenu.mode, "filter")
+  assert.equal(owner.mnutilsQuickMenu.selectedIds.size, 0)
+
+  // Independent answer maps may put a question below a same-colored parent.
+  // Exercise actual start actions through all three source-selection entries.
+  sandbox.exports.closeMnutilsQuickMenu()
+  await new Promise(resolve => setImmediate(resolve))
+  root.colorIndex = 1
+  globalColors = [1]
+  answerBinding = { notebookId: "answers", selectionMode: "designated", designatedAnswer: "mindmap", questionColors: [1] }
+  selectedCards = [question]
+  sandbox.exports.onMnutilsEntranceClick({})
+  assert.equal(owner.mnutilsQuickMenu.mode, "selected")
+  await sandbox.exports.onMnutilsQuickMenuStart()
+  assert.deepEqual(startedSelection, ["question"])
+  assert.equal(startedModes[startedModes.length - 1], false)
+  sandbox.exports.onMnutilsQuickMenuFilter()
+  assert.equal(owner.mnutilsQuickMenu.mode, "all")
+  await sandbox.exports.onMnutilsQuickMenuStart()
+  assert.ok(startedSelection.includes("question"))
+  sandbox.exports.onMnutilsQuickMenuFilter()
+  assert.equal(owner.mnutilsQuickMenu.mode, "filter")
+  const filterMenu = owner.mnutilsQuickMenu
+  if (!filterMenu.expandedIds.has("root")) {
+    sandbox.exports.onMnutilsQuickMenuToggleBranch({ tag: filterMenu.rowIds.indexOf("root") })
+  }
+  const questionRow = filterMenu.rowIds.indexOf("question")
+  assert.ok(questionRow >= 0)
+  sandbox.exports.onMnutilsQuickMenuToggleQuestion({ tag: questionRow })
+  await sandbox.exports.onMnutilsQuickMenuStart()
+  assert.deepEqual(startedSelection, ["question"])
+  // Pure answer-map sources ignore both stale local and global color settings.
+  globalColors = [15]
+  answerBinding.questionColors = [14]
+  sandbox.exports.onMnutilsQuickMenuSelectAll({ tag: 1 })
+  await sandbox.exports.onMnutilsQuickMenuStart()
+  assert.ok(startedSelection.includes("question"))
+  assert.ok(startedSelection.includes("chapter-two"))
+  assert.equal(owner.mnutilsQuickMenu.maskAnswers, false)
+  // Subcard sources still require matching colors.
+  answerBinding = { notebookId: "book", designatedAnswer: "subcard", questionColors: [14] }
+  sandbox.exports.onMnutilsQuickMenuSelectAll({ tag: 1 })
+  await sandbox.exports.onMnutilsQuickMenuStart()
+  assert.ok(hudMessages[hudMessages.length - 1]?.includes("题目颜色筛选"))
 
 })

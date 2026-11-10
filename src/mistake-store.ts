@@ -124,6 +124,8 @@ function normalizeRecord(value: any, curves: MistakeReviewCurves): MistakeRecord
   const nextReviewAt = hasThreeLevelSchedule && value.nextReviewAt
     ? String(value.nextReviewAt)
     : nextReviewTime(level, reviewCount, Number.isNaN(scheduleBase.getTime()) ? new Date(createdAt) : scheduleBase, curves).toISOString()
+  const sourcePathTitles = Array.isArray(value.sourcePathTitles) ? value.sourcePathTitles.map(String) : []
+  if (value.sourcePathOrder !== "root-first") sourcePathTitles.reverse()
   return {
     ...value,
     recordId,
@@ -133,10 +135,11 @@ function normalizeRecord(value: any, curves: MistakeReviewCurves): MistakeRecord
     sourceRootNodeId: value.sourceRootNodeId ? String(value.sourceRootNodeId) : undefined,
     sourceRootTitle: value.sourceRootTitle ? String(value.sourceRootTitle) : undefined,
     sourceTitle: String(value.sourceTitle || "未命名错题"),
-    sourcePathTitles: Array.isArray(value.sourcePathTitles) ? value.sourcePathTitles.map(String) : [],
-    categoryPath: Array.isArray(value.categoryPath) && value.categoryPath.length
+    sourcePathOrder: "root-first",
+    sourcePathTitles,
+    categoryPath: value.sourcePathOrder === "root-first" && Array.isArray(value.categoryPath) && value.categoryPath.length
       ? value.categoryPath.map(String)
-      : [String(value.sourceNotebookTitle || "未命名脑图"), ...(value.sourcePathTitles || []).map(String)],
+      : [String(value.sourceNotebookTitle || "未命名脑图"), ...sourcePathTitles],
     manualCategory: value.manualCategory ? String(value.manualCategory) : undefined,
     manualCategories: Array.isArray(value.manualCategories)
       ? value.manualCategories.map(String)
@@ -150,6 +153,7 @@ function normalizeRecord(value: any, curves: MistakeReviewCurves): MistakeRecord
     updatedAt,
     nextReviewAt,
     reviewCount,
+    reasonTags: Array.isArray(value.reasonTags) ? value.reasonTags.map(String) : undefined,
     history,
     reviewCompleted: value.reviewCompleted === true || (!usesThreeLevels && value.reviewCompleted === undefined && legacyLevel === 5),
     legacyMistakeNoteId: value.legacyMistakeNoteId || value.mistakeNoteId || undefined

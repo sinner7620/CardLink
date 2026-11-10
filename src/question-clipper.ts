@@ -1,5 +1,7 @@
 import { getLocalDataByKey, setLocalDataByKey, MN, NodeNote, showHUD, select } from "marginnote"
 import { hideAnswerToolbar } from "./floating-toolbar"
+import { recordRuntimeState } from "./note-navigation"
+import { loadMatcherSettings } from "./settings"
 
 // Adapted from the supplied QuestionClipper v0.4.1-beta.1 source.
 export type ClipStage = "title" | "question" | "answer"
@@ -7,11 +9,18 @@ const SETTINGS_KEY = "cardlink.question-clipper.v1"
 const stages: ClipStage[] = ["title", "question", "answer"]
 const commands = ["ToolTextExcerpt", "ToolRectCut", "ExcerptToolSketch",
   ...Array.from({ length: 16 }, (_, i) => `ExcerptToolCustom${i}`)]
+function isToolCommand(value: unknown): value is string {
+  return typeof value === "string" && (commands.includes(value) ||
+    /^ExcerptToolCustom(?:0|[1-9]\d*)$/.test(value) && Number.isSafeInteger(Number(value.slice("ExcerptToolCustom".length))))
+}
 type TitleMode = "original" | "prefix" | "mother" | "number"
 const TITLE_MODES: TitleMode[] = ["original", "prefix", "mother", "number"]
 const TITLE_LABELS = ["原始标题", "统一前缀＋标题", "母卡标题＋标题", "母卡内自动题号"]
 const NUMBER_KEY = "cardlink.question-clipper.numbers.v1"
-interface ClipSettings { excerptTitle: boolean; excerptAnswer: boolean; tools: Partial<Record<ClipStage, string>>; titleMode: TitleMode; titlePrefix: string }
+interface SceneTool { index: number; label: string; signature: string }
+interface SceneToolConfig { templateId: string; source: string; tools: SceneTool[] }
+interface SceneToolBinding extends SceneTool { templateId: string; source: string; command: string }
+interface ClipSettings { excerptTitle: boolean; excerptAnswer: boolean; tools: Partial<Record<ClipStage, string>>; sceneTools: Partial<Record<ClipStage, string | SceneToolBinding>>; titleMode: TitleMode; titlePrefix: string }
 interface ClipSession {
   owner: any
   notebookId: string; window: any; running: boolean; started: boolean; stage: ClipStage
@@ -33,12 +42,75 @@ function notifyClipperStateChanged(owner: any): void {
 }
 const clean = (value: unknown) => String(value ?? "").replace(/<[^>]*>/g, " ").replace(/\*\*/g, "").replace(/\s+/g, " ").trim()
 function app(): any { return Application.sharedInstance() }
-function query(command: string, win = session()?.window ?? self.window): any {
-  try { return app().queryCommandWithKeyFlagsInWindow(command, 0, win) } catch { return null }
+export function isSceneMode(owner: any): boolean {
+  const host = app()
+  if (!(parseInt(String(host.appVersion ?? ""), 10) >= 5) || !owner) return false
+  const immersive = host.studyController(owner.window)?.immersiveMode
+  return immersive === true || immersive === 1
 }
-function run(command: string, win: any): void {
-  if (query(command, win)?.disabled === true) return
+function boundTools(settings: ClipSettings, owner: any): ClipSettings["tools"] {
+  // Existing scene users can already switch pens with their saved commands.
+  // Override only stages explicitly rebound in the scene; never discard those commands.
+  const tools = { ...settings.tools }
+  if (isSceneMode(owner)) for (const stage of stages) {
+    const binding = settings.sceneTools[stage]
+    if (binding) tools[stage] = typeof binding === "string" ? binding : binding.command
+  }
+  return tools
+}
+async function readSceneTools(owner: any): Promise<SceneToolConfig> {
+  const bridge = (globalThis as any).__MNAM_SCENE_WORKBENCH_GLOBAL__
+  if (!bridge?.readClipperTools) throw new Error("当前面板无法读取场景摘录工具，请打开当前场景的 CardLink 面板")
+  if (bridge.ensureReady && !await bridge.ensureReady(owner)) throw new Error("当前场景无法加载 CardLink，请检查场景模板是否授权 CardLink")
+  if (!isSceneMode(owner)) throw new Error("界面模式已切换，请重新绑定摘录工具")
+  const result = await bridge.readClipperTools(owner)
+  if (result?.error) throw new Error(result.error.message || "读取场景摘录工具失败")
+  if (result?.available !== true) throw new Error(`当前场景工具配置不可用：${String(result?.reason || "未返回工具配置")}`)
+  const raw = result.excerptTools?.tools
+  if (!Array.isArray(raw) || !raw.length) throw new Error("当前场景没有可绑定的摘录笔，请先在场景笔盒中添加")
+  const indices = new Set<number>()
+  const tools = raw.map((tool: any): SceneTool => {
+    if (!Number.isSafeInteger(tool?.index) || tool.index < 0 || indices.has(tool.index)) throw new Error("场景摘录笔序号无效或重复，请检查笔盒配置")
+    indices.add(tool.index)
+    const label = String(tool.label ?? "").trim() || `未命名摘录笔（序号 ${tool.index}）`
+    const signature = JSON.stringify([tool.index, label, ...["highlightMode", "colorIndex", "fillIndex", "hashtag", "aiAddon", "aiOCR", "structuredAIOCR", "aiOCRPromptChars", "addToMap", "insertAfterFocus"].map(key => tool[key] ?? null)])
+    return { index: tool.index, label, signature }
+  })
+  return { templateId: String(result.template?.id ?? ""), source: String(result.excerptTools.source ?? ""), tools }
+}
+function sameSceneTool(config: SceneToolConfig, binding: SceneToolBinding): boolean {
+  return config.templateId === binding.templateId && config.source === binding.source &&
+    config.tools.some(tool => tool.index === binding.index && tool.signature === binding.signature)
+}
+function toolLog(event: string, detail: string): void {
+  try { recordRuntimeState("摘题工具", event, detail) } catch { /* Diagnostics never block clipping. */ }
+}
+function toolContext(event: string, win: any, detail: string): void {
+  try {
+    if (!loadMatcherSettings().debugModeEnabled) return
+    const host = app()
+    toolLog(event, `${detail} appVersion=${host.appVersion} build=${host.build} osType=${host.osType} windowPresent=${!!win} focusWindowMatches=${win === host.focusWindow}`)
+  } catch (error) { toolLog(event, `${detail} contextError=${String(error).slice(0, 240)}`) }
+}
+function query(command: string, win = session()?.window ?? self.window, context = ""): any {
+  try {
+    const state = app().queryCommandWithKeyFlagsInWindow(command, 0, win)
+    try {
+      if (context && loadMatcherSettings().debugModeEnabled) toolLog("query", `${context} command=${command} result=${state === null ? "null" : typeof state} checked=${String(state?.checked).slice(0, 80)} checkedType=${typeof state?.checked} disabled=${String(state?.disabled).slice(0, 80)} disabledType=${typeof state?.disabled}`)
+    } catch { /* An unreadable diagnostic field must not change the returned command state. */ }
+    return state
+  } catch (error) {
+    if (context) toolLog("query.error", `${context} command=${command} error=${String(error).slice(0, 240)}`)
+    return null
+  }
+}
+function run(command: string, win: any, context = ""): void {
+  if (query(command, win, context)?.disabled === true) {
+    if (context) toolLog("dispatch.skipped", `${context} command=${command} reason=disabled`)
+    return
+  }
   app().processCommandWithKeyFlagsInWindow(command, 0, win)
+  if (context) toolLog("dispatch.returned", `${context} command=${command}`)
 }
 function commit(notebookId: string): void {
   const db = MN.db as any
@@ -50,8 +122,17 @@ export function clipperSettings(): ClipSettings {
   const raw = getLocalDataByKey(SETTINGS_KEY) as any
   const saved = typeof raw === "string" ? JSON.parse(raw) : raw
   const tools: ClipSettings["tools"] = {}
-  for (const stage of stages) if (commands.includes(saved?.tools?.[stage])) tools[stage] = saved.tools[stage]
-  return { excerptAnswer: saved?.excerptAnswer !== false && saved?.excerptAnswer !== 0, excerptTitle: saved?.excerptTitle !== false && saved?.excerptTitle !== 0, tools,
+  const sceneTools: ClipSettings["sceneTools"] = {}
+  for (const stage of stages) if (isToolCommand(saved?.tools?.[stage])) tools[stage] = saved.tools[stage]
+  for (const stage of stages) {
+    const binding = saved?.sceneTools?.[stage]
+    if (isToolCommand(binding)) sceneTools[stage] = binding
+    else if (binding && Number.isSafeInteger(binding.index) && binding.index >= 0 && typeof binding.label === "string" &&
+      typeof binding.signature === "string" && typeof binding.templateId === "string" && typeof binding.source === "string" && isToolCommand(binding.command)) {
+      sceneTools[stage] = { index: binding.index, label: binding.label, signature: binding.signature, templateId: binding.templateId, source: binding.source, command: binding.command }
+    }
+  }
+  return { excerptAnswer: saved?.excerptAnswer !== false && saved?.excerptAnswer !== 0, excerptTitle: saved?.excerptTitle !== false && saved?.excerptTitle !== 0, tools, sceneTools,
     titleMode: TITLE_MODES.includes(saved?.titleMode) ? saved.titleMode : "original", titlePrefix: clean(saved?.titlePrefix) }
 }
 export function saveClipperTitleFormat(mode: string, prefix: string, owner: any = self): void {
@@ -115,10 +196,14 @@ export function clipToolLabel(command?: string): string {
 }
 export function clipperSnapshot(owner: any = self) {
   const s = session(owner), settings = clipperSettings()
-  return { ...settings, mode: !!s, running: s?.running ?? false, started: s?.started ?? false,
+  const tools = boundTools(settings, owner)
+  return { ...settings, tools, toolBindingMode: isSceneMode(owner) ? "scene" : "classic", mode: !!s, running: s?.running ?? false, started: s?.started ?? false,
     stage: s?.stage ?? (settings.excerptTitle ? "title" : "question"), title: s?.title ?? "",
     motherTitle: s?.motherTitle ?? "", motherId: s?.motherId ?? "", completed: s?.completed ?? 0,
-    issue: s?.issue ?? "", toolLabels: Object.fromEntries(stages.map(stage => [stage, clipToolLabel(settings.tools[stage])])) }
+    issue: s?.issue ?? "", toolLabels: Object.fromEntries(stages.map(stage => {
+      const binding = isSceneMode(owner) && settings.sceneTools[stage]
+      return [stage, binding && typeof binding !== "string" ? binding.label : clipToolLabel(tools[stage])]
+    })) }
 }
 export function saveClipperSetting(excerptTitle: boolean, owner: any = self): void {
   const settings = { ...clipperSettings(), excerptTitle }
@@ -148,20 +233,49 @@ export function saveClipperAnswerSetting(excerptAnswer: boolean, owner: any = se
   s.issue = ""; s.changed()
   if (s.running) switchTool(s)
 }
-export function recordClipperTool(slot: string, owner: any = self): void {
+async function chooseSceneClipperTool(slot: ClipStage, owner: any): Promise<void> {
+  const notebookId = String(MN.currnetNotebookId ?? "")
+  const config = await readSceneTools(owner)
+  const choice = await select(config.tools.map(tool => tool.label),
+    `绑定${{ title: "标题", question: "题目", answer: "答案" }[slot]}工具`,
+    "从当前场景笔盒中选择摘录笔。", true)
+  if (choice.index < 0) return
+  const tool = Number.isInteger(choice.index) && config.tools[choice.index]
+  if (!tool) throw new Error("无效的场景摘录笔")
+  const command = `ExcerptToolCustom${tool.index}`
+  if (!isSceneMode(owner)) throw new Error("已离开 MN5 场景界面，请重新绑定")
+  if (session(owner)?.started) throw new Error("请先结束当前摘题，再绑定工具")
+  const binding: SceneToolBinding = { ...tool, templateId: config.templateId, source: config.source, command }
+  if (!sameSceneTool(await readSceneTools(owner), binding) || String(MN.currnetNotebookId ?? "") !== notebookId) throw new Error("场景或摘录笔配置已变化，请重新选择")
+  if (!isSceneMode(owner) || session(owner)?.started) throw new Error("当前界面或摘题状态已变化，请结束摘题后重新绑定")
+  const settings = clipperSettings()
+  settings.sceneTools[slot] = binding
+  setLocalDataByKey(JSON.stringify(settings), SETTINGS_KEY)
+  toolLog("record.scene.saved", `slot=${slot} index=${tool.index} template=${config.templateId} command=${command}`)
+  if (session(owner)) session(owner)!.settings = settings
+  showHUD(`已绑定${{ title: "标题", question: "题目", answer: "答案" }[slot]}工具：${tool.label}`, 2)
+}
+export function recordClipperTool(slot: string, owner: any = self): void | Promise<void> {
   if (!stages.includes(slot as ClipStage)) throw new Error("无效的工具位置")
   if (session(owner)?.started) throw new Error("请先结束当前摘题，再绑定工具")
-  const checked = commands.filter(command => { const st = query(command, owner.window); return st?.checked === true && st.disabled !== true })
+  if (isSceneMode(owner)) return chooseSceneClipperTool(slot as ClipStage, owner)
+  const context = `record slot=${slot}`
+  toolContext("record.start", owner.window, context)
+  const checked = commands.filter(command => { const st = query(command, owner.window, context); return st?.checked === true && st.disabled !== true })
   const custom = checked.filter(command => command.startsWith("ExcerptToolCustom"))
   const bases = checked.filter(command => !command.startsWith("ExcerptToolCustom"))
   const command = custom.length === 1 ? custom[0]
     : slot === "title" && checked.includes("ToolTextExcerpt") ? "ToolTextExcerpt"
       : slot !== "title" && !custom.length && checked.includes("ToolRectCut") ? "ToolRectCut"
         : !custom.length && bases.length === 1 ? bases[0] : undefined
-  if (!command) throw new Error(checked.length ? "当前有多个工具选中，无法识别；请重新选择工具后记录" : "请先在 MarginNote 顶部选择摘录工具，再点击记录")
+  if (!command) {
+    toolLog("record.unrecognized", `${context} checked=${checked.join(",") || "(none)"}`)
+    throw new Error(checked.length ? "当前有多个工具选中，无法识别；请重新选择工具后记录" : "未能识别当前摘录工具；请先在 MarginNote 顶部选笔后重试。若已选笔仍失败，请开启调试模式，重试并导出运行日志")
+  }
   const settings = clipperSettings()
   settings.tools[slot as ClipStage] = command
   setLocalDataByKey(JSON.stringify(settings), SETTINGS_KEY)
+  toolLog("record.saved", `${context} command=${command}`)
   if (session(owner)) session(owner)!.settings = settings
   showHUD(`已绑定${{ title: "标题", question: "题目", answer: "答案" }[slot]}工具：${clipToolLabel(command)}`, 2)
 }
@@ -191,7 +305,9 @@ export function exitClipperMode(owner: any = self): void {
 }
 function switchTool(s: ClipSession, attempt = 0): void {
   const generation = s.generation, stage = s.stage
-  const command = s.settings.tools[stage]
+  const command = boundTools(s.settings, s.owner)[stage]
+  const context = `switch stage=${stage} attempt=${attempt + 1} generation=${generation}`
+  toolContext("switch.start", s.window, `${context} command=${command || "(unbound)"}`)
   if (!command) {
     s.running = false
     s.issue = "当前步骤尚未绑定摘录工具，请结束摘题后绑定工具"
@@ -202,17 +318,21 @@ function switchTool(s: ClipSession, attempt = 0): void {
   NSTimer.scheduledTimerWithTimeInterval([.18, .32, .48, .7, .95][attempt], false, () => {
     if (!live()) return
     try {
-      if (query("ContinueExcerpt", s.window)?.checked) run("ContinueExcerpt", s.window)
-      if (query(command, s.window)?.checked) return
-      run(command, s.window)
-    } catch { /* verify and retry via the command URL, as in the reference */ }
+      if (query("ContinueExcerpt", s.window, context)?.checked) run("ContinueExcerpt", s.window, context)
+      if (query(command, s.window, `${context} phase=before`)?.checked) return
+      run(command, s.window, context)
+    } catch (error) { toolLog("dispatch.error", `${context} command=${command} error=${String(error).slice(0, 240)}`) }
     NSTimer.scheduledTimerWithTimeInterval(.16, false, () => {
-      if (!live() || query(command, s.window)?.checked) return
-      try { app().openURL(NSURL.URLWithString(`marginnote4app://command/${command}`)) } catch { /* report after retries */ }
+      if (!live() || query(command, s.window, `${context} phase=after-command`)?.checked) return
+      try {
+        app().openURL(NSURL.URLWithString(`marginnote4app://command/${command}`))
+        toolLog("url.returned", `${context} command=${command}`)
+      } catch (error) { toolLog("url.error", `${context} command=${command} error=${String(error).slice(0, 240)}`) }
       NSTimer.scheduledTimerWithTimeInterval(.22, false, () => {
-        if (!live() || query(command, s.window)?.checked) return
+        if (!live() || query(command, s.window, `${context} phase=after-url`)?.checked) return
         if (attempt < 4) return switchTool(s, attempt + 1)
         s.issue = "请手动选择当前步骤的摘录工具"
+        toolLog("switch.unverified", `${context} command=${command} manualSelectionRequired=true`)
         s.changed(); showHUD(s.issue, 3)
       })
     })
@@ -225,7 +345,8 @@ export function toggleClipperRunning(owner: any = self): void {
     s.settings = clipperSettings()
     const required = stages.filter(stage => stage === "question" ||
       (stage === "title" && s.settings.excerptTitle) || (stage === "answer" && s.settings.excerptAnswer))
-    const missing = required.filter(stage => !s.settings.tools[stage])
+    const tools = boundTools(s.settings, owner)
+    const missing = required.filter(stage => !tools[stage])
     if (missing.length) {
       s.issue = `尚未绑定${missing.map(stage => ({ title: "标题", question: "题目", answer: "答案" })[stage]).join("、")}摘录工具，请先在设置中绑定后再开始`
       s.changed(); showHUD(s.issue, 5)

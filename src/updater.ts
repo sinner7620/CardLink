@@ -8,6 +8,8 @@ import { cardLinkTempPath, ensureStorageDirectory } from "./storage-paths"
 import { installedVersion, installUpdatePackage } from "./update-installer"
 import { loadMatcherSettings, saveMatcherSettings } from "./settings"
 
+import { showUpdateDialog } from "./update-dialog"
+
 export const DEBUG_RELEASES_URL = "https://2608204.xyz/updates/debug/releases.json"
 
 export function setDebugUpdateDownloads(enabled: boolean): { debugUpdateDownloadsEnabled: boolean } {
@@ -287,16 +289,23 @@ export async function checkForUpdates(interactive = true): Promise<void> {
       showHUD(`CardLink 发现${channel} v${version}（${sourceLabel}），可在插件菜单选择「检查插件更新」安装`, 5)
       return
     }
-    const notes = String(release.body ?? "暂无更新说明").trim().slice(0, 900)
-    const result = await popup({
-      title: `CardLink：发现${channel} v${version}`,
-      message: `当前版本：v${__APP_VERSION__}\n来源：${sourceLabel}\n\n${notes}\n\n直接安装：替换插件文件后请重启 MarginNote。\n手动安装：保存安装包后自行导入。`,
-      buttons: ["直接安装", "手动安装"],
-      canCancel: true,
-      multiLine: true
-    })
-    if (result.buttonIndex === 0) await downloadAndInstall(release, asset, target)
-    else if (result.buttonIndex === 1) saveDownloadedPackage(await downloadUpdate(release, asset))
+    const notes = String(release.body ?? "").trim() || "暂无更新说明"
+    const dialog = showUpdateDialog(version, notes)
+    let choice
+    if (dialog) {
+      choice = await dialog
+    } else {
+      const result = await popup({
+        title: `CardLink：发现${channel} v${version}`,
+        message: `当前版本：v${__APP_VERSION__}\n来源：${sourceLabel}\n\n${notes.slice(0, 900)}`,
+        buttons: ["直接安装", "手动安装"],
+        canCancel: true,
+        multiLine: true
+      })
+      choice = result.buttonIndex === 0 ? "direct" : result.buttonIndex === 1 ? "manual" : "later"
+    }
+    if (choice === "direct") await downloadAndInstall(release, asset, target)
+    else if (choice === "manual") saveDownloadedPackage(await downloadUpdate(release, asset))
   } catch (error) {
     captureDiagnosticError(error, "更新")
     if (interactive || automaticInstallationEnabled()) showHUD(`检查更新失败：${updateFailureMessage(error)}`, 5)

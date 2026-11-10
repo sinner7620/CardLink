@@ -436,3 +436,52 @@ test("自动安装失败提示错误并恢复旧目录；默认后台检查只�
   assert.ok(calls.huds.some(message => message.includes("已恢复旧版本")))
   assert.equal(calls.popups.length, 0)
 })
+test("原生更新弹窗展示完整 Markdown，稍后和手动安装走各自流程", async t => {
+  await loadModules()
+  reset()
+  const runtime = globalThis as any
+  const host = { bounds: {}, addSubview() {} }
+  let navigation: (web: any, request: any) => boolean
+  let view: any
+  let loaded: Promise<string>
+  let didLoad: (html: string) => void
+  let removed = 0
+  const restore = new Map(["UIWebView", "JSB", "UIColor"].map(key => [key, runtime[key]]))
+  Object.assign(runtime, {
+    JSB: { defineClass(_name: string, callbacks: any) {
+      navigation = callbacks.webViewShouldStartLoadWithRequestNavigationType
+      return { new: () => ({}) }
+    } },
+    UIColor: { clearColor: () => null },
+    UIWebView: class {
+      layer = {}
+      constructor() { view = this }
+      loadHTMLStringBaseURL(html: string) { didLoad(html) }
+      removeFromSuperview() { removed++ }
+    }
+  })
+  const mn = (await import("marginnote")).MN as any
+  const originalController = mn.studyController
+  mn.studyController = { view: host }
+  t.after(() => {
+    for (const [key, value] of restore) runtime[key] = value
+    mn.studyController = originalController
+  })
+  const candidate = release("9.9.9")
+  candidate.body = "# 更新\n\n" + "说明".repeat(600) + "\n\n**完整说明末尾**\n<script>alert(1)</script>"
+  githubReleases = [candidate]
+  for (const choice of ["later", "manual"]) {
+    loaded = new Promise(resolve => { didLoad = resolve })
+    const check = updater.checkForUpdates(true)
+    const html = await loaded
+    assert.match(html, /<h1>更新<\/h1>/)
+    assert.match(html, /<strong>完整说明末尾<\/strong>/)
+    assert.doesNotMatch(html, /<script>/)
+    assert.match(html, /稍后[\s\S]*手动安装[\s\S]*直接安装/)
+    assert.equal(navigation!(view, { URL: () => ({ absoluteString: () => "cardlink-update://" + choice }) }), false)
+    await check
+    assert.equal(calls.saved.length, choice === "manual" ? 1 : 0)
+  }
+  assert.equal(removed, 2)
+  assert.equal(calls.popups.length, 0)
+})

@@ -11,7 +11,6 @@ export interface MatcherSettings {
   allowSameStudySetMindMap: boolean
   mistakeReviewCurves: MistakeReviewCurves
   mistakeCustomCategories: string[]
-  sceneWorkbenchEnabled: boolean
   debugModeEnabled: boolean
   debugReviewAlgorithm?: "fixed" | "fsrs"
   debugAnswerPreviewMode?: "custom" | "native"
@@ -51,7 +50,6 @@ export function loadMatcherSettings(): MatcherSettings {
     allowSameStudySetMindMap: value?.allowSameStudySetMindMap !== false,
     mistakeReviewCurves: normalizeMistakeReviewCurves(value?.mistakeReviewCurves),
     mistakeCustomCategories: normalizeMistakeCustomCategories(value?.mistakeCustomCategories),
-    sceneWorkbenchEnabled: value?.sceneWorkbenchEnabled === true,
     debugModeEnabled: value?.debugModeEnabled === true,
     debugReviewAlgorithm: value?.debugReviewAlgorithm === "fsrs" ? "fsrs" : "fixed",
     debugAnswerPreviewMode: value?.debugAnswerPreviewMode === "native" ? "native" : "custom",
@@ -83,7 +81,6 @@ export function saveMatcherSettings(settings: Partial<MatcherSettings>): void {
     debugAnswerPreviewMode: settings.debugAnswerPreviewMode === "native" || settings.debugAnswerPreviewMode === "custom" ? settings.debugAnswerPreviewMode : current.debugAnswerPreviewMode,
     debugUpdateDownloadsEnabled: (settings.debugModeEnabled ?? current.debugModeEnabled) === true && (settings.debugUpdateDownloadsEnabled ?? current.debugUpdateDownloadsEnabled) === true,
     debugAutoInstallUpdatesEnabled: (settings.debugModeEnabled ?? current.debugModeEnabled) === true && (settings.debugAutoInstallUpdatesEnabled ?? current.debugAutoInstallUpdatesEnabled) === true,
-    sceneWorkbenchEnabled: typeof settings.sceneWorkbenchEnabled === "boolean" ? settings.sceneWorkbenchEnabled : current.sceneWorkbenchEnabled,
     boundHandwritingDisplay: settings.boundHandwritingDisplay === "always" || settings.boundHandwritingDisplay === "doubleTap" ? settings.boundHandwritingDisplay : current.boundHandwritingDisplay,
     mistakeListDisplay: settings.mistakeListDisplay === "always" || settings.mistakeListDisplay === "autoHide" ? settings.mistakeListDisplay : current.mistakeListDisplay,
     entranceDefaultMode: settings.entranceDefaultMode === "practice" || settings.entranceDefaultMode === "clipper" ? settings.entranceDefaultMode : current.entranceDefaultMode,

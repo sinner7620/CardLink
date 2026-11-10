@@ -91,7 +91,6 @@ test("原生个性设置命令仅接受布尔彩纸开关，匹配设置快照�
     },
     "./plugin": { answerMatchingSettingsData: matching, managedAnswerBindings: () => [] },
     "./question-clipper": { clipperSnapshot: () => ({}) },
-    "./ai-subsystem": { isAICommand: () => false },
     "./note-navigation": { captureDiagnosticError() {} },
     "./error-messages": { presentError: (error: any) => error }
   }
@@ -240,19 +239,13 @@ test("答案窗口恢复已选序号，保留全部候选，切题不会把旧�
 })
 
 
-test("场景与手写总开关默认关闭，持久化且不覆盖其他设置，非法值不改变开关", () => {
+test("忽略旧场景开关并保留其他个人设置", () => {
   const store = storage()
   const modules = { marginnote: store, "./mistake-review-settings": { normalizeMistakeReviewCurves: (v: any) => v ?? {} } }
   let api = moduleAt("src/settings.ts", modules)
-  assert.equal(api.loadMatcherSettings().sceneWorkbenchEnabled, false)
   api.saveMatcherSettings({ sceneWorkbenchEnabled: true, mistakeListDisplay: "autoHide" })
   api = moduleAt("src/settings.ts", modules)
-  assert.equal(api.loadMatcherSettings().sceneWorkbenchEnabled, true)
-  api.saveMatcherSettings({ sceneWorkbenchEnabled: "false" })
-  assert.equal(api.loadMatcherSettings().sceneWorkbenchEnabled, true)
-  api.saveMatcherSettings({ sceneWorkbenchEnabled: false })
-  api = moduleAt("src/settings.ts", modules)
-  assert.equal(api.loadMatcherSettings().sceneWorkbenchEnabled, false)
+  assert.equal("sceneWorkbenchEnabled" in api.loadMatcherSettings(), false)
   assert.equal(api.loadMatcherSettings().mistakeListDisplay, "autoHide")
 })
 

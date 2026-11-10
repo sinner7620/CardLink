@@ -61,6 +61,7 @@ var __MNAM_WEB_ADDON_GLOBAL__ = (function () {
 
     methods.controllerWillLayoutSubviews = function (controller) {
       if (controller === Application.sharedInstance().studyController(self.window)) {
+        __MNAM_SCENE_WORKBENCH_GLOBAL__.syncMode(self);
         __MNAM_WEB_PANEL_GLOBAL__.ensureLayout(self.webController);
         call(core.instanceMethods, "ensureMnutilsEntrance");
       }

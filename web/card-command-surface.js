@@ -1,4 +1,4 @@
-import { createSceneTransport } from './src/lib/sceneTransport.js';
+import { createSceneCommandTransport } from './src/lib/sceneTransport.js';
 
 // A visible command host in the existing documented mini panel, not a hidden worker.
 window.CardLinkCommandSurface = {
@@ -32,7 +32,7 @@ window.CardLinkCommandSurface = {
       try {
         await ready;
         await sdk.call('sceneCommandReady', {});
-        transport ||= createSceneTransport(sdk, window, window.fetch.bind(window), window.CardLinkHostPolicy, null, 'card-menu-',
+        transport ||= createSceneCommandTransport(sdk, window, window.fetch.bind(window), window.CardLinkHostPolicy, 'card-menu-',
           (command, target) => command === 'cardMenuCommand' && target?.id === 'markMistake' ? null : 60000);
         await transport.send('cardMenuCommand', payload);
       } catch (error) { show(error.message || String(error), true); throw error; }

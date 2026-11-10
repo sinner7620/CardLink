@@ -1,0 +1,12 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "jsPlugins": ["@shadcn/lint"],
+  "categories": {
+    "correctness": "off"
+  },
+  "rules": {},
+  "ignorePatterns": [
+    "web/vendor/",
+    "web/src/vendor/"
+  ]
+}

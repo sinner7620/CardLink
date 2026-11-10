@@ -1,0 +1,8 @@
+
+@layer mn-ui-priority {
+.exportSelect{position:relative;min-width:0;width:100%}
+.exportSelectTrigger{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:36px;padding:8px 10px;border:1px solid #d9dee8;border-radius:8px;background:#fff;color:#334155;font:inherit;text-align:left;cursor:pointer}
+.exportSelectMenu{position:absolute;top:100%;left:0;min-width:100%;max-height:260px;overflow:auto;z-index:80;background:#fff;border:1px solid #d9dee8;border-radius:8px;padding:4px;box-shadow:0 10px 30px #17203326}
+.exportSelectMenu button{display:block;width:100%;padding:9px 10px;border:0;border-radius:5px;background:transparent;color:#334155;white-space:nowrap;text-align:left;font:inherit;cursor:pointer}
+.exportSelectMenu button[aria-selected=true],.exportSelectMenu button:hover{background:#eef4ff;color:#2563eb}
+}

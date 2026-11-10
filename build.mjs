@@ -120,6 +120,10 @@ for (const [source, name] of [
   await copyFile(source, path.join(vendorRoot, name))
 }
 
+// Keep KaTeX layout rules and let the WebView use its system font fallback.
+const katexCss = await readFile(path.join(root, "node_modules", "katex", "dist", "katex.min.css"), "utf8")
+await writeFile(path.join(vendorRoot, "katex.min.css"), katexCss.replace(/@font-face\s*\{[^{}]*\}/g, ""))
+
 // The local demo consumes the exact web-dist bundle shipped by the plugin.
 // Refresh its source-linked HTML on every complete build as one artifact set.
 await import("./scripts/build-full-ui-preview.mjs")

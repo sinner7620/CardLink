@@ -1,5 +1,6 @@
 import { drawingSvgDataUri } from "./pkdrawing-svg"
 import { imageExtensionFromSource } from "./base64"
+import { escapeHtml } from "./html-utils"
 
 function decodeEntities(value: string): string {
   const named: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " }
@@ -22,13 +23,20 @@ function text(value: string): string {
   return decodeEntities(value.replace(/<[^>]+>/g, "")).replace(/[ \t]+\n/g, "\n").replace(/\n[ \t]+/g, "\n").trim()
 }
 
-export function cardHtmlToMarkdown(documentHtml: string, headingBase = 4): string {
+export function cardHtmlToMarkdown(documentHtml: string, headingBase = 4, imageWidth?: (source: string) => number | undefined): string {
+  const sizedImages: string[] = []
   let html = String(documentHtml || "")
   const body = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i)
   if (body) html = body[1]
   html = html.replace(/<script[\s\S]*?<\/script>/gi, "")
   html = html.replace(/<style[\s\S]*?<\/style>/gi, "")
   html = html.replace(/<div[^>]*class=["'][^"']*eyebrow[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, "")
+  html = html.replace(/<math\b([^>]*)>([\s\S]*?)<\/math>/gi, (_, attrs: string, content: string) => {
+    const tex = content.match(/<annotation\b[^>]*encoding=["']application\/x-tex["'][^>]*>([\s\S]*?)<\/annotation>/i)
+    if (!tex) return `<math${attrs}>${content}</math>`
+    const delimiter = /display=["']block["']/i.test(attrs) ? "$$" : "$"
+    return `${delimiter}${decodeEntities(tex[1])}${delimiter}`
+  })
   html = html.replace(/<canvas\b[^>]*data-drawing=["'][^"']+["'][^>]*><\/canvas>/gi, tag => {
     try {
       return `\n\n![手写内容](${drawingSvgDataUri(attribute(tag, "data-drawing"))})\n\n`
@@ -40,6 +48,12 @@ export function cardHtmlToMarkdown(documentHtml: string, headingBase = 4): strin
     const source = attribute(tag, "src")
     const alt = text(attribute(tag, "alt")) || "卡片图片"
     const mediaId = attribute(tag, "data-media-id")
+    const width = imageWidth?.(source)
+    if (source && width) {
+      const target = mediaId ? `mnmedia://${imageExtensionFromSource(source)}/${mediaId}` : source
+      const index = sizedImages.push(`<img src="${escapeHtml(target)}" alt="${escapeHtml(alt)}" width="${width}" style="max-width:100%;height:auto" />`) - 1
+      return `\n\nCARDLINKSIZEDIMAGE${index}TOKEN\n\n`
+    }
     if (mediaId) return `\n\n![${alt}](mnmedia://${imageExtensionFromSource(source)}/${mediaId})\n\n`
     return source ? `\n\n![${alt}](${source})\n\n` : ""
   })
@@ -52,5 +66,5 @@ export function cardHtmlToMarkdown(documentHtml: string, headingBase = 4): strin
   html = html.replace(/<\/(p|div|figure|section|article|ul|ol)>/gi, "\n\n")
   html = html.replace(/<(p|div|figure|section|article|ul|ol)\b[^>]*>/gi, "\n")
   html = text(html)
-  return `${html.replace(/\n{3,}/g, "\n\n").trim()}\n`
+  return `${html.replace(/\n{3,}/g, "\n\n").trim().replace(/CARDLINKSIZEDIMAGE(\d+)TOKEN/g, (_, index) => sizedImages[Number(index)])}\n`
 }

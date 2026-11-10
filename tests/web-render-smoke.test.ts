@@ -11,6 +11,7 @@ import { execFileSync } from "node:child_process"
 import { createRequire } from "node:module"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { renderOCRMarkdownPreview } from "../src/markdown"
 
 // 项目未装 @types/react（面板源码为 jsx），测试侧用 any 化的运行时引用即可
 const require = createRequire(import.meta.url)
@@ -37,6 +38,18 @@ const ui = require(join(projectRoot, "output/web-smoke.cjs")) as Record<string, 
 
 const noop = () => {}
 const asyncNoop = () => Promise.resolve({})
+
+test("打开 OCR 数据库时渲染概览", () => {
+  const html = renderToString(React.createElement(ui.OCRDatabase, {
+    sourceRevision: 0,
+    onBack: noop,
+    onQueueActive: noop,
+    onIndexed: noop,
+    onPreferencesChanged: noop
+  }))
+  assert.match(html, /<h1>OCR 数据库<\/h1>/)
+  assert.match(html, /数据库概览/)
+})
 const REVIEW_CURVES_ARRAY = [[1, 3, 7], [2, 5, 10], [14]]
 // 面板侧历史上的白屏正是把对象形态的 REVIEW_CURVES 当数组用；两条形态都要能渲染。
 const REVIEW_CURVES_OBJECT = { 0: [1, 3, 7], 1: [2, 5, 10], 2: [14] } as unknown as number[][]
@@ -54,10 +67,17 @@ test('复测时间轴显示保存的错因，自定义标签按文本转义，�
 })
 
 test("OCR 结果 Markdown 含图片和链接时可安全渲染", () => {
-  assert.doesNotThrow(() => ui.renderMarkdownPreview("# 原题\n![电路图](assets/q1.png)\n[参考链接](https://example.com)"))
-  const html = ui.renderMarkdownPreview("![电路图](assets/q1.png) 与 [参考链接](https://example.com)")
+  const html = renderOCRMarkdownPreview("![电路图](assets/q1.png) 与 [参考链接](https://example.com) <img src=x onerror=alert(1)>")
   assert.match(html, /\[图片：电路图\]/)
   assert.match(html, /参考链接/)
+  assert.doesNotMatch(html, /<img\b|<a\b/)
+})
+
+test("OCR 题干的行内公式与独立公式渲染为 MathML", () => {
+  const html = renderOCRMarkdownPreview("设 $A$ 为 3 阶矩阵，若 $|E-A|=|E+A|=1$。\n\n$$|3E-A|=2$$")
+  assert.equal(html.match(/<math\b/g)?.length, 3)
+  assert.match(html, /<math[^>]*display="block"/)
+  assert.doesNotMatch(html, /\$A\$/)
 })
 
 function record(overrides: Record<string, unknown> = {}) {
@@ -145,6 +165,9 @@ test("错题本浏览页签渲染列表", () => {
   }))
   assert.match(html, /第 1 题/)
   assert.match(html, /第 2 题/)
+  const controls = [...html.matchAll(/aria-label="(进入多选|搜索错题|筛选|排序)"/g)].map(match => match[1])
+  assert.deepEqual(controls, ["搜索错题", "筛选", "排序", "进入多选"])
+  assert.doesNotMatch(html, /filterCollapseButton|filterSelectors|class="filterCount"|共\d+道/)
 })
 
 test("到期复习页签渲染队列与复测按钮", () => {
@@ -220,9 +243,9 @@ test("导出页签渲染题目筛选与页面设置", () => {
   assert.match(html, /设置文件/)
   assert.match(html, /每页题目密度/)
   assert.match(html, /答案位置/)
-  assert.match(html, /更多筛选与排序/)
+  assert.match(html, /导出顺序/)
   assert.match(html, /快速预览/)
-  assert.match(html, /请选择脑图/)
+  assert.match(html, /脑图/)
   assert.match(html, /请选择至少一个学习集 \/ 脑图/)
   assert.doesNotMatch(html, /错题本筛选结果/)
   assert.doesNotMatch(html, /手动选择题目|基础范围|每组题目后/)
@@ -234,8 +257,8 @@ test("导出页签渲染题目筛选与页面设置", () => {
     action: actionStub,
     onBack: noop,
   }))
-  assert.match(selectedHtml, /筛选得到 1 道可用错题/)
-  assert.doesNotMatch(selectedHtml, /筛选得到 2 道可用错题/)
+  assert.match(selectedHtml, /<strong>1<\/strong> 道可用错题符合条件/)
+  assert.doesNotMatch(selectedHtml, /<strong>2<\/strong> 道可用错题符合条件/)
 })
 
 test("设置页核心组件：等级复习曲线引导在对象/数组两种形态下都不崩", () => {

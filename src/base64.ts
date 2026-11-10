@@ -91,3 +91,33 @@ export function imageExtensionFromSource(source: string): string {
   const mime = imageMimeFromBase64(base64, fallback)
   return mime === "image/jpeg" ? "jpg" : mime === "image/gif" ? "gif" : mime === "image/webp" ? "webp" : "png"
 }
+
+/** 图片头中的像素宽度；只读头信息，不重采样原始素材。 */
+export function imagePixelWidth(source: string): number | undefined {
+  if (!/^data:image\//i.test(source)) return undefined
+  const value = source.slice(source.indexOf(",") + 1).replace(/\s/g, "")
+  try {
+    const head = decodeBase64Bytes(value.slice(0, 32))
+    if (head[0] === 137 && head[1] === 80 && head.length >= 24) {
+      const width = head[16] * 16777216 + head[17] * 65536 + head[18] * 256 + head[19]
+      return width > 0 ? width : undefined
+    }
+    if (head[0] === 71 && head[1] === 73 && head[2] === 70) return head[6] + head[7] * 256 || undefined
+    if (head[0] !== 255 || head[1] !== 216) return undefined
+    const bytes = decodeBase64Bytes(value)
+    for (let offset = 2; offset + 3 < bytes.length;) {
+      if (bytes[offset++] !== 255) continue
+      while (bytes[offset] === 255) offset++
+      const marker = bytes[offset++]
+      if (marker === 218 || marker === 217) break
+      if (marker === 1 || marker >= 208 && marker <= 216) continue
+      const length = bytes[offset] * 256 + bytes[offset + 1]
+      if (length < 2 || offset + length > bytes.length) break
+      if (marker >= 192 && marker <= 207 && ![196, 200, 204].includes(marker)) {
+        return bytes[offset + 5] * 256 + bytes[offset + 6] || undefined
+      }
+      offset += length
+    }
+  } catch { /* 无法读取头信息时保留原图片尺寸。 */ }
+  return undefined
+}

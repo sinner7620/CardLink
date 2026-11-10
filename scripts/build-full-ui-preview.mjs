@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
+import { build } from "esbuild"
 
 const root = process.cwd()
 const pkg = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"))
@@ -40,11 +41,22 @@ const html = `<!doctype html>
       patch();
     })();
   </script>
+  <script src="./ocr-renderer.js"></script>
   <script src="../web-dist/app.js"></script>
 </body>
 </html>
 `
 
 await mkdir(outputDir, { recursive: true })
+await build({
+  stdin: {
+    contents: 'import { renderOCRMarkdownPreview } from "./src/markdown"; window.__MN_PREVIEW_RENDER_OCR__ = renderOCRMarkdownPreview;',
+    resolveDir: root
+  },
+  bundle: true,
+  minify: true,
+  target: "safari13",
+  outfile: path.join(outputDir, "ocr-renderer.js")
+})
 await writeFile(output, html)
 console.log(output)

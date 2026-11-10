@@ -1,6 +1,13 @@
 var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
   var PDF_RENDER_TIMEOUT = 20;
 
+  function tracePdf(controller, stage, message) {
+    try {
+      var pending = __MN_ANSWER_CORE_GLOBAL__.bridge("pdfExportStage", { stage: stage, taskId: controller.exportPdfTask && controller.exportPdfTask.id, message: message || "" });
+      if (pending && typeof pending.catch === "function") pending.catch(function () {});
+    } catch (error) {}
+  }
+
   function clearPdfRenderTimer(controller) {
     if (!controller || !controller.exportPdfRenderTimer) return;
     try { controller.exportPdfRenderTimer.invalidate(); } catch (error) {}
@@ -13,13 +20,26 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
     controller.exportPdfCleanupTimer = null;
   }
 
+  function cleanupPdfSource(result) {
+    if (!result || !result.pdfSourceDirectory) return;
+    // Only the task-owned directory returned by the core; never derive paths from a filename.
+    try { NSFileManager.defaultManager().removeItemAtPath(result.pdfSourceDirectory); } catch (error) {}
+    result.pdfSourceDirectory = null;
+  }
+
   function releasePdfRequest(controller) {
     if (!controller) return;
     clearPdfRenderTimer(controller);
     clearPdfCleanupTimer(controller);
+    cleanupPdfSource(controller.exportPdfRequest && controller.exportPdfRequest.result);
     if (controller.exportWebView) {
+      try { controller.exportWebView.evaluateJavaScript("window.__MN_PDF_EXPORT_RELEASE__&&window.__MN_PDF_EXPORT_RELEASE__()", function () {}); } catch (error) {}
       controller.exportWebView.delegate = null;
       try { if (controller.exportWebView.superview) controller.exportWebView.removeFromSuperview(); } catch (error) {}
+    }
+    if (controller.exportPdfRenderDirectory) {
+      try { NSFileManager.defaultManager().removeItemAtPath(controller.exportPdfRenderDirectory); } catch (error) {}
+      controller.exportPdfRenderDirectory = null;
     }
     controller.exportWebView = null;
     controller.exportPdfRequest = null;
@@ -33,27 +53,10 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
     request.reject(error instanceof Error ? error : new Error(String(error)));
   }
 
-  function pdfReadinessScript() {
-    return '<script>(function(){' +
-      'window.__MN_PDF_EXPORT_PROTOCOL_V2__=true;' +
-      'var started=false,notified=false,readyTimer=null;' +
-      'function signal(name,message){if(notified)return;notified=true;if(readyTimer)clearTimeout(readyTimer);window.location.href="mnaddon://"+name+(message?"?message="+encodeURIComponent(message):"")}' +
-      'function markBrokenImage(image){try{var holder=document.createElement("div");holder.setAttribute("data-pdf-image-error","true");holder.textContent="图片加载失败，原位置已保留";holder.style.cssText="min-height:48px;padding:14px;border:1px dashed #cbd5e1;border-radius:6px;background:#f8fafc;color:#64748b;text-align:center;font-size:11px";image.style.display="none";if(image.parentNode)image.parentNode.insertBefore(holder,image.nextSibling)}catch(error){}}' +
-      'function waitForImages(){return new Promise(function(resolve){var images=Array.prototype.slice.call(document.images||[]),remaining=images.length,failed=0,settled=false;if(!remaining){resolve(0);return}function finish(){if(settled)return;settled=true;clearTimeout(timer);resolve(failed)}function done(ok,image){if(settled||image.__mnPdfImageSettled)return;image.__mnPdfImageSettled=true;if(!ok){failed+=1;markBrokenImage(image)}remaining-=1;if(!remaining)finish()}var timer=setTimeout(function(){images.forEach(function(image){if(!image.__mnPdfImageSettled){image.__mnPdfImageSettled=true;failed+=1;markBrokenImage(image)}});finish()},5000);images.forEach(function(image){if(image.complete){done(image.naturalWidth!==0,image);return}function loaded(){cleanup();done(true,image)}function broken(){cleanup();done(false,image)}function cleanup(){image.removeEventListener("load",loaded);image.removeEventListener("error",broken)}image.addEventListener("load",loaded);image.addEventListener("error",broken)})})}' +
-      'function waitForFonts(){return new Promise(function(resolve){var settled=false,timer=setTimeout(done,3000);function done(){if(settled)return;settled=true;clearTimeout(timer);resolve()}var fonts=document.fonts&&document.fonts.ready;if(fonts&&typeof fonts.then==="function")fonts.then(done,done);else done()})}' +
-      'function canvasFingerprint(canvas){try{var data=canvas.toDataURL("image/png"),hash=0,step=Math.max(1,Math.floor(data.length/64));for(var i=0;i<data.length;i+=step)hash=((hash<<5)-hash+data.charCodeAt(i))|0;return canvas.width+"x"+canvas.height+":"+data.length+":"+hash}catch(error){return canvas.width+"x"+canvas.height+":unavailable"}}' +
-      'function layoutSignature(){var root=document.documentElement,body=document.body,canvases=Array.prototype.slice.call(document.querySelectorAll("canvas")).map(canvasFingerprint).join(","),images=Array.prototype.slice.call(document.images||[]).map(function(image){return image.complete+":"+image.naturalWidth+"x"+image.naturalHeight}).join(",");return Math.max(root.scrollWidth,body.scrollWidth)+"x"+Math.max(root.scrollHeight,body.scrollHeight)+"|"+document.querySelectorAll("*").length+"|"+images+"|"+canvases}' +
-      'function waitForStableRender(){return new Promise(function(resolve,reject){var deadline=Date.now()+10000,notBefore=Date.now()+600,previous="",stable=0;function sample(){requestAnimationFrame(function(){var current=layoutSignature();stable=current===previous?stable+1:0;previous=current;if(Date.now()>=notBefore&&stable>=3){resolve();return}if(Date.now()>deadline){reject(new Error("页面内容在限定时间内未稳定"));return}setTimeout(sample,120)})}sample()})}' +
-      'function waitForFrames(count){return new Promise(function(resolve){function next(){if(count--<=0){resolve();return}requestAnimationFrame(next)}next()})}' +
-      'window.__MN_PDF_EXPORT_BEGIN__=function(){if(started)return;started=true;readyTimer=setTimeout(function(){signal("pdf-render-ready")},9000);Promise.all([waitForFonts(),waitForImages()]).then(function(){return waitForStableRender()}).then(function(){return waitForFrames(2)}).then(function(){signal("pdf-render-ready")}).catch(function(error){signal("pdf-render-error",error&&error.message?error.message:String(error))})}' +
-      '})();<\/script>';
-  }
-
   function preparePdfHtml(html, previewMode) {
     var source = String(html || "");
     if (source.indexOf("__MN_PDF_FILE_FALLBACK__") >= 0) return source;
-    var script = (previewMode ? '<script>window.__MN_PDF_PREVIEW_MODE__=true;</script>' : "") +
-      (source.indexOf("__MN_PDF_EXPORT_PROTOCOL_V2__") >= 0 ? "" : pdfReadinessScript()) +
+    var script = '<link rel="stylesheet" href="./katex.min.css">' + (previewMode ? '<script>window.__MN_PDF_PREVIEW_MODE__=true;</script>' : "") +
       '<script src="./html2canvas.min.js"></script>' +
       '<script src="./jspdf.umd.min.js"></script>' +
       '<script src="./pdf-export-runtime.js"></script>';
@@ -100,17 +103,18 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
     return directory;
   }
 
-  function stagePdfRenderPage(controller, html, previewMode) {
+  function stagePdfRenderPage(controller, html, previewMode, assets) {
     var app = Application.sharedInstance();
     var root = ensureCardLinkTempRoot(app);
     var manager = NSFileManager.defaultManager();
     cleanupPdfArtifacts(root, manager);
-    var directory = String(root).replace(/\/$/, "") + "/pdf-runtime";
+    var directory = String(root).replace(/\/$/, "") + "/pdf-runtime/" + controller.exportPdfTask.id;
+    controller.exportPdfRenderDirectory = directory;
     if (!manager.fileExistsAtPath(directory) &&
         !manager.createDirectoryAtPathWithIntermediateDirectoriesAttributes(directory, true, null)) {
       throw new Error("PDF 临时目录创建失败");
     }
-    ["html2canvas.min.js", "jspdf.umd.min.js", "pdf-export-runtime.js"].forEach(function (name) {
+    ["html2canvas.min.js", "jspdf.umd.min.js", "pdf-export-runtime.js", "katex.min.css"].forEach(function (name) {
       var destination = directory + "/" + name;
       var source = String(controller.mainPath || "") + "/web-dist/vendor/" + name;
       if (!manager.fileExistsAtPath(source)) throw new Error("PDF 兼容资源不存在：" + name);
@@ -120,12 +124,21 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
       manager.copyItemAtPathToPath(source, destination);
       if (!manager.fileExistsAtPath(destination)) throw new Error("PDF 兼容资源复制失败：" + name);
     });
+    (assets || []).forEach(function (asset) {
+      if (!/^(image|drawing|unit)-\d+\.js$/.test(asset.name)) throw new Error("PDF 图片资源名称无效");
+      var destination = directory + "/" + asset.name;
+      if (!manager.fileExistsAtPath(asset.path)) throw new Error("PDF 图片资源不存在：" + asset.name);
+      manager.copyItemAtPathToPath(asset.path, destination);
+      if (!manager.fileExistsAtPath(destination)) throw new Error("PDF 图片资源复制失败：" + asset.name);
+    });
     var pagePath = directory + "/render.html";
     var data = NSData.dataWithStringEncoding(preparePdfHtml(html, previewMode), 4);
     if (!data || !dataLength(data) || !data.writeToFileAtomically(pagePath, true)) {
       throw new Error("PDF 渲染页面写入失败");
     }
+    cleanupPdfSource(controller.exportPdfRequest && controller.exportPdfRequest.result);
     controller.exportPdfRenderHtmlPath = pagePath;
+    tracePdf(controller, "html.staged", "assets=" + (assets || []).length + " chars=" + html.length);
     return pagePath;
   }
 
@@ -173,9 +186,13 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
     var request = controller && controller.exportPdfRequest;
     if (!request || webView !== controller.exportWebView) return;
     try {
-      var base64 = chunks.join("");
-      if (base64.length !== Number(info.base64Length)) throw new Error("PDF 数据接收不完整");
-      var data = decodePdfBase64(base64);
+      var binary = chunks.join("");
+      chunks.length = 0;
+      if (binary.length !== Number(info.byteLength) || info.receivedBase64Length !== Number(info.base64Length)) throw new Error("PDF 数据接收不完整");
+      if (binary.slice(0, 5) !== "%PDF-" || !/%%EOF\s*$/.test(binary.slice(-1024))) throw new Error("PDF 文件结构不完整");
+      var data = NSData.dataWithStringEncoding(binary, 5);
+      binary = null;
+      if (dataLength(data) !== Number(info.byteLength)) throw new Error("PDF 字节数校验失败");
       if (controller.exportPdfTask) controller.exportPdfTask.progress = 92;
       var app = Application.sharedInstance();
       var root = ensureCardLinkTempRoot(app);
@@ -184,11 +201,11 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
         var previewPath = cacheDirectory + "/preview.pdf";
         if (!data.writeToFileAtomically(previewPath, true)) throw new Error("PDF 预览文件写入失败");
         var previewUrl = String(NSURL.fileURLWithPath(previewPath).absoluteString()) + "?t=" + Date.now();
-        var previewResult = { preview: true, pdfPreview: true, format: "pdf", pdfUrl: previewUrl, previewPages: previewPages || [], count: request.result.count, pages: Number(info.pages) || 0, bytes: dataLength(data) };
+        var previewResult = { preview: true, pdfPreview: true, format: "pdf", pdfUrl: previewUrl, previewPages: previewPages || [], count: request.result.count, previewCount: request.result.previewCount, truncated: request.result.truncated === true, missing: request.result.missing || 0, pages: Number(info.pages) || 0, bytes: dataLength(data) };
         // The page images already carry everything the UI shows; returning the
         // full export HTML too would push a multi-megabyte response through the
         // bridge for nothing. Keep it only as the no-pages fallback.
-        if (!previewPages || !previewPages.length) previewResult.html = request.result.html;
+
         releasePdfRequest(controller);
         request.resolve(previewResult);
         return;
@@ -209,7 +226,7 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
       try { webView.evaluateJavaScript("window.__MN_PDF_EXPORT_RELEASE__&&window.__MN_PDF_EXPORT_RELEASE__()", function () {}); } catch (error) {}
       app.saveFileWithUti(path, "com.adobe.pdf");
       releasePdfRequest(controller);
-      request.resolve({ saved: true, pdfGenerated: true, format: "pdf", filename: filename, count: request.result.count, pages: Number(info.pages) || 0, bytes: dataLength(data) });
+      request.resolve({ savePanelOpened: true, pdfGenerated: true, format: "pdf", filename: filename, count: request.result.count, pages: Number(info.pages) || 0, bytes: dataLength(data) });
     } catch (error) {
       rejectPdfRequest(controller, error);
     }
@@ -221,16 +238,20 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
     webView.evaluateJavaScript("JSON.stringify(window.__MN_PDF_EXPORT_INFO__||null)", function (rawInfo) {
       var info;
       try { info = JSON.parse(String(rawInfo || "null")); } catch (error) {}
-      if (!info || !Number(info.chunks) || Number(info.chunks) > 4096 || Number(info.base64Length) > 150 * 1024 * 1024) {
+      if (!info || Number(info.chunkSize) !== 65536 || !Number(info.byteLength) || !Number(info.pages) || !Number(info.chunks) || Number(info.chunks) > 4096 || Number(info.base64Length) > 150 * 1024 * 1024) {
         rejectPdfRequest(controller, new Error("PDF 分块信息无效或文件过大"));
         return;
       }
       var chunks = [];
+      info.receivedBase64Length = 0;
       function pull(index) {
         if (!controller.exportPdfRequest || webView !== controller.exportWebView) return;
         if (index >= Number(info.chunks)) {
-          if (controller.exportPdfRequest.result.renderPdfPreview) pullPdfPreviewPages(controller, webView, info, chunks);
-          else saveGeneratedPdf(controller, webView, info, chunks, []);
+          webView.evaluateJavaScript("window.__MN_PDF_EXPORT_RELEASE_DATA__&&window.__MN_PDF_EXPORT_RELEASE_DATA__()", function () {
+            if (!controller.exportPdfRequest || webView !== controller.exportWebView) return;
+            if (controller.exportPdfRequest.result.renderPdfPreview) pullPdfPreviewPages(controller, webView, info, chunks);
+            else saveGeneratedPdf(controller, webView, info, chunks, []);
+          });
           return;
         }
         if (controller.exportPdfTask) controller.exportPdfTask.progress = Math.min(90, 68 + Math.round(index / Number(info.chunks) * 22));
@@ -241,7 +262,11 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
             rejectPdfRequest(controller, new Error("PDF 数据第 " + (index + 1) + " 块读取失败"));
             return;
           }
-          chunks.push(text);
+          var expectedLength = Math.min(Number(info.chunkSize), Number(info.base64Length) - index * Number(info.chunkSize));
+          if (text.length !== expectedLength) { rejectPdfRequest(controller, new Error("PDF 分块长度不匹配")); return; }
+          try { chunks.push(decodeBase64ToBinaryString(text)); }
+          catch (error) { rejectPdfRequest(controller, error); return; }
+          info.receivedBase64Length += text.length;
           pull(index + 1);
         });
       }
@@ -309,7 +334,8 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
 
   function beginPdfFileGeneration(controller, webView) {
     if (!controller || webView !== controller.exportWebView || !controller.exportPdfRequest) return;
-    if (controller.exportPdfTask) controller.exportPdfTask.progress = 42;
+    if (controller.exportPdfTask) controller.exportPdfTask.progress = 36;
+    tracePdf(controller, "raster.begin");
     webView.evaluateJavaScript("window.__MN_PDF_FILE_FALLBACK__&&window.__MN_PDF_FILE_FALLBACK_BEGIN__?window.__MN_PDF_FILE_FALLBACK_BEGIN__():'missing-pdf-generator'", function (value) {
       if (String(value) === "missing-pdf-generator") {
         rejectPdfRequest(controller, new Error("PDF 生成模块未能加载"));
@@ -321,7 +347,8 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
     if (!controller || webView !== controller.exportWebView || !controller.exportPdfRequest) return;
     if (controller.exportPdfRenderStarted) return;
     controller.exportPdfRenderStarted = true;
-    if (controller.exportPdfTask) controller.exportPdfTask.progress = 18;
+    if (controller.exportPdfTask) controller.exportPdfTask.progress = 34;
+    tracePdf(controller, "ready.begin");
     try {
       webView.evaluateJavaScript("window.__MN_PDF_EXPORT_PROTOCOL_V2__&&window.__MN_PDF_EXPORT_BEGIN__?window.__MN_PDF_EXPORT_BEGIN__():'missing-v2'", function (value) {
         if (String(value) === "missing-v2") {
@@ -347,6 +374,25 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
     pullPdfChunks(controller, webView);
   }
 
+  function pdfProgress(controller, webView, url) {
+    if (webView !== controller.exportWebView || !controller.exportPdfRequest) return;
+    var task = controller.exportPdfTask;
+    if (!task || task.cancelled) return;
+    var match = String(url).match(/stage=(sizing|planning|rendering|serializing)&completed=(\d+)&total=(\d+)&pages=(\d+)/);
+    if (!match) return;
+    task.stage = match[1];
+    task.completed = Number(match[2]); task.total = Number(match[3]);
+    task.pages = Number(match[4]);
+    if (task.stage === "planning") task.progress = 36 + Math.floor(12 * task.completed / Math.max(1, task.total));
+    if (task.stage === "rendering") task.progress = 48 + Math.floor(19 * task.completed / Math.max(1, task.total));
+    if (task.stage === "serializing") task.progress = 67;
+    tracePdf(controller, task.stage, task.completed + "/" + task.total + " pages=" + task.pages);
+    clearPdfRenderTimer(controller);
+    controller.exportPdfRenderTimer = NSTimer.scheduledTimerWithTimeInterval(120, false, function () {
+      if (controller.exportPdfTask === task) rejectPdfRequest(controller, new Error("PDF " + task.stage + " 阶段无进展，请查看诊断日志"));
+    });
+  }
+
   function startPdfTransferTimer(controller) {
     clearPdfRenderTimer(controller);
     controller.exportPdfRenderTimer = NSTimer.scheduledTimerWithTimeInterval(120, false, function () {
@@ -356,27 +402,29 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
 
   function pdfRenderError(controller, webView, message) {
     if (!controller || webView !== controller.exportWebView || !controller.exportPdfRequest) return;
+    tracePdf(controller, "render.error", message);
     rejectPdfRequest(controller, new Error("PDF 页面渲染失败：" + (message || "未知错误")));
   }
 
-  function renderPdf(context, result) {
+  function renderPdf(context, result, preparationTask) {
     if (!result || (!result.renderPdf && !result.renderPdfPreview)) return result;
     var isPreview = result.renderPdfPreview === true;
     return new Promise(function (resolve, reject) {
       var controller = context.controller;
-      var active = controller.exportPdfTask;
-      if (active && active.preview && (active.status === "rendering" || active.status === "saving")) {
+      if (preparationTask && (preparationTask.cancelled || controller.exportPdfTask !== preparationTask)) { resolve({ cancelled: true }); return; }
+      var active = preparationTask ? null : controller.exportPdfTask;
+      if (active && active.preview && (active.status === "preparing" || active.status === "rendering" || active.status === "saving")) {
         // 兼容旧版本残留的预览幽灵任务：预览不轮询、不可能真在进行中，直接丢弃
         releasePdfRequest(controller);
         controller.exportPdfTask = null;
         active = null;
       }
-      if (active && (active.status === "rendering" || active.status === "saving")) {
+      if (active && (active.status === "preparing" || active.status === "rendering" || active.status === "saving")) {
         // 预览与正式导出共用任务槽：任何方向有活动任务都拒绝新的，防止 WebView 串线
         reject(new Error("已有 PDF 导出任务进行中，请等待完成或取消"));
         return;
       }
-      var task = {
+      var task = preparationTask || {
         id: "pdf-" + Date.now().toString(36),
         status: "rendering",
         preview: isPreview,
@@ -388,6 +436,10 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
         cancelled: false,
         error: undefined
       };
+      task.status = "rendering";
+      task.progress = 32;
+      task.count = Number(result.count) || 0;
+      task.filename = String(result.filename || "");
       controller.exportPdfTask = task;
       controller.exportPdfRequest = {
         result: result,
@@ -399,9 +451,9 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
             return;
           }
           // 任务式：导出完成后状态落账（保存面板已由 completePdfExport 打开）
-          task.status = task.cancelled ? "cancelled" : "saved";
+          task.status = task.cancelled ? "cancelled" : "generated";
           task.progress = task.cancelled ? task.progress : 100;
-          task.saved = !task.cancelled;
+          task.saved = false;
           task.pages = Number(value && value.pages) || task.pages;
         },
         reject: function (error) {
@@ -421,8 +473,9 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
         controller.exportWebView.delegate = controller;
         var study = Application.sharedInstance().studyController(context.addon.window);
         study.view.addSubview(controller.exportWebView);
-        var entry = NSURL.fileURLWithPath(stagePdfRenderPage(controller, result.html, isPreview));
-        controller.exportWebView.loadRequest(NSURLRequest.requestWithURL(entry));
+        var entry = NSURL.fileURLWithPath(stagePdfRenderPage(controller, result.html, isPreview, result.pdfAssets));
+        result.html = "";
+      controller.exportWebView.loadRequest(NSURLRequest.requestWithURL(entry));
       } catch (error) {
         // 初始化失败同样要终账：释放 WebView、失效定时器、清空任务槽
         rejectPdfRequest(controller, error);
@@ -436,6 +489,12 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
   }
 
   function dispatch(context, command, payload) {
+    if (command === "clearLocalCache") {
+      var cacheTask = context.controller.exportPdfTask;
+      if (context.controller.exportPdfRequest || (cacheTask && ["preparing", "rendering", "saving"].indexOf(cacheTask.status) >= 0)) {
+        throw new Error("请等待 PDF 预览或导出完成后再清理缓存");
+      }
+    }
     if (command === "closePanel") {
       context.closePanel(context.controller);
       // 官方"工具栏与命令"要求：可见性状态变化后必须刷新，否则图标选中态与实际脱节
@@ -467,20 +526,63 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
     }
     if (command === "pdfTaskStatus") {
       var task = context.controller.exportPdfTask;
-      if (!task) return { exists: false, status: "idle" };
-      return { exists: true, id: task.id, status: task.status, progress: task.progress, pages: task.pages, saved: task.saved, error: task.error, filename: task.filename, preview: task.preview };
+      if (!task || (payload && payload.id && payload.id !== task.id)) return { exists: false, status: "idle" };
+      function taskStatus(progress) {
+        if (context.controller.exportPdfTask !== task) return { exists: false, status: "idle" };
+        if (task.status === "preparing" && progress && progress.total) task.progress = 6 + Math.floor(24 * progress.prepared / progress.total);
+        return { exists: true, id: task.id, status: task.status, progress: task.progress, pages: task.pages, stage: task.stage, completed: task.completed, total: task.total, snapshot: task.snapshot, saved: task.saved, error: task.error, filename: task.filename, preview: task.preview };
+      }
+      if (task.status === "preparing") {
+        var progress = __MN_ANSWER_CORE_GLOBAL__.bridge("mistakeExportPreparationStatus", {}, context.addon);
+        return progress && typeof progress.then === "function" ? progress.then(taskStatus) : taskStatus(progress);
+      }
+      return taskStatus();
     }
     if (command === "pdfTaskCancel") {
       var task = context.controller.exportPdfTask;
-      if (task && (task.status === "rendering" || task.status === "saving")) {
+      if (!task || !payload || payload.id !== task.id) return { cancelled: false, status: "stale" };
+      if (task.status === "preparing") __MN_ANSWER_CORE_GLOBAL__.bridge("cancelMistakeExportPreparation", {}, context.addon);
+      var cancellable = task.status === "preparing" || task.status === "rendering" || task.status === "saving";
+      if (cancellable) {
         task.cancelled = true;
         task.status = "cancelled";
+        var request = context.controller.exportPdfRequest;
         releasePdfRequest(context.controller);
+        if (request) request.reject(new Error("已取消导出"));
       }
-      return { cancelled: !!task, id: task && task.id, status: task ? task.status : "idle" };
+      return { cancelled: cancellable, id: task.id, status: task.status };
     }
     // 需要创建原生控件的命令必须拿到真正的 addon；WebPanelController 只负责
     // 桥接与窗口，不具备 addon 上注册的 selector。
+    if (command === "previewMistakeExport") {
+      var exporting = context.controller.exportPdfTask;
+      if (context.controller.exportPdfPreparing || (exporting && /^(preparing|rendering|saving)$/.test(exporting.status))) throw new Error("已有导出任务进行中");
+    }
+    if (command === "exportMistakes" && payload && payload.format === "pdf") {
+      var controller = context.controller;
+      var previous = controller.exportPdfTask;
+      if (controller.exportPdfPreparing || (previous && /^(preparing|rendering|saving)$/.test(previous.status))) throw new Error("已有导出任务进行中");
+      payload = JSON.parse(JSON.stringify(payload));
+      var preparation = { snapshot: payload, id: "pdf-" + Date.now().toString(36), status: "preparing", progress: 6, count: (payload.recordIds || []).length, filename: payload.filename, saved: false, cancelled: false };
+      controller.exportPdfTask = preparation;
+      controller.exportPdfPreparing = true;
+      NSTimer.scheduledTimerWithTimeInterval(0.01, false, function () {
+        if (preparation.cancelled) { controller.exportPdfPreparing = false; return; }
+        Promise.resolve().then(function () {
+          return __MN_ANSWER_CORE_GLOBAL__.bridge(command, payload, context.addon);
+        }).then(function (value) {
+          controller.exportPdfPreparing = false;
+          if (preparation.cancelled) { cleanupPdfSource(value); return; }
+          return renderPdf(context, value, preparation);
+        }).catch(function (error) {
+          controller.exportPdfPreparing = false;
+          if (preparation.cancelled) return;
+          preparation.status = "error";
+          preparation.error = error && error.message ? String(error.message) : String(error);
+        });
+      });
+      return { taskAccepted: true, taskId: preparation.id, status: preparation.status, progress: preparation.progress, count: preparation.count, snapshot: preparation.snapshot };
+    }
     var result = __MN_ANSWER_CORE_GLOBAL__.bridge(command, payload, context.addon);
     if (command !== "exportMistakes" && command !== "previewMistakeExport") return result;
     if (result && typeof result.then === "function") return result.then(function (value) { return renderPdf(context, value); });
@@ -493,6 +595,7 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
     completePdfExport: completePdfExport,
     pdfRenderReady: pdfRenderReady,
     pdfDataReady: pdfDataReady,
+    pdfProgress: pdfProgress,
     pdfRenderError: pdfRenderError
   };
 })();
