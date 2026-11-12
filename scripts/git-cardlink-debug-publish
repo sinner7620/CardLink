@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""Git subcommand: publish CardLink debug .mnaddon to the CardLink website.
+
+Uses only Python's standard library and the site's own upload API.
+Does not call git push, GitHub, or any third-party release API.
+"""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+import zipfile
+
+MAX_BYTES = 60 * 1024 * 1024
+
+
+def git(*args):
+    try:
+        return subprocess.check_output(['git', *args], stderr=subprocess.DEVNULL, text=True).strip()
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return ''
+
+
+def default_site():
+    return os.environ.get('CARDLINK_DEBUG_SITE') or git('config', '--get', 'cardlink.debugSite')
+
+
+def normalized_site(url):
+    parsed = urllib.parse.urlsplit(url.rstrip('/'))
+    local = parsed.hostname in {'localhost', '127.0.0.1', '::1'}
+    if parsed.scheme != 'https' and not (local and parsed.scheme == 'http'):
+        raise ValueError('必须使用 HTTPS 站点地址（本地 localhost 测试可以使用 HTTP）')
+    if not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError('站点地址必须是纯站点根 URL，不能带用户名、查询参数或片段')
+    if parsed.path not in ('', '/'):
+        raise ValueError('站点地址必须是根 URL，不要包含 /api/... 路径')
+    return f'{parsed.scheme}://{parsed.netloc}'
+
+
+def release_version(path):
+    stem = path.stem
+    match = re.fullmatch(r'CardLink[-_]?v?([A-Za-z0-9._+-]+)', stem, flags=re.IGNORECASE)
+    version = match.group(1) if match else stem
+    if not re.fullmatch(r'[A-Za-z0-9._+-]{1,64}', version):
+        raise ValueError('无法从安装包文件名推断安全的版本号，请用 --version 指定')
+    return version
+
+
+def check_archive(path):
+    if path.suffix.lower() != '.mnaddon':
+        raise ValueError('仅允许上传 .mnaddon 文件')
+    if not path.is_file():
+        raise ValueError(f'找不到安装包：{path}')
+    size = path.stat().st_size
+    if size < 64 or size > MAX_BYTES:
+        raise ValueError(f'安装包大小不符合要求（64 B–{MAX_BYTES} B）：{size} B')
+    try:
+        with zipfile.ZipFile(path) as zf:
+            if not zf.namelist():
+                raise ValueError('安装包 ZIP 内容为空')
+            bad = zf.testzip()
+            if bad is not None:
+                raise ValueError(f'安装包 ZIP 校验失败：{bad}')
+            if not any(name == 'mnaddon.json' or name.endswith('/mnaddon.json') for name in zf.namelist()):
+                raise ValueError('缺少 mnaddon.json，可能不是有效 MarginNote 安装包')
+    except zipfile.BadZipFile as exc:
+        raise ValueError('安装包不是有效 ZIP/.mnaddon 文件') from exc
+    return size
+
+
+def http_json(request, timeout):
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read()
+            payload = json.loads(raw.decode('utf-8'))
+            return response.status, payload
+    except urllib.error.HTTPError as exc:
+        payload = exc.read(4096).decode('utf-8', 'replace')
+        raise RuntimeError(f'服务器拒绝请求 HTTP {exc.code}: {payload[:400]}') from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f'无法连接网站：{exc.reason}') from exc
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError('网站返回了非 JSON 响应：检查是否已安装 /api/debug-release 接口') from exc
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog='git cardlink-debug-publish',
+        description='直接覆盖 CardLink 网站的调试 .mnaddon，不使用 GitHub。'
+    )
+    parser.add_argument('artifact', type=Path, help='已构建的 .mnaddon 安装包路径')
+    parser.add_argument('--site', default=default_site(), help='站点根 URL；默认读取 git config cardlink.debugSite')
+    parser.add_argument('--version', help='显示的调试版本号；默认从安装包文件名解析')
+    parser.add_argument('--dry-run', action='store_true', help='仅校验并显示发布计划，不上传')
+    parser.add_argument('--timeout', type=int, default=120, help='HTTP 超时秒数，默认 120')
+    args = parser.parse_args(argv)
+
+    try:
+        artifact = args.artifact.expanduser().resolve()
+        size = check_archive(artifact)
+        version = args.version if args.version is not None else release_version(artifact)
+        if not re.fullmatch(r'[A-Za-z0-9._+-]{1,64}', version):
+            raise ValueError('版本号只能包含英文、数字、点、下划线、加号和减号（最长 64 字符）')
+        if not args.site:
+            raise ValueError('没有站点地址：使用 --site 或 git config cardlink.debugSite 设置')
+        site = normalized_site(args.site)
+        data = artifact.read_bytes()
+        sha256 = hashlib.sha256(data).hexdigest()
+        commit = git('rev-parse', '--verify', 'HEAD')
+        if not re.fullmatch(r'[0-9a-f]{40,64}', commit):
+            commit = 'unknown'
+        upload_url = site + '/api/debug-release'
+        plan = {'site': site, 'upload_to': upload_url, 'artifact': str(artifact), 'version': version,
+                'size_bytes': size, 'sha256': sha256, 'git_commit': commit,
+                'mode': 'replace-current-debug-only'}
+        if args.dry_run:
+            print(json.dumps(plan, ensure_ascii=False, indent=2))
+            return 0
+
+        token = os.environ.get('CARDLINK_DEBUG_TOKEN', '').strip()
+        if not token:
+            raise ValueError('缺少 CARDLINK_DEBUG_TOKEN 环境变量；不要将密钥写入 Git 配置或仓库')
+        request = urllib.request.Request(upload_url, data=data, method='PUT', headers={
+            'Authorization': f'Bearer {token}',
+            'Content-Type': 'application/octet-stream',
+            'X-File-Name': artifact.name,
+            'X-CardLink-Version': version,
+            'X-File-Sha256': sha256,
+            'X-Git-Commit': commit,
+            'Cache-Control': 'no-store',
+        })
+        status, result = http_json(request, args.timeout)
+        if status != 200 or not result.get('ok') or result.get('sha256') != sha256:
+            raise RuntimeError('上传返回的数据不符合预期；未确认发布成功')
+
+        check = urllib.request.Request(upload_url, headers={'Cache-Control':'no-cache'})
+        _, metadata = http_json(check, args.timeout)
+        if metadata.get('sha256') != sha256:
+            raise RuntimeError('上传完成，但网站返回的最新包校验值不一致；请不要视为成功')
+
+        print(json.dumps({'ok': True, 'version': result.get('version'), 'sha256': sha256,
+                          'git_commit': commit, 'download_url': result.get('downloadUrl'),
+                          'replaced_previous_debug_package': True}, ensure_ascii=False, indent=2))
+        return 0
+    except (OSError, ValueError, RuntimeError) as exc:
+        print(f'发布失败：{exc}', file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
