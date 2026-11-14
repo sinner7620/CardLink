@@ -75,6 +75,7 @@ def check_archive(path):
 
 
 def http_json(request, timeout):
+    request.add_header('User-Agent', 'CardLink-Debug-Publish/1.0')
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read()
