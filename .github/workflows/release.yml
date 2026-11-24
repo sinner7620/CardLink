@@ -5,12 +5,17 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      mirror_tag:
+        description: Published GitHub release tag to sync to Gitee
+        type: string
 
 permissions:
   contents: write
 
 jobs:
   release:
+    if: ${{ !inputs.mirror_tag }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -69,3 +74,27 @@ jobs:
         with:
           name: CardLink
           path: dist/CardLink-v*.mnaddon
+
+  mirror:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mirror_tag }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      RELEASE_TAG: ${{ inputs.mirror_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.mirror_tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Download published package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$RELEASE_TAG" --pattern "CardLink-${RELEASE_TAG}.mnaddon" --dir dist
+      - name: Sync release to Gitee mirror
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_REPO: baidreams/CardLink
+        run: node scripts/sync-gitee-release-notes.mjs
