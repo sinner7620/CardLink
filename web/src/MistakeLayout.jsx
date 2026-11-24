@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react"
 
 /** The list keeps its scroll/filter state when moved out of view. */
-export function MistakeLayout({ autoHide, hasDetail = false, children }) {
+export function MistakeLayout({ autoHide, hasDetail = false, revealList, children }) {
   const [open, setOpen] = useState(true)
   const [dragging, setDragging] = useState(false)
   const panel = useRef(null), edge = useRef(null), root = useRef(null), gesture = useRef(null)
@@ -52,6 +52,13 @@ export function MistakeLayout({ autoHide, hasDetail = false, children }) {
     observer.observe(root.current)
     return () => { observer.disconnect(); cancelAnimationFrame(frame.current); pendingProgress.current = null }
   }, [autoHide])
+  useLayoutEffect(() => {
+    if (!autoHide || !revealList) return
+    gesture.current = null
+    releaseProgress()
+    setDragging(false)
+    setOpen(true)
+  }, [autoHide, revealList])
   useEffect(() => {
     if (!autoHide || !open) return
     const previewClick = () => { if (hasDetail) close() }

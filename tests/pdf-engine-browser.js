@@ -1,5 +1,5 @@
 // Pass this function to playwright-cli run-code after opening the production fixture.
-// Real html2canvas + jsPDF: catches lost text, whole-document cloning, and output corruption.
+// Real html2canvas + JPEG PDF writer: catches lost text, whole-document cloning, and output corruption.
 async (page) => {
   const results = [];
   for (const config of [

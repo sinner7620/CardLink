@@ -1,5 +1,9 @@
 import { delay, MN, showHUD, type UIImage } from "marginnote"
 import { decodeBase64Ascii } from "./base64"
+import {
+  describeVisibility, directChildIds, foldConfirmation, foldEligibility, foldSceneSession,
+  foldVisibility, logFoldEvent, readBranchFolded, writeBranchFolded
+} from "./mindmap-fold"
 import { loadMatcherSettings } from "./settings"
 import { focusNoteInMindMapFocusMode } from "./note-navigation"
 import { setWindowFrame } from "./window-opacity"
@@ -19,18 +23,34 @@ interface PracticeQueue {
 }
 
 interface PracticeSession extends PracticeQueue {
-  kind: "masked"
+  kind: "masked" | "fold"
+  owner?: any
+  rootNodeId?: string
   revealedQuestionIds: Set<string>
-  canvas: any
-  calibration: Calibration
+  canvas?: any
+  calibration?: Calibration
   masks: Map<string, MaskLayer>
-  appearance: MaskAppearance
+  appearance?: MaskAppearance
   rebinding: boolean
+  fold?: FoldRun
+}
+
+/** 折叠优先的每次访问状态；只针对当前题，切换题目时重建。 */
+interface FoldRun {
+  questionId: string
+  writes: number
+  revealed: boolean
+  useFold: boolean
+  blocked?: string
+  busy: boolean
 }
 
 interface FocusPracticeSession extends PracticeQueue {
   kind: "focus"
 }
+
+// 宿主重新展开后最多再写几次；超过即保留遮盖并停止自动折叠。
+const MAX_FOLD_WRITES = 3
 
 let active: PracticeSession | FocusPracticeSession | undefined
 let nextGeneration = 0
@@ -87,7 +107,7 @@ async function calibrationCard(map: any, questionIds: Set<string>, isCurrent: ()
   }
 }
 
-function canvasCalibration(cardView: any, map: any, model: Rect): { canvas: any; calibration: Calibration } | undefined {
+export function canvasCalibration(cardView: any, map: any, model: Rect): { canvas: any; calibration: Calibration } | undefined {
   const cardBounds = rectOf(cardView, "bounds")
   if (!cardBounds) return
   let child = cardView
@@ -121,7 +141,7 @@ function canvasCalibration(cardView: any, map: any, model: Rect): { canvas: any;
   }
 }
 
-function nativeViewClass(view: any): string {
+export function nativeViewClass(view: any): string {
   for (const key of ["className", "$className", "class", "$class"]) {
     try {
       const value = view[key]
@@ -161,6 +181,12 @@ function maskAppearance(): MaskAppearance {
     decodedMaskImage = undefined
   }
   return { color: settings.answerMaskColor || (settings.answerMaskStyle === "light" ? "#d9e4f2" : "#141922"), image }
+}
+
+function sessionMaskAppearance(session: PracticeSession): MaskAppearance | undefined {
+  if (session.appearance) return session.appearance
+  try { session.appearance = maskAppearance() } catch { return undefined }
+  return session.appearance
 }
 
 function makeMask(appearance: MaskAppearance): MaskLayer {
@@ -204,34 +230,46 @@ function canvasInMindMap(canvas: any, map: any): boolean {
   return false
 }
 
-function updateMask(session: PracticeSession): boolean {
+function updateMask(session: PracticeSession, folded = session.kind === "fold" && session.fold?.useFold !== false &&
+  foldConfirmation(session.currentQuestionId, true).state === "applied"): boolean {
   const notebookId = currentNotebookId()
-  if (active !== session || !session.canvas?.superview || (notebookId && notebookId !== session.notebookId)) return false
+  if (active !== session || (notebookId && notebookId !== session.notebookId)) return false
+  const questions = new Set([...session.questionIds].filter(id =>
+    !session.revealedQuestionIds.has(id) && !(folded && id === session.currentQuestionId)
+  ))
+  if (!questions.size) {
+    clearMasks(session)
+    return true
+  }
+  if (!session.canvas?.superview) return false
   const map = MN.notebookController?.mindmapView
   if (!map) return true
   if (!canvasInMindMap(session.canvas, map)) return false
-  const wanted = answerFrames(map, new Set([...session.questionIds].filter(id => !session.revealedQuestionIds.has(id))))
-  if (!wanted.size && session.questionIds.size > session.revealedQuestionIds.size) return true
+  const wanted = answerFrames(map, questions)
+  // 答案已经不再渲染（例如分支已收起）时先摘掉旧遮盖，避免留下浮空的遮盖块。
   for (const [id, mask] of session.masks) {
     if (!wanted.has(id)) {
       mask.layer.removeFromSuperlayer()
       session.masks.delete(id)
     }
   }
+  if (!wanted.size) return true
+  const appearance = sessionMaskAppearance(session)
+  if (!appearance) return false
   let covered = 0
   for (const [id, frame] of wanted) {
-    const { sx, sy, tx, ty } = session.calibration
+    const { sx, sy, tx, ty } = session.calibration!
     const target = { x: tx + frame.x * sx, y: ty + frame.y * sy, width: frame.width * sx, height: frame.height * sy }
     if (target.width <= 4 || target.height <= 4) continue
     let mask = session.masks.get(id)
     if (!mask) {
-      mask = makeMask(session.appearance)
+      mask = makeMask(appearance)
       session.masks.set(id, mask)
     }
     updateMaskLayer(mask, target, session.canvas.layer)
     covered++
   }
-  return wanted.size === 0 || covered > 0
+  return covered > 0
 }
 
 function updateMaskLayer(mask: MaskLayer, target: Rect, parentLayer: any): void {
@@ -286,14 +324,161 @@ function schedule(session: PracticeSession): void {
     const notebookId = currentNotebookId()
     if (notebookId && notebookId !== session.notebookId) return stopSameMapPractice()
     try {
-      if (!updateMask(session)) {
-        void rebindMask(session)
-      }
+      if (session.kind === "fold") monitorFoldSession(session)
+      else if (!updateMask(session)) void rebindMask(session)
     } catch {
       void rebindMask(session)
     }
     schedule(session)
   })
+}
+
+function hintFoldFallback(owner: any, reason: string, capability: boolean): void {
+  if (!owner || owner.cardLinkFoldFallbackHinted) return
+  owner.cardLinkFoldFallbackHinted = true
+  // 现有 160 毫秒同步不是零闪现保证；提示只说明本轮改按遮盖处理，不承诺已折叠。
+  showHUD(capability
+    ? `未启用折叠优先（${reason}），本题改按遮盖处理`
+    : `本题分支不能整体收起（${reason}），改按遮盖处理`, 4)
+}
+
+/** 新一轮做题或复习开始时允许再次提示折叠回退原因。 */
+export function resetFoldFallbackHint(owner: any): void {
+  if (owner) owner.cardLinkFoldFallbackHinted = false
+}
+
+function foldRun(session: PracticeSession, questionId: string): FoldRun {
+  if (!session.fold || session.fold.questionId !== questionId) {
+    session.fold = { questionId, writes: 0, revealed: false, busy: false, useFold: true }
+  }
+  return session.fold
+}
+
+function foldBudgetLeft(fold: FoldRun): boolean {
+  return fold.writes < MAX_FOLD_WRITES
+}
+
+function blockFold(session: PracticeSession, fold: FoldRun, reason: string): void {
+  fold.blocked = reason
+  hintFoldFallback(session.owner, reason, true)
+}
+
+/**
+ * 先按 ID 收起当前题分支并读回，再让调用方移动焦点。
+ * 返回 ready 表示宿主折叠字段已到收起状态；画面是否有卡片证据由会话层继续跟踪。
+ */
+async function prepareFoldEntry(
+  notebookId: string, questionId: string, options: { owner?: any; rootNodeId?: string; isCurrent?: () => boolean }
+): Promise<FoldEntryPlan> {
+  const scene = foldSceneSession(options.owner)
+  if (!scene.available) return { ready: false, capability: true, reason: scene.reason || "场景面板未就绪" }
+  const eligibility = foldEligibility(notebookId, questionId, options.rootNodeId)
+  if (!eligibility.eligible) return { ready: false, capability: eligibility.capability, reason: eligibility.reason }
+  const folded = readBranchFolded(questionId)
+  if (folded === undefined) return { ready: false, capability: true, reason: "无法读取当前题目的分支折叠状态" }
+  if (folded) {
+    logFoldEvent("enter.alreadyFolded", `noteid=${questionId} ${describeVisibility(foldVisibility(questionId))}`)
+    return { ready: true, capability: true, writes: 0 }
+  }
+  const outcome = await writeBranchFolded({
+    owner: options.owner, notebookId, noteId: questionId, folded: true, reason: "enter", isCurrent: options.isCurrent
+  })
+  if (foldAccepted(outcome.status)) {
+    logFoldEvent("enter.applied", `noteid=${questionId} status=${outcome.status} ${visibilityDetail(questionId, outcome)}`)
+    return { ready: true, capability: true, writes: outcome.wrote ? 1 : 0 }
+  }
+  logFoldEvent("enter.fallback", `noteid=${questionId} status=${outcome.status} ${visibilityDetail(questionId, outcome)}`)
+  return {
+    ready: false, capability: true,
+    reason: outcome.skippedReason || outcome.error || "未能在定位前收起题卡分支"
+  }
+}
+
+/** 折叠写入被宿主接受：字段已到收起状态（画面证据另行判断）。 */
+function foldAccepted(status: string): boolean {
+  return status === "confirmed" || status === "applied" || status === "unchanged" || status === "contradicted"
+}
+
+function visibilityDetail(questionId: string, outcome: { status: string; error?: string }): string {
+  const extra = outcome.error ? ` reason=${outcome.error}` : ""
+  return `${describeVisibility(foldVisibility(questionId))} outcome=${outcome.status}${extra}`
+}
+
+/**
+ * 焦点后读回：定位可能重新展开分支，此时至多再写一次。
+ * 字段收起时由遮盖同步继续处理仍可见的子卡。
+ */
+async function settleFoldFocus(session: PracticeSession, questionId: string): Promise<boolean> {
+  const fold = foldRun(session, questionId)
+  const first = foldConfirmation(questionId, true)
+  if (first.visibility.folded === true) {
+    logFoldEvent("settle." + first.state, `noteid=${questionId} ${describeVisibility(first.visibility)}`)
+    return true
+  }
+  if (first.visibility.folded === undefined) {
+    blockFold(session, fold, "定位后无法读取分支状态")
+    return false
+  }
+  if (!foldBudgetLeft(fold)) { blockFold(session, fold, "宿主反复展开题卡分支"); return false }
+  fold.writes++
+  const outcome = await writeBranchFolded({
+    owner: session.owner, notebookId: session.notebookId, noteId: questionId, folded: true, reason: "refocus",
+    isCurrent: () => active === session && session.generation === nextGeneration
+  })
+  if (!foldAccepted(outcome.status)) {
+    blockFold(session, fold, outcome.error || outcome.skippedReason || "定位后未能收起题卡分支")
+    logFoldEvent("settle.failed", `noteid=${questionId} ${visibilityDetail(questionId, outcome)}`)
+    return false
+  }
+  const recheck = foldConfirmation(questionId, true)
+  logFoldEvent("settle." + recheck.state, `noteid=${questionId} ${describeVisibility(recheck.visibility)}`)
+  return recheck.visibility.folded === true
+}
+
+function monitorFoldSession(session: PracticeSession): void {
+  const fold = session.fold
+  const noteId = session.currentQuestionId
+  if (fold?.useFold === false) {
+    if (!updateMask(session, false)) void rebindMask(session)
+    return
+  }
+  const confirmation = foldConfirmation(noteId, true)
+  // 展开或仍可见时先遮盖，收起时跳过模型里的旧卡片坐标。
+  const rebind = updateMask(session, confirmation.state === "applied") ? undefined : rebindMask(session)
+  if (!fold || fold.busy || fold.revealed || fold.blocked) return
+  if (confirmation.visibility.folded === true) return
+  if (confirmation.visibility.folded === undefined) {
+    blockFold(session, fold, "无法读取分支折叠状态")
+    logFoldEvent("monitor.blocked", `noteid=${noteId} ${describeVisibility(confirmation.visibility)}`)
+    return
+  }
+  // 一次原生展开只补写一次折叠。
+  if (!foldBudgetLeft(fold)) { blockFold(session, fold, "宿主反复展开题卡分支"); return }
+  fold.busy = true
+  fold.writes++
+  const isCurrent = () => active === session && session.generation === nextGeneration && session.currentQuestionId === noteId
+  void (async () => {
+    try {
+      if (rebind) await rebind
+      if (!isCurrent()) return
+      const outcome = await writeBranchFolded({
+        owner: session.owner, notebookId: session.notebookId, noteId, folded: true, reason: "reexpand",
+        isCurrent
+      })
+      if (!isCurrent()) return
+      if (foldAccepted(outcome.status)) {
+        logFoldEvent("monitor.refolded", `noteid=${noteId} ${visibilityDetail(noteId, outcome)}`)
+        if (!updateMask(session)) void rebindMask(session)
+        return
+      }
+      blockFold(session, fold, outcome.error || outcome.skippedReason || "未能收起题卡分支")
+      logFoldEvent("monitor.blocked", `noteid=${noteId} ${visibilityDetail(noteId, outcome)}`)
+    } catch (error) {
+      if (isCurrent()) blockFold(session, fold, String((error as Error)?.message || error))
+    } finally {
+      fold.busy = false
+    }
+  })()
 }
 
 export function sameMapPracticeActive(): boolean {
@@ -311,16 +496,61 @@ export function sameMapPracticeCurrentQuestionId(): string | undefined {
   return active.currentQuestionId
 }
 
+/** 本次做题是否以折叠优先保护当前题。 */
+export function sameMapPracticeFoldFirst(): boolean {
+  return sameMapPracticeActive() && active?.kind === "fold"
+}
+
+/**
+ * 进入下一题前先收起它的分支。用于复习模式：定位动作由调用方执行，
+ * 因此折叠写入必须先于焦点移动。`isCurrent` 由调用方给出访问代次判据。
+ */
+export async function preFoldCurrentQuestion(notebookId: string, questionId: string, owner: any, rootNodeId?: string, isCurrent?: () => boolean): Promise<boolean> {
+  const current = () => !isCurrent || isCurrent()
+  if (!current()) return false
+  const scene = foldSceneSession(owner)
+  if (!scene.available) return false
+  const eligibility = foldEligibility(notebookId, questionId, rootNodeId)
+  if (!eligibility.eligible) return false
+  const folded = readBranchFolded(questionId)
+  if (folded === undefined) return false
+  if (folded) return true
+  const outcome = await writeBranchFolded({ owner, notebookId, noteId: questionId, folded: true, reason: "prefocus", isCurrent: current })
+  return foldAccepted(outcome.status) && current()
+}
+
 export async function navigateSameMapPractice(questionId: string): Promise<boolean> {
   if (!sameMapPracticeActive()) return false
   const session = active
   if (!session?.questionIds.has(questionId)) return false
+  const previous = session.currentQuestionId
+  const isCurrent = () => active === session && session.generation === nextGeneration &&
+    session.currentQuestionId === previous && (!currentNotebookId() || currentNotebookId() === session.notebookId)
+  let entry: FoldEntryPlan | undefined
+  if (session.kind === "fold" && questionId !== previous) {
+    entry = await prepareFoldEntry(session.notebookId, questionId, {
+      owner: session.owner, rootNodeId: session.rootNodeId, isCurrent
+    })
+    if (!isCurrent()) return false
+  }
   if (await focusNoteInMindMapFocusMode(questionId) !== "focused") {
     showHUD("无法定位并聚焦当前题目卡片", 3)
     return false
   }
-  if (!sameMapPracticeActive() || active !== session) return false
+  if (!isCurrent()) return false
   session.currentQuestionId = questionId
+  if (session.kind === "fold") {
+    const fold = foldRun(session, questionId)
+    if (entry && !entry.ready) {
+      fold.useFold = false
+      if (entry.reason) hintFoldFallback(session.owner, entry.reason, entry.capability)
+      if (!updateMask(session, false)) void rebindMask(session)
+      return true
+    }
+    if (entry?.ready) fold.writes = entry.writes
+    if (fold.useFold !== false) await settleFoldFocus(session, questionId)
+    if (active === session && !updateMask(session)) void rebindMask(session)
+  }
   return true
 }
 
@@ -333,15 +563,136 @@ export function revealSameMapQuestion(questionNoteId: string): boolean {
   return true
 }
 
+/**
+ * 「查找答案」入口：折叠会话按本次访问暂停自动折叠，通过场景面板展开。
+ * 只有拿到"答案子卡真实视图已附着"的证据才宣称揭晓并移除遮盖；只有模型字段时
+ * 停下自动折叠并返回 false，由调用方沿用答案窗口（答案一定可见）。
+ */
+export async function revealPracticeAnswer(questionNoteId: string): Promise<boolean> {
+  const session = active
+  if (!session || session.kind === "focus" || !session.questionIds.has(questionNoteId)) return false
+  if (session.kind === "masked") return revealSameMapQuestion(questionNoteId)
+  // 只有仍是当前题、同一页、同一学习集的访问才能改变折叠状态。
+  if (session.currentQuestionId !== questionNoteId) return false
+  if (session.generation !== nextGeneration) return false
+  const notebookId = currentNotebookId()
+  if (notebookId && notebookId !== session.notebookId) return false
+  const fold = foldRun(session, questionNoteId)
+  if (fold.useFold === false) {
+    session.revealedQuestionIds.add(questionNoteId)
+    if (!updateMask(session, false)) void rebindMask(session)
+    return true
+  }
+  if (fold.revealed) return true
+  if (fold.busy) return false
+  const pauseAutoFold = () => {
+    // 用户要求看答案：即使没有画面证据也不再自动收起，避免把刚展开的分支又关上。
+    fold.revealed = true
+    session.revealedQuestionIds.add(questionNoteId)
+  }
+  if (readBranchFolded(questionNoteId) === false) {
+    const shown = foldConfirmation(questionNoteId, false).state === "confirmed"
+    pauseAutoFold()
+    if (!shown) logFoldEvent("reveal.unverified", `noteid=${questionNoteId} ${describeVisibility(foldVisibility(questionNoteId))}`)
+    else clearMasks(session)
+    return shown
+  }
+  fold.busy = true
+  try {
+    const outcome = await writeBranchFolded({
+      owner: session.owner, notebookId: session.notebookId, noteId: questionNoteId, folded: false, reason: "reveal",
+      isCurrent: () => active === session && session.generation === nextGeneration && session.currentQuestionId === questionNoteId
+    })
+    const shown = outcome.status === "confirmed" || outcome.status === "unchanged"
+    if (shown) {
+      pauseAutoFold()
+      clearMasks(session)
+      return true
+    }
+    // 字段已展开但没有画面证据，或展开失败：停止自动折叠，交给答案窗口。
+    if (readBranchFolded(questionNoteId) === false) pauseAutoFold()
+    logFoldEvent("reveal.fallback", `noteid=${questionNoteId} status=${outcome.status} ${visibilityDetail(questionNoteId, outcome)}`)
+    return false
+  } finally {
+    fold.busy = false
+  }
+}
+
 export function stopSameMapPractice(): void {
   const session = active
   active = undefined
   nextGeneration++
-  if (!session) return
-  if (session.kind === "masked") clearMasks(session)
+  if (session && session.kind !== "focus") clearMasks(session)
 }
 
-export async function startSameMapPractice(notebookId: string, questionIds: Iterable<string>, options: { alreadyFocused?: boolean; maskAnswers?: boolean } = {}): Promise<{ started: boolean; reason?: string; answerCount?: number; maskAnswers?: boolean }> {
+type FoldEntryPlan =
+  | { ready: true; capability: true; writes: number }
+  | { ready: false; capability: boolean; reason?: string }
+
+interface FoldSessionOutcome {
+  started: boolean
+  hard?: boolean
+  result: {
+    started: boolean; reason?: string; answerCount?: number; maskAnswers?: boolean
+    foldFirst?: boolean
+  }
+}
+
+/** 焦点前已收起分支；定位后读回，确认收起才按折叠会话运行。 */
+async function startFoldSession(
+  notebookId: string,
+  selected: Set<string>,
+  firstQuestionId: string,
+  options: { alreadyFocused?: boolean; owner?: any; rootNodeId?: string },
+  initialWrites: number,
+  isCurrent: () => boolean
+): Promise<FoldSessionOutcome> {
+  if (!options.alreadyFocused && await focusNoteInMindMapFocusMode(firstQuestionId) !== "focused") {
+    return { started: false, hard: true, result: { started: false, reason: "无法定位并聚焦队列第一道题" } }
+  }
+  if (!isCurrent()) {
+    return { started: false, hard: true, result: { started: false, reason: "做题模式已结束" } }
+  }
+  const focusedNotebookId = currentNotebookId()
+  if (focusedNotebookId && focusedNotebookId !== notebookId) {
+    return { started: false, hard: true, result: { started: false, reason: "学习集已切换，请重新开始做题" } }
+  }
+  let appearance: MaskAppearance | undefined
+  try { appearance = maskAppearance() } catch { appearance = undefined }
+  if (!appearance) {
+    // 没有可靠的兜底遮盖时不用折叠状态承诺保护。
+    hintFoldFallback(options.owner, "无法建立答案遮盖", true)
+    return { started: false, result: { started: false } }
+  }
+  const session: PracticeSession = {
+    kind: "fold", owner: options.owner, rootNodeId: options.rootNodeId, notebookId: focusedNotebookId || notebookId,
+    questionIds: selected, revealedQuestionIds: new Set(), canvas: undefined, calibration: undefined,
+    masks: new Map(), appearance, rebinding: false, generation: ++nextGeneration, currentQuestionId: firstQuestionId,
+    fold: {
+      questionId: firstQuestionId, revealed: false, busy: false, writes: initialWrites, useFold: true
+    }
+  }
+  active = session
+  const settled = await settleFoldFocus(session, firstQuestionId)
+  if (active !== session) return { started: false, hard: true, result: { started: false, reason: "做题模式已结束" } }
+  if (settled) {
+    if (!updateMask(session)) void rebindMask(session)
+    schedule(session)
+    return {
+      started: true,
+      result: {
+        started: true, answerCount: directChildIds(firstQuestionId).length, maskAnswers: true,
+        foldFirst: true
+      }
+    }
+  }
+  const blocked = session.fold?.blocked || "定位后未能收起题卡分支"
+  stopSameMapPractice()
+  hintFoldFallback(options.owner, blocked, true)
+  return { started: false, result: { started: false } }
+}
+
+export async function startSameMapPractice(notebookId: string, questionIds: Iterable<string>, options: { alreadyFocused?: boolean; maskAnswers?: boolean; owner?: any; rootNodeId?: string; foldAttempted?: boolean } = {}): Promise<{ started: boolean; reason?: string; answerCount?: number; maskAnswers?: boolean; foldFirst?: boolean }> {
   stopSameMapPractice()
   const generation = nextGeneration
   const selected = new Set(Array.from(questionIds).filter(Boolean))
@@ -349,6 +700,18 @@ export async function startSameMapPractice(notebookId: string, questionIds: Iter
   const map = MN.notebookController?.mindmapView
   if (!map) return { started: false, reason: "请先打开题目脑图" }
   const firstQuestionId = [...selected][0]
+  const isCurrent = () => generation === nextGeneration
+  if (options.maskAnswers !== false && !options.foldAttempted) {
+    const entry = await prepareFoldEntry(notebookId, firstQuestionId, { owner: options.owner, rootNodeId: options.rootNodeId, isCurrent })
+    if (!isCurrent()) return { started: false, reason: "做题模式已结束" }
+    if (entry.ready) {
+      const folded = await startFoldSession(notebookId, selected, firstQuestionId, options, entry.writes, isCurrent)
+      if (folded.started || folded.hard) return folded.result
+      // 无法确认收起或无法建立兜底遮盖：同一入口改走遮盖流程，不留下无保护的会话。
+      return startSameMapPractice(notebookId, questionIds, { ...options, foldAttempted: true })
+    }
+    if (entry.reason) hintFoldFallback(options.owner, entry.reason, entry.capability)
+  }
   if (!options.alreadyFocused && await focusNoteInMindMapFocusMode(firstQuestionId) !== "focused") {
     return { started: false, reason: "无法定位并聚焦队列第一道题" }
   }
@@ -383,8 +746,10 @@ export async function startSameMapPractice(notebookId: string, questionIds: Iter
   try { appearance = maskAppearance() }
   catch (error) { return { started: false, reason: error instanceof Error ? error.message : "自定义遮盖图片加载失败" } }
   const session: PracticeSession = {
-    kind: "masked", notebookId: currentNotebookId() || notebookId, questionIds: selected, revealedQuestionIds: new Set(), canvas: placement.canvas,
-    calibration: placement.calibration, masks: new Map(), appearance, generation: ++nextGeneration, rebinding: false, currentQuestionId: firstQuestionId
+    kind: "masked", owner: options.owner, rootNodeId: options.rootNodeId, notebookId: currentNotebookId() || notebookId,
+    questionIds: selected, revealedQuestionIds: new Set(), canvas: placement.canvas,
+    calibration: placement.calibration, masks: new Map(), appearance, generation: ++nextGeneration, rebinding: false,
+    currentQuestionId: firstQuestionId
   }
   active = session
   try {
@@ -397,5 +762,5 @@ export async function startSameMapPractice(notebookId: string, questionIds: Iter
     return { started: false, reason: "放置答案遮盖失败" }
   }
   if (active === session) schedule(session)
-  return { started: active === session, answerCount: currentAnswerCount, maskAnswers: true }
+  return { started: active === session, answerCount: currentAnswerCount, maskAnswers: true, foldFirst: false }
 }

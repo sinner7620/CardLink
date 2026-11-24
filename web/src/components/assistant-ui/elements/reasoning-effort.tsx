@@ -1,0 +1,101 @@
+"use client";
+
+import type { ComponentProps } from "react";
+import { cn } from "@/lib/utils";
+import { field, mono } from "./surfaces";
+import { announced, pct } from "../utils/range";
+
+const fmt = (n: number) => n.toLocaleString("en-US");
+
+export interface EffortLevel {
+  key: string;
+  label: string;
+  budget?: number;
+}
+
+export function ReasoningEffort({
+  levels,
+  selectedKey,
+  spent,
+  onSelect,
+  className,
+  ...props
+}: Omit<
+  ComponentProps<"div">,
+  "children" | "levels" | "selectedKey" | "spent" | "onSelect"
+> & {
+  levels: readonly EffortLevel[];
+  selectedKey: string;
+  spent?: number;
+  onSelect?: (key: string) => void;
+}) {
+  const selected = levels.find((level) => level.key === selectedKey);
+  const budget = selected?.budget ?? 0;
+  const used = pct(spent ?? 0, budget);
+  const showBudget = spent !== undefined && budget > 0;
+
+  return (
+    <div
+      data-slot="reasoning-effort"
+      className={cn("flex w-full max-w-sm flex-col gap-2.5", className)}
+
+      {...props}
+    >
+      <div className="flex items-baseline justify-between">
+        <span className="text-[13.5px] font-medium">推理强度</span>
+        {showBudget && <span className={cn(mono, "text-muted-foreground tabular-nums")}>
+          {fmt(spent ?? 0)} / {fmt(budget)}
+        </span>}
+      </div>
+
+      <div className={cn(field, "flex gap-0.5 rounded-full p-0.5")}>
+        {levels.map((level) => {
+          const active = level.key === selectedKey;
+          const className = cn(
+            "flex-1 rounded-full py-1 text-xs font-medium transition-[background-color,color,scale] duration-150",
+            onSelect && "active:scale-[0.97]",
+            active
+              ? "bg-background text-foreground/90"
+              : onSelect
+                ? "text-muted-foreground hover:text-foreground/70"
+                : "text-muted-foreground",
+          );
+          return onSelect ? (
+            <button
+              key={level.key}
+              type="button"
+              aria-pressed={active}
+              onClick={() => onSelect(level.key)}
+              className={className}
+            >
+              {level.label}
+            </button>
+          ) : (
+            <span
+              key={level.key}
+              aria-current={active ? "true" : undefined}
+              className={className}
+            >
+              {level.label}
+            </span>
+          );
+        })}
+      </div>
+
+      {showBudget && <span
+        role="progressbar"
+        aria-label="Thinking budget used"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={announced(used)}
+        aria-valuetext={`${fmt(spent ?? 0)} of ${fmt(budget)}`}
+        className="bg-foreground/[0.06] inset-ring-border h-[3px] w-full overflow-hidden rounded-full inset-ring forced-colors:outline"
+      >
+        <span
+          className="block h-full rounded-full bg-blue-500 transition-[width] duration-500 forced-color-adjust-none motion-reduce:transition-none dark:bg-blue-400"
+          style={{ width: `${used}%` }}
+        />
+      </span>}
+    </div>
+  );
+}

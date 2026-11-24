@@ -8,6 +8,7 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,
+    "allowImportingTsExtensions": true,
     "lib": ["ES2020"]
   },
   "include": ["src/**/*.ts", "tests/**/*.ts"]

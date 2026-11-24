@@ -137,3 +137,28 @@ export function renderOCRMarkdownPreview(source: string): string {
   renderer.image = ({ text }) => `<span class="mdImageNote">[图片：${escapeHtml(text)}]</span>`
   return markdown.parse(source, { async: false, renderer }) as string
 }
+
+// 原生弹窗只能显示纯文本：去掉 HTML、标记符号与表格分隔行，保留可读内容。
+export function markdownToPlainText(source: string): string {
+  let text = String(source ?? "").replace(/\r\n?/g, "\n")
+  text = text.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
+  text = text.replace(/<!--[\s\S]*?-->/g, " ")
+  text = text.replace(/<[^>]+>/g, " ")
+  text = text.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+  text = text.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+  const lines = text.split("\n").map(line => {
+    let value = line
+    const markerOnly = /^[\s|:-]+$/.test(value)
+    if (markerOnly && value.includes("-")) return ""
+    value = value.replace(/^\s{0,3}#{1,6}\s*/, "")
+    value = value.replace(/^\s{0,3}>\s?/, "")
+    value = value.replace(/^\s*[-*+]\s+/, "• ")
+    value = value.replace(/^(\s*)(\d+)[.)]\s+/, (_match, space: string, index: string) => `${space}${index}. `)
+    value = value.replace(/^(?:\s*)(-{3,}|\*{3,}|_{3,})(?:\s*)$/, "")
+    value = value.replace(/\*\*|__/g, "")
+    value = value.replace(/`+/g, "")
+    if (value.trimStart().startsWith("|") || /\|\s*$/.test(value)) value = value.replace(/\|/g, " ")
+    return value.replace(/[ \t]+/g, " ").trim()
+  })
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim()
+}

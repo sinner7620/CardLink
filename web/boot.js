@@ -103,7 +103,8 @@
     var root = document.getElementById("root");
     root.hidden = false; root.style.visibility = ""; root.inert = false;
     window.__MN_WORKBENCH_MOUNTING__ = true;
-    if (window.__MN_SCENE_ENABLED__) {
+    // An already visible workbench keeps the geometry owned by the scene host.
+    if (window.__MN_SCENE_ENABLED__ && (!appLoaded || wasCollapsed)) {
       var saved;
       try { saved = JSON.parse(window.localStorage.getItem("cardlink.scene.defaultSizePreset") || "null"); } catch (_) {}
       if (retainedSize) saved = retainedSize;

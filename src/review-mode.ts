@@ -5,7 +5,7 @@ import { saveAttemptAnswerChecked } from './practice-attempts'
 import { MN, NodeNote, popup, select, showHUD } from "marginnote"
 import { MistakeLevel, reviewResultHint } from "./mistake-domain"
 import { openSourceByMistakeId, reviewMistakeById, markQuestionAsMistake } from "./mistake-manager"
-import { startSameMapPractice, stopSameMapPractice } from "./same-map-practice"
+import { preFoldCurrentQuestion, resetFoldFallbackHint, startSameMapPractice, stopSameMapPractice } from "./same-map-practice"
 import { closeAnswerCard, selectAnswerReviewLevel, syncAnswerReviewControls } from "./answer-card-view"
 import { getBindingForMode, loadBindings } from "./store"
 import { loadMatcherSettings } from "./settings"
@@ -690,7 +690,9 @@ function mountReviewViews(owner: any = self, animated = false): void {
 async function focusQueueItem(owner: any, item: ReviewModeItem): Promise<boolean> {
   const current = state(owner)
   if (current?.purpose === "practice") {
-    const result = await startSameMapPractice(item.sourceNotebookId, [item.sourceNoteId], { maskAnswers: current.maskAnswers })
+    const result = await startSameMapPractice(item.sourceNotebookId, [item.sourceNoteId], {
+      maskAnswers: current.maskAnswers, owner, rootNodeId: item.sourceRootNodeId
+    })
     if (!result.started) throw new Error(result.reason || "无法定位做题卡片")
     return true
   }
@@ -700,11 +702,20 @@ async function focusQueueItem(owner: any, item: ReviewModeItem): Promise<boolean
     return false
   }
   const sameMindMap = Boolean(
+    MN.currnetNotebookId === item.sourceNotebookId &&
     current?.focusedNotebookId === item.sourceNotebookId &&
     current?.focusedRootNodeId &&
     current.focusedRootNodeId === item.sourceRootNodeId
   )
   if (sameMindMap) {
+    // 折叠优先：先按题卡收起分支，再移动焦点，避免定位时重新画出答案。
+    if (usesSubcardAnswers(
+      getBindingForMode(loadBindings(), item.sourceNotebookId, item.sourceRootNodeId, loadMatcherSettings().allowSameStudySetMindMap),
+      target.colorIndex)) {
+      // 访问代次：题目仍停在本次进入的目标题时才允许写入折叠。
+      await preFoldCurrentQuestion(item.sourceNotebookId, item.sourceNoteId, owner, item.sourceRootNodeId,
+        () => state(owner) === current && !!current && current.items[current.index] === item && !current.submitting)
+    }
     const result = await focusNoteInMindMapFocusMode(item.sourceNoteId)
     if (result !== "focused") {
       showHUD("无法将题目卡片居中显示在焦点模式中", 3)
@@ -729,7 +740,9 @@ async function focusQueueItem(owner: any, item: ReviewModeItem): Promise<boolean
   const binding = getBindingForMode(loadBindings(), item.sourceNotebookId, item.sourceRootNodeId,
     loadMatcherSettings().allowSameStudySetMindMap)
   if (usesSubcardAnswers(binding, target.colorIndex)) {
-    const result = await startSameMapPractice(item.sourceNotebookId, [item.sourceNoteId], { alreadyFocused: true })
+    const result = await startSameMapPractice(item.sourceNotebookId, [item.sourceNoteId], {
+      alreadyFocused: true, owner, rootNodeId: item.sourceRootNodeId
+    })
     if (state(owner) !== current) stopSameMapPractice()
     else if (!result.started && result.reason !== "所选题目没有直接子卡片答案") showHUD(result.reason || "答案遮盖失败", 3)
   }
@@ -849,6 +862,8 @@ export async function startReviewMode(itemsValue: unknown, owner: any = self, al
   owner.cardLinkReviewEntranceRender = undefined
   owner.cardLinkReviewDismissClassification = undefined
   owner.cardLinkReviewAnnotationClosed = undefined
+  // 每一轮做题/复习允许重新提示一次“折叠优先已改为遮盖”。
+  resetFoldFallbackHint(owner)
   owner.cardLinkReviewMode = {
     purpose: practice ? "practice" : "review", completed: {}, maskAnswers: practice?.maskAnswers,
     writingMode, feedbackReasons, annotationPhase: "idle", papers: {}, answerChecked: {},
@@ -1247,6 +1262,7 @@ export function discardReviewMode(owner: any = self, keepCompletionEffect = fals
   owner.cardLinkReviewDismissClassification = undefined
   owner.cardLinkReviewAnnotationClosed = undefined
   owner.cardLinkReviewExtraControls?.removeFromSuperview?.()
+  // 正常退出：按题卡立即恢复插件改过的折叠状态，无法确认时记录并提示。
   stopSameMapPractice()
   owner.cardLinkReviewMode = undefined
   syncAnswerReviewControls()

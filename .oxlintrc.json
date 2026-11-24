@@ -8,5 +8,12 @@
   "ignorePatterns": [
     "web/vendor/",
     "web/src/vendor/"
+  ],
+  "overrides": [
+    {
+      "files": ["web/src/**/*.jsx", "web/src/**/*.js", "web/src/**/*.tsx", "web/src/**/*.ts"],
+      "env": { "browser": true, "es2022": true },
+      "rules": { "no-undef": "error" }
+    }
   ]
 }

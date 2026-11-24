@@ -171,7 +171,7 @@ function stateFrom(value: unknown, curves: MistakeReviewCurves): MistakeState | 
   return { version: 2, records }
 }
 
-export function loadMistakeState(): MistakeState {
+export function loadMistakeState({ persistRecovery = true }: { persistRecovery?: boolean } = {}): MistakeState {
   if (cachedState) return cachedState
   const curves = loadMatcherSettings().mistakeReviewCurves
   const primary = stateFrom(getLocalDataByKey(STORAGE_KEY), curves)
@@ -179,15 +179,15 @@ export function loadMistakeState(): MistakeState {
   // 主存储缺失/损坏时按新旧程度依次恢复（回退而非合并：合并会让已删除的
   // 记录在冷启动时从备份复活）。恢复出的状态立即写回，使主键与备份重新对齐。
   const legacyBackup = stateFrom(backupValue(BACKUP_KEY), curves)
-  if (legacyBackup) return cachedState = restoreState(legacyBackup)
+  if (legacyBackup) return persistRecovery ? restoreState(legacyBackup) : legacyBackup
   const fileBackup = stateFrom(backupFileValue(), curves)
-  if (fileBackup) return cachedState = restoreState(fileBackup)
+  if (fileBackup) return persistRecovery ? restoreState(fileBackup) : fileBackup
   const legacy = stateFrom(getLocalDataByKey(LEGACY_STORAGE_KEY), curves) ??
     stateFrom(backupValue(LEGACY_BACKUP_KEY), curves)
   if (!legacy) return cachedState = emptyState()
   // Persist migration immediately so removing a record later cannot resurrect it
   // from the read-only v1 store on the next load.
-  return cachedState = restoreState(legacy)
+  return persistRecovery ? restoreState(legacy) : legacy
 }
 
 function restoreState(state: MistakeState): MistakeState {

@@ -1,0 +1,171 @@
+/* Harness UI 专属 Tailwind v4 入口(§3.1 修订):
+   只引 theme + utilities 层,不引 preflight(全局 reset 会破坏插件既有页面);
+   令牌变量定义在 .harness-ui 容器上,shadcn 组件仅在该容器内使用。
+
+   层序（b16 修复）：harness-ui.css 是最先加载的样式表，这里的层声明决定全局层序。
+   Tailwind utilities 必须排在插件的 mn-ui-base 之后，否则 b21-baseline 里的
+   `button, input, select { font: inherit }` 会把 shadcn 组件的 text-sm 顶回 16px；
+   mn-ui-priority 仍保持最后，作为插件显式优先覆盖层。 */
+@layer theme, components, mn-ui-base, utilities, mn-ui-priority;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@import "tw-shimmer";
+@import "tw-animate-css";
+
+@custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
+@custom-variant data-closed (&:where([data-state="closed"], [data-closed]:not([data-closed="false"])));
+
+/* 源码扫描：构建期 Tailwind CLI 的 --content 只覆盖 js/jsx，shadcn 组件是 tsx；
+   dev 由 @tailwindcss/vite 自动扫描。这里显式声明完整范围，保证两套流程一致。 */
+@source "../**/*.{js,jsx,ts,tsx}";
+
+:root {
+  --cardlink-space-unit: 4px;
+}
+
+/* Harness 作用域内的最小 preflight：
+   插件页面没有引入 Tailwind preflight（会重置整站控件），因此 .harness-ui 内的
+   原生 button/input 仍带 UA 的 `2px outset` 边框、灰底与 1px 6px 内边距，而
+   `border` 工具类不带颜色时回退到 currentColor（近黑）——表现为「双层黑边」。
+   这里只在 mn-ui-base 层补齐 shadcn 组件假设的基础重置；utilities 层仍然可以
+   正常覆盖（层序保证），不会影响 .harness-ui 之外的插件页面。 */
+@layer mn-ui-base {
+  .harness-ui,
+  .harness-ui *,
+  .harness-ui *::before,
+  .harness-ui *::after {
+    box-sizing: border-box;
+    border: 0 solid var(--border);
+  }
+  .harness-ui button,
+  .harness-ui input,
+  .harness-ui textarea,
+  .harness-ui select {
+    font: inherit;
+    color: inherit;
+    background-color: transparent;
+    background-image: none;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  .harness-ui input::placeholder,
+  .harness-ui textarea::placeholder,
+  .harness-ui textarea {
+    color: inherit;
+  }
+  .harness-ui h1,
+  .harness-ui h2,
+  .harness-ui h3,
+  .harness-ui h4,
+  .harness-ui p,
+  .harness-ui dl,
+  .harness-ui dd,
+  .harness-ui ul,
+  .harness-ui ol,
+  .harness-ui pre,
+  .harness-ui blockquote {
+    margin: 0;
+  }
+  .harness-ui ul,
+  .harness-ui ol {
+    padding: 0;
+    list-style: none;
+  }
+}
+
+/* 令牌作用域：页面容器 + 由 portal 挂到 body 的浮层。
+   Radix 的 Dialog/DropdownMenu/Tooltip/Select/Sheet 内容渲染在 .harness-ui 之外，
+   如果只在 .harness-ui 上定义变量，浮层会拿不到 --background/--popover/--radius，
+   表现为透明无边框的「简陋菜单」。 */
+/* assistant-ui default template palette, scoped to Harness and its overlays. */
+.harness-ui,
+:where(
+  [data-slot="dialog-content"],
+  [data-slot="alert-dialog-content"],
+  [data-slot="dropdown-menu-content"],
+  [data-slot="popover-content"],
+  [data-slot="aui_thread-list-item-more-content"],
+  [data-slot="popover-content"],
+  [data-slot="aui_thread-list-item-more-content"],
+  [data-slot="dropdown-menu-sub-content"],
+  [data-slot="tooltip-content"],
+  [data-slot="select-content"],
+  [data-slot="sheet-content"],
+  [data-slot="command"]
+) {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.141 0.005 285.823);
+  --primary: oklch(0.21 0.006 285.885);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.967 0.001 286.375);
+  --secondary-foreground: oklch(0.21 0.006 285.885);
+  --muted: oklch(0.967 0.001 286.375);
+  --muted-foreground: oklch(0.552 0.016 285.938);
+  --accent: oklch(0.967 0.001 286.375);
+  --accent-foreground: oklch(0.21 0.006 285.885);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.141 0.005 285.823);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.141 0.005 285.823);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.92 0.004 286.32);
+  --input: oklch(0.92 0.004 286.32);
+  --ring: oklch(0.705 0.015 286.067);
+  --radius: 0.625rem;
+  --radius-panel: calc(var(--radius) + 4px);
+  --radius-control: calc(var(--radius) - 2px);
+  --radius-detail: calc(var(--radius) - 4px);
+  --radius-composer: calc(var(--radius) + 2 * var(--cardlink-space-unit));
+  --warning: color-mix(in srgb, var(--mn-level-1, #a24600) 55%, var(--foreground));
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.141 0.005 285.823);
+  --sidebar-primary: oklch(0.21 0.006 285.885);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.967 0.001 286.375);
+  --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
+  --sidebar-border: oklch(0.92 0.004 286.32);
+  --sidebar-ring: var(--ring);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.06), 0 8px 24px rgba(0, 0, 0, 0.06);
+  --shadow-float: 0 4px 16px rgba(0, 0, 0, 0.1);
+  --shadow-composer: 0 2px 12px rgba(0, 0, 0, 0.06);
+  --shadow-composer-focus: 0 4px 18px rgba(0, 0, 0, 0.1);
+  /* 插件令牌别名：Harness 局部 CSS 只通过这些别名取色，避免再写硬编码 fallback。 */
+  --text-secondary: var(--rd-muted, #6e6e73);
+  --border-subtle: var(--rd-line, rgba(0, 0, 0, 0.08));
+  --surface: var(--rd-surface, #ffffff);
+}
+
+@theme inline {
+  --spacing: var(--cardlink-space-unit);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-destructive: var(--destructive);
+  --color-warning: var(--warning);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --radius-lg: var(--radius);
+  --radius-md: var(--radius-control);
+  --radius-sm: var(--radius-detail);
+  --radius-xl: var(--radius-panel);
+}

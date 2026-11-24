@@ -7,3 +7,7 @@ export function escapeHtml(value: unknown): string {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;")
 }
+
+export function appendToHtmlBody(html: string, content: string): string {
+  return html.replace(/<\/body>(?=\s*(?:<\/html>)?\s*$)/i, closingTag => content + closingTag)
+}

@@ -22,8 +22,9 @@ import locate from "./sf/locate.svg?raw"
 import focusMode from "./sf/focusMode.svg?raw"
 import tools from "./sf/tools.svg?raw"
 import cache from "./sf/cache.svg?raw"
+import handwriting from "./sf/pencil.and.scribble.svg?raw"
 
-const svgs = { link, notebook: book, sliders, refresh, unlink: linkBreak, flag, download: share, toggle, info, guide, arrowsLR, reset, update, fileText, wifi, close, locate, focusMode, tools, cache }
+const svgs = { link, notebook: book, sliders, refresh, unlink: linkBreak, flag, download: share, toggle, info, guide, arrowsLR, reset, update, fileText, wifi, close, locate, focusMode, tools, cache, handwriting }
 
 // 大类 tone → 色板色（--mn-* 同源：accent / level1 / level2 / level0）
 export const SF_TONE_COLORS = {

@@ -1,6 +1,4 @@
-.sceneSizePopover { position: fixed; right: 16px; bottom: 60px; z-index: 245; padding: 0; width: min(256px, calc(100vw - 32px)); overflow: hidden; box-sizing: border-box; color: #293343; border: 1px solid #dce2eb; border-radius: 12px; box-shadow: 0 5px 24px #0002; font-size: 12px; }
-.sceneSizeFormSurface { position: relative; background-color: #edf1f6; }
-.sceneSizeBackdrop { position: absolute; inset: 0; display: block; width: 100%; height: 100%; pointer-events: none; }
+.sceneSizePopover { position: fixed; right: 16px; bottom: 60px; z-index: 245; padding: 0; width: min(256px, calc(100vw - 32px)); overflow: hidden; box-sizing: border-box; color: #293343; background: #fff; border: 1px solid #dce2eb; border-radius: 12px; box-shadow: 0 5px 24px #0002; font-size: 12px; }
 .sceneSizeForm { position: relative; display: grid; gap: 8px; padding: 12px; max-height: calc(100vh - 116px); overflow: auto; box-sizing: border-box; overscroll-behavior: contain; }
 .sceneSizeForm button { padding: 3px 8px; min-width: 0; min-height: 24px; border: 1px solid #dce2eb; border-radius: 6px; background: #f5f7fa; box-shadow: none; color: #293343; font: 12px system-ui; line-height: 18px; cursor: pointer; }
 .sceneSizeForm button:hover { background: #e9eef6; }
@@ -14,13 +12,20 @@
 .scenePresetChip:has(.scenePresetRemove) > button:first-child { border-radius: 6px 0 0 6px; }
 .sceneSizeForm .scenePresetRemove { border-left: 0; border-radius: 0 6px 6px 0; padding-inline: 4px; }
 .sceneSizeFooter { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.sceneSizeForm .sceneSizeFooter button { height: 36px; padding-inline: 0; }
 .sceneSizeNotice { margin: 0; font-size: 11px; line-height: 16px; }
-.sceneSizeForm .sceneGlassFooterAction { height: 36px; min-height: 0; padding: 0; border: 0; border-radius: 999px; background: transparent; touch-action: none; }
-.sceneSizeForm .sceneGlassFooterAction:hover { background: transparent; }
 .sceneSizeForm button:focus-visible, .sceneSizeForm input:focus-visible { outline: 2px solid #147bdb; outline-offset: 1px; }
-.sceneResizeGrip { position: fixed; right: 2px; bottom: 2px; z-index: 240; width: 44px; height: 44px; min-width: 0; min-height: 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; cursor: nwse-resize; touch-action: none; user-select: none; -webkit-user-select: none; }
-.sceneResizeGrip svg { display: block; width: 44px; height: 44px; fill: none; stroke: #17191e; stroke-width: 4.5; stroke-linecap: round; pointer-events: none; }
+/* 缩放手柄通过 portal 挂到 body，手柄和输入区从根元素共享尺寸。 */
+:root { --scene-resize-grip-size: 44px; --scene-resize-grip-offset: 2px; }
+.sceneResizeGrip { position: fixed; right: var(--scene-resize-grip-offset); bottom: var(--scene-resize-grip-offset); z-index: 240; width: var(--scene-resize-grip-size); height: var(--scene-resize-grip-size); min-width: 0; min-height: 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; cursor: nwse-resize; touch-action: none; user-select: none; -webkit-user-select: none; }
+.sceneResizeGrip svg { display: block; width: var(--scene-resize-grip-size); height: var(--scene-resize-grip-size); fill: none; stroke: #17191e; stroke-width: 4.5; stroke-linecap: round; pointer-events: none; }
 .sceneResizeGrip:focus-visible { outline: 2px solid #087cdd; outline-offset: -5px; }
+
+/* 输入区随固定缩放热区预留右侧空间，设置页与 P0 页保留底部空间。 */
+main[data-cardlink-scene="true"] .agentComposerDock {
+  padding-right: calc(var(--scene-resize-grip-size) + 2 * var(--scene-resize-grip-offset));
+}
+main[data-cardlink-scene="true"] .agentSettings,
 
 /* Restore the opaque workbench; scene mode has no decorative outer frame. */
 html[data-host="scene"], html[data-host="scene"] body, html[data-host="scene"] #root,

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useReducer, useRef, useState } from 'react'
 import MNBridge from './lib/mnBridge'
 import { PreviewFrame } from './SceneResources'
 import { ensureHtml2Canvas } from './lib/html2canvas-loader.mjs'
@@ -52,35 +52,83 @@ export function OCRCapture({ item, onDone, onError }) {
   return <PreviewFrame className="ocrCapture" title="OCR 题干渲染" html={item.html} onLoad={render} onError={reason=>void fail(reason).catch(()=>{})} tabIndex={-1} aria-hidden="true"/>
 }
 
-export function OCRBackground({ pulse, enabled, onIndexed }) {
+export function OCRBackground({ pulse, enabled, onIndexed, onActive }) {
   const [capture, setCapture] = useState(null)
+  const [visible, setVisible] = useState(false)
+  const [scheduledPulse, requestQueue] = useReducer(value => value + 1, 0)
+  const foreground = useRef(true)
+  const manualQueueIdle = useRef(enabled)
+  manualQueueIdle.current = enabled
   const current = useRef(null)
   useEffect(() => {
-    if (!enabled || !pulse) return
+    let panelOpen = true
+    let checking = false
+    async function check() {
+      if (!foreground.current || !manualQueueIdle.current || checking) return
+      checking = true
+      try {
+        const result = await MNBridge.send('ocrDbAutoTick')
+        if (result.started && panelOpen) requestQueue()
+      } catch (error) {
+        void MNBridge.send('runtimeLog', { event: 'ocr.schedule.failed', detail: String(error.message || error) }).catch(() => {})
+      } finally {
+        checking = false
+      }
+    }
+    function updateVisibility() {
+      foreground.current = panelOpen && !document.hidden
+      setVisible(foreground.current)
+    }
+    function show() {
+      panelOpen = true
+      updateVisibility()
+      void check()
+    }
+    function hide() { panelOpen = false; updateVisibility() }
+    window.addEventListener('cardlink-panel-show', show)
+    window.addEventListener('cardlink-panel-hide', hide)
+    document.addEventListener('visibilitychange', updateVisibility)
+    show()
+    return () => {
+      window.removeEventListener('cardlink-panel-show', show)
+      window.removeEventListener('cardlink-panel-hide', hide)
+      document.removeEventListener('visibilitychange', updateVisibility)
+      panelOpen = false
+    }
+  }, [])
+  useEffect(() => {
+    if (!enabled || !visible) return
     let stopped = false, timer, worked = false
     async function tick() {
-      if (stopped || document.hidden) return
+      if (stopped || !foreground.current) return
       if (current.current) { timer = setTimeout(tick, 1400); return }
       try {
         const next = await MNBridge.send('ocrDbNext', {automatic:true})
-        if (stopped) {
+        if (stopped || !foreground.current) {
           if (next.html) void MNBridge.send('ocrDbReleaseCapture', {jobId:next.jobId,lease:next.lease}).catch(()=>{})
           return
         }
         if (next.idle || next.paused) {
+          onActive(false)
           if (worked) onIndexed()
           return
         }
         worked = true
+        onActive(true)
         if (next.html) { current.current = next; setCapture(next) }
         timer = setTimeout(tick, 1400)
-      } catch { if (!stopped && worked) onIndexed() }
+      } catch {
+        if (!stopped) {
+          onActive(false)
+          if (worked) onIndexed()
+        }
+      }
     }
     void tick()
-    return () => { stopped = true; clearTimeout(timer) }
-  }, [enabled,pulse,onIndexed])
+    return () => { stopped = true; clearTimeout(timer); onActive(false) }
+  }, [enabled,visible,pulse,scheduledPulse,onIndexed,onActive])
   useEffect(() => {
-    if (!enabled) { current.current = null; setCapture(null) }
-  }, [enabled])
-  return enabled && capture && <OCRCapture key={capture.lease} item={capture} onDone={()=>{current.current=null;setCapture(null)}}/>
+    if (!enabled || !visible) { current.current = null; setCapture(null) }
+  }, [enabled,visible])
+  return enabled && visible && capture && <OCRCapture key={capture.lease} item={capture} onDone={()=>{current.current=null;setCapture(null)}}/>
 }

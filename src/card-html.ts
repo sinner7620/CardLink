@@ -4,6 +4,7 @@ import { isTagComment, noteLinkTarget } from "./safe-note"
 import { imageMimeFromBase64 } from "./base64"
 import { escapeHtml } from "./html-utils"
 import { UI_COLORS } from "./ui-tokens"
+import { answerInkCommentIdentity } from "./answer-ink-comment"
 declare const __CARD_PREVIEW_SCRIPT__: string
 
 export { escapeHtml } from "./html-utils"
@@ -15,6 +16,9 @@ export type DrawingResolver = (hash: string) => string | undefined
 export interface CardContentOptions {
   handwriting?: boolean
   comments?: boolean
+  /** The independent preview shows the root card's annotations separately. */
+  excludeAnswerInk?: boolean
+  respectCommentDisplay?: boolean
 }
 
 function arrayOf<T>(value: unknown): T[] {
@@ -78,6 +82,14 @@ function excerptBlock(note: any, resolveMedia: MediaResolver, resolveDrawing: Dr
   return excerptText ? `<div class="text-block markdown-body">${renderMarkdown(excerptText, resolveMedia)}</div>` : ""
 }
 
+function htmlCommentContent(html: string): string {
+  if (!/^(?:<!doctype html[^>]*>\s*)?<(?:html|body)\b/i.test(html)) return html
+  const body = /<body\b[^>]*>([\s\S]*)<\/body\s*>\s*(?:<\/html\s*>)?$/i.exec(html)
+  if (!body) return html
+  const styles = html.slice(0, body.index).match(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi)?.join("") ?? ""
+  return styles + body[1]
+}
+
 function noteBody(
   note: any,
   resolveNote: NoteResolver,
@@ -85,32 +97,32 @@ function noteBody(
   resolveDrawing: DrawingResolver,
   visited = new Set<any>(),
   collapseComments = false,
-  options: CardContentOptions = {}
+  options: CardContentOptions = {},
+  excludeAnswerInk = false
 ): string {
   const noteId = textOf(note?.noteId)
   if (!note || visited.has(note) || (noteId && visited.has(noteId))) return ""
   visited.add(note)
   if (noteId) visited.add(noteId)
-  const blocks: string[] = []
   const excerpt = excerptBlock(note, resolveMedia, resolveDrawing, options)
-  if (excerpt) blocks.push(excerpt)
-  const commentStart = blocks.length
+  const comments: string[] = []
 
   for (const comment of options.comments === false ? [] : arrayOf<any>(note?.comments)) {
     const type = String(comment?.type ?? "")
     const text = textOf(comment?.text)
+    if (excludeAnswerInk && answerInkCommentIdentity(comment)) continue
+    let content = ""
     if (type === "PaintNote") {
-      const content = paintNoteBlock(
+      content = paintNoteBlock(
         comment?.paint,
         comment?.drawing,
         resolveMedia,
         resolveDrawing,
         options.handwriting !== false
       )
-      if (content) blocks.push(content)
     } else if (type === "HtmlNote") {
       const html = textOf(comment?.html)
-      if (html || text) blocks.push(`<div class="html-block">${html || escapeHtml(text)}</div>`)
+      if (html || text) content = `<div class="html-block">${html ? htmlCommentContent(html) : escapeHtml(text)}</div>`
     } else if (type === "TextNote" && text && !isTagComment(text)) {
       const linkedId = noteLinkTarget(text)
       if (linkedId) {
@@ -118,11 +130,10 @@ function noteBody(
         // content instead of dropping it (same fallback chain as LinkNote).
         const linked = resolveNote(linkedId)
         if (linked && !visited.has(linked)) {
-          const linkedBody = noteBody(linked, resolveNote, resolveMedia, resolveDrawing, visited, collapseComments, options)
-          if (linkedBody) blocks.push(linkedBody)
+          content = noteBody(linked, resolveNote, resolveMedia, resolveDrawing, visited, collapseComments, options)
         }
       } else if (!hasUnsupportedMarginNoteUrl(text)) {
-        blocks.push(`<div class="text-block markdown-body">${renderMarkdown(text, resolveMedia)}</div>`)
+        content = `<div class="text-block markdown-body">${renderMarkdown(text, resolveMedia)}</div>`
       }
     } else if (type === "LinkNote") {
       const mergedBlocks: string[] = []
@@ -147,13 +158,15 @@ function noteBody(
           if (linkedBody) mergedBlocks.push(linkedBody)
         }
       }
-      if (mergedBlocks.length) blocks.push(mergedBlocks.join(""))
+      content = mergedBlocks.join("")
     }
+    if (!content) continue
+    const nativeCollapsed = options.respectCommentDisplay ? comment?.mnCommentDisplay?.collapsed : undefined
+    const collapsed = typeof nativeCollapsed === "boolean" ? nativeCollapsed : collapseComments
+    const index = comments.length
+    comments.push(`<details class="card-comment" data-comment-key="${escapeHtml(`${noteId}:${index}`)}"${collapsed ? "" : " open"}><summary>评论 ${index + 1}</summary>${content}</details>`)
   }
-  const comments = blocks.slice(commentStart)
-  return blocks.slice(0, commentStart).join("") + comments.map((html, index) =>
-    `<details class="card-comment" data-comment-key="${escapeHtml(`${noteId}:${index}`)}"${collapseComments ? "" : " open"}><summary>评论 ${index + 1}</summary>${html}</details>`
-  ).join("")
+  return excerpt + comments.join("")
 }
 
 // 统一控制器由各宿主复用，不再二次安装手势。
@@ -172,7 +185,7 @@ export function renderCardHtml(
   contentOptions: CardContentOptions = {}
 ): string {
   const answerTitle = textOf(note?.noteTitle) || "答案卡片"
-  const main = noteBody(note, resolveNote, resolveMedia, resolveDrawing, new Set<any>(), collapseComments, contentOptions)
+  const main = noteBody(note, resolveNote, resolveMedia, resolveDrawing, new Set<any>(), collapseComments, contentOptions, contentOptions.excludeAnswerInk)
   const children = (includeChildren ? arrayOf<any>(note?.childNotes) : [])
     .filter(Boolean)
     .map(child => {
@@ -193,7 +206,7 @@ export function renderCardHtml(
 <html><head><meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=0.6,maximum-scale=3,user-scalable=yes">
 <style>
 :root{color-scheme:light;--mn-accent:${UI_COLORS.accent};--mn-gray-fill:${UI_COLORS.grayFill};--mn-level-0:${UI_COLORS.level0};--mn-level-1:${UI_COLORS.level1};--mn-level-2:${UI_COLORS.level2}}*{box-sizing:border-box}html,body{margin:0;padding:0;background:transparent;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#202124}body{padding:0}.card{min-height:100vh;background:#fff;padding:54px 22px 34px}.eyebrow{font-size:12px;color:#6b7280;margin-bottom:6px}.card h1{font-size:22px;line-height:1.35;margin:0 44px 18px 0}.text-block,.html-block{font-size:16px;line-height:1.7;word-break:break-word;margin:12px 0;padding:12px 14px;background:#f5f7fb;border-radius:9px}.html-block{white-space:normal}.markdown-body>:first-child{margin-top:0}.markdown-body>:last-child{margin-bottom:0}.markdown-body p,.markdown-body ul,.markdown-body ol,.markdown-body blockquote,.markdown-body pre{margin:8px 0}.markdown-body h1,.markdown-body h2,.markdown-body h3,.markdown-body h4{line-height:1.35;margin:16px 0 8px}.markdown-body h1{font-size:1.45em}.markdown-body h2{font-size:1.3em}.markdown-body h3{font-size:1.16em}.markdown-body ul,.markdown-body ol{padding-left:1.6em}.markdown-body blockquote{margin-left:0;padding-left:12px;border-left:3px solid #9ca3af;color:#4b5563}.markdown-body code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em;padding:.12em .3em;background:rgba(127,127,127,.14);border-radius:4px}.markdown-body pre{overflow:auto;padding:10px 12px;background:rgba(127,127,127,.14);border-radius:7px;white-space:pre}.markdown-body pre code{padding:0;background:none}.markdown-body table{display:block;max-width:100%;overflow:auto;border-collapse:collapse}.markdown-body th,.markdown-body td{padding:5px 9px;border:1px solid #c9ced8}.markdown-body a{color:var(--mn-accent)}.markdown-body .katex-display{display:block;margin:12px 0;overflow-x:auto;overflow-y:hidden;text-align:center}.markdown-body math{font-size:1.08em}figure{margin:14px 0;text-align:center}img,canvas[data-drawing]{display:block;max-width:100%;height:auto;margin:0 auto;border-radius:8px}canvas[data-drawing]{background:#fff}.paint-note{position:relative;display:block}.paint-note img{width:100%;height:auto}.paint-note canvas[data-drawing]{position:absolute;inset:0;width:100%;height:100%;margin:0;background:transparent;pointer-events:none}.missing-image{padding:28px;text-align:center;color:#9b1c1c;background:#fff1f1;border-radius:8px}.child{margin-top:20px;padding-top:16px;border-top:1px solid #d9dde7}.child h2{font-size:17px;margin:0 0 10px}
-.card-comment{margin:8px 0;border:1px solid #dce6f2;border-radius:8px;padding:6px 10px}.card-comment summary{color:var(--mn-accent);font-size:13px;font-weight:600;cursor:pointer}.card-comment>:not(summary){margin-top:8px}</style></head><body><article class="card"><div class="eyebrow">${escapeHtml(
+.card-comment{margin:8px 0;border:1px solid #dce6f2;border-radius:8px;padding:6px 10px}.card-comment summary{color:var(--mn-accent);font-size:13px;font-weight:600;cursor:pointer;transition:opacity .14s ease-out;-webkit-tap-highlight-color:transparent}.card-comment summary:active{opacity:.62}.card-comment>:not(summary){margin-top:8px}</style></head><body><article class="card"><div class="eyebrow">${escapeHtml(
     questionTitle
   )}</div><h1>${escapeHtml(answerTitle)}</h1>${main}${children}</article><script>${includeRuntime ? pkDrawingRendererScript : ""}</script><script id="cardlink-preview-runtime">${includeRuntime ? cardPinchZoomScript : ""}</script><script>${includeRuntime ? cardCommentStateScript : ""}</script></body></html>`
 }

@@ -23,13 +23,14 @@ function OCRRenderedPreview({text}) {
 }
 
 const labels = {ready:'已识别',not_needed:'原生文字',pending:'待处理',stale:'题面已变化',failed:'失败',cancelled:'已取消',uncertain:'待确认',rendering:'准备图片',uploading:'上传中',recognizing:'识别中',downloading:'下载中',normalizing:'整理中'}
-export function OCRDatabase({onBack,sourceRevision,onQueueActive,onIndexed,onPreferencesChanged,Select='select',Switch,Morph}) {
+export function OCRDatabase({onBack,sourceRevision,onQueueActive,automaticRunning,onIndexed,onSourcesRefreshed,Select='select',Switch,Morph}) {
   const [stats,setStats] = useState(null), [settings,setSettings] = useState(null), [sets,setSets] = useState([])
   const [engine,setEngine] = useState('glm-ocr'), [scope,setScope] = useState(''), [query,setQuery] = useState(''), [filter,setFilter] = useState(''), [offset,setOffset] = useState(0)
   const [result,setResult] = useState({items:[],total:0}), [message,setMessage] = useState(''), [error,setError] = useState(''), [busy,setBusy] = useState(false)
   const [page,setPage] = useState('overview'), [attention,setAttention] = useState([])
   const [searchError,setSearchError] = useState('')
-  const [consent,setConsent] = useState(null), [running,setRunning] = useState(false), [capture,setCapture] = useState(null), [detail,setDetail] = useState(null), [draft,setDraft] = useState(''), [refresh,setRefresh] = useState(0)
+  const [consent,setConsent] = useState(null), [manualRunning,setRunning] = useState(false), [capture,setCapture] = useState(null), [detail,setDetail] = useState(null), [draft,setDraft] = useState(''), [refresh,setRefresh] = useState(0)
+  const running = manualRunning || automaticRunning
   useEffect(()=>{let active=true;Promise.all(['failed','waiting'].map(status=>MNBridge.send('ocrDbSearch',{status,limit:3,offset:0}))).then(rows=>{if(active)setAttention(rows.flatMap(r=>r.items).slice(0,4))}).catch(()=>{});return()=>{active=false}},[refresh,sourceRevision])
   const [advanced,setAdvanced]=useState(false),[preferences,setPreferences]=useState(null),[maintenance,setMaintenance]=useState(null)
   const initializedSettings=useRef(false)
@@ -55,7 +56,7 @@ export function OCRDatabase({onBack,sourceRevision,onQueueActive,onIndexed,onPre
     send('ocrListMistakeStudySets').then(value=>{if(mounted.current)setSets(value)}).catch(fail)
     return () => {mounted.current=false}
   },[])
-  useEffect(() => { onQueueActive?.(running); return () => onQueueActive?.(false) }, [running,onQueueActive])
+  useEffect(() => { onQueueActive?.(manualRunning); return () => onQueueActive?.(false) }, [manualRunning,onQueueActive])
   useEffect(() => { if(sourceRevision)statsLoad().catch(fail) }, [sourceRevision])
   useEffect(() => {
     const seq=++request.current
@@ -63,7 +64,7 @@ export function OCRDatabase({onBack,sourceRevision,onQueueActive,onIndexed,onPre
     return ()=>{clearTimeout(timer);request.current++}
   },[query,scope,filter,offset,refresh,sourceRevision])
   useEffect(() => {
-    if(!running)return
+    if(!manualRunning)return
     let stopped=false, timer, inFlight=false
     async function tick(){
       if(stopped || inFlight)return
@@ -83,7 +84,14 @@ export function OCRDatabase({onBack,sourceRevision,onQueueActive,onIndexed,onPre
       finally{inFlight=false;if(!stopped)timer=setTimeout(tick,1400)}
     }
     tick();return()=>{stopped=true;clearTimeout(timer)}
-  },[running])
+  },[manualRunning])
+  useEffect(() => {
+    if (!automaticRunning) return
+    const update = () => statsLoad().catch(fail)
+    void update()
+    const timer = setInterval(update, 1400)
+    return () => clearInterval(timer)
+  }, [automaticRunning])
   async function action(work,success='',refreshStats=true) {setError('');setBusy(true);try{await work();if(success)setMessage(success);if(refreshStats)await statsLoad();setRefresh(n=>n+1)}catch(reason){fail(reason)}finally{setBusy(false)}}
   const [textMode,setTextMode]=useState('raw')
   const [original,setOriginal]=useState(null)
@@ -138,7 +146,7 @@ export function OCRDatabase({onBack,sourceRevision,onQueueActive,onIndexed,onPre
   const credential=settings?.credentials?.[credentialRef]
   const provider=engine==='mineru'?'MinerU':'GLM-OCR', endpoint=engine==='mineru'?settings?.mineru?.baseUrl:settings?.glmOcr?.baseUrl
   async function chooseEngine(value){await action(async()=>{setSettings(await send('ocrSaveSettings',{ocrEngine:value}));setEngine(value)},'',false)}
-  async function savePreference(patch,consent=false){await action(async()=>{setPreferences(await send('ocrDbSavePreferences',{...patch,consent,...(consent?{engine,notebookId:scope}:{})}));setMaintenance(null);onPreferencesChanged?.()},'',false)}
+  async function savePreference(patch,consent=false){await action(async()=>{setPreferences(await send('ocrDbSavePreferences',{...patch,consent,...(consent?{engine,notebookId:scope}:{})}));setMaintenance(null)},'',false)}
   async function selectBackup(){await action(async()=>{const value=await send('ocrDbSelectBackup');if(!value.cancelled)setMaintenance({kind:'import',...value})},'',false)}
   async function previewCleanup(){await action(async()=>setMaintenance({kind:'cleanup',...await send('ocrDbPreviewCleanup')}),'',false)}
   async function maintain(){
@@ -146,12 +154,6 @@ export function OCRDatabase({onBack,sourceRevision,onQueueActive,onIndexed,onPre
     if(selected.kind==='schedule'||selected.kind==='full'){await savePreference(selected.kind==='schedule'?{scheduled:true,intervalHours:selected.intervalHours}:{incremental:false},true);return}
     await action(async()=>{const value=await send(selected.kind==='import'?'ocrDbImportBackup':'ocrDbCleanup',{token:selected.token,confirmed:true});setMaintenance(null);if(selected.kind==='import'){setPreferences(await send('ocrDbGetPreferences'));setMessage(`已恢复 ${value.questions} 道题目`)}else setMessage(`已清理 ${value.questions} 条孤立记录、${value.assets} 张无引用图片`)})
   }
-  useEffect(()=>{
-    let stopped=false,inFlight=false
-    async function tick(enter=false){if(inFlight)return;inFlight=true;try{const value=await send('ocrDbAutoTick',{enter});if(!stopped&&value.started){setRunning(true);setRefresh(n=>n+1)}}catch(reason){if(!stopped)fail(reason)}finally{inFlight=false}}
-    void tick(true);const timer=setInterval(()=>{if(!document.hidden)void tick()},60000)
-    return()=>{stopped=true;clearInterval(timer)}
-  },[])
   useEffect(()=>{if(!message&&!error&&!searchError)return;const timer=setTimeout(()=>{setMessage('');setError('');setSearchError('')},5000);return()=>clearTimeout(timer)},[message,error,searchError])
   useEffect(()=>{if(!detail&&!consent&&!advanced&&!maintenance)return;const old=document.activeElement;const close=e=>{if(e.key==='Escape'){setDetail(null);setConsent(null);setAdvanced(false);setMaintenance(null)}if(e.key==='Tab'){const nodes=[...document.querySelectorAll('.ocrReference .modal-scrim.show button:not(:disabled),.ocrReference .modal-scrim.show textarea')];const first=nodes[0],last=nodes[nodes.length-1];if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus()}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus()}}};document.querySelector('.ocrReference .modal-scrim.show button')?.focus();document.addEventListener('keydown',close);return()=>{document.removeEventListener('keydown',close);old?.focus?.()}},[!!detail,!!consent,advanced,!!maintenance])
   const pending=(counts.pending||0)+(counts.stale||0)+(counts.cancelled||0), coverage=stats?.total?100*completed/stats.total:0
@@ -170,7 +172,7 @@ export function OCRDatabase({onBack,sourceRevision,onQueueActive,onIndexed,onPre
       </div><section className="tabpane" id="ocr-panel-overview" role="tabpanel" aria-labelledby="ocr-tab-overview" hidden={page!=='overview'}>
         <div className="section-head"><h2 className="section-title">数据库概览</h2></div>
         <div className="card"><div className="stats">{[['check','可搜索',completed],['clock','待识别',pending],['alert','识别失败',counts.failed||0]].map(([icon,title,value])=><div className="stat" key={title}><div className="stat-label"><RefIcon name={icon}/>{title}</div><div className={`stat-num ${icon==='alert'?'failed':''}`}>{value.toLocaleString('zh-CN')}</div></div>)}</div>
-          <div className="progress-section"><div className="row"><span className="progress-label">识别覆盖率</span><span className="progress-meta">{coverage.toFixed(1)}%</span></div><div className="progress-bg" role="progressbar" aria-label="OCR 识别覆盖率" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Number(coverage.toFixed(1))}><div className="progress-fill" style={{width:`${coverage}%`}}/></div><div className="row" style={{marginTop:8}}><span className="section-sub">共 {(stats?.total||0).toLocaleString('zh-CN')} 道错题</span></div><div className="main-actions"><button type="button" className="btn btn-primary" disabled={busy||running} onClick={()=>setConsent({})}><RefIcon name="refresh"/>{preferences?.incremental===false?'完整同步':'增量识别'}</button><button type="button" className="btn btn-outline" disabled={busy||running} onClick={retryFailed}><RefIcon name="retry"/>重试失败</button></div></div>
+          <div className="progress-section"><div className="row"><span className="progress-label">识别覆盖率</span><span className="progress-meta">{coverage.toFixed(1)}%</span></div><div className="progress-bg" role="progressbar" aria-label="OCR 识别覆盖率" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Number(coverage.toFixed(1))}><div className="progress-fill" style={{width:`${coverage}%`}}/></div><div className="row" style={{marginTop:8}}><span className="section-sub">共 {(stats?.total||0).toLocaleString('zh-CN')} 道错题</span></div><div className="main-actions"><button type="button" className="btn btn-primary" disabled={busy||running} onClick={()=>setConsent({})}><RefIcon name="refresh"/>{preferences?.incremental===false?'完整同步':'增量识别'}</button><button type="button" className="btn btn-outline" disabled={busy||running} onClick={retryFailed}><RefIcon name="retry"/>重试失败</button><button type="button" className="btn btn-outline" disabled={busy||running||stats?.sync?.running} onClick={()=>action(async()=>{const result=await send('ocrDbRefreshSources',{notebookId:scope});onSourcesRefreshed?.(result)},'本地搜索索引已更新')}>更新搜索索引</button></div></div>
         </div>
       <div className="ocrQueueBar" role="region" aria-label="识别队列控制"><div><span className={`ocrQueueDot ${running?'active':''}`}/><strong>{running?'正在处理':stats?.paused?'已暂停':'识别队列'}</strong><small>{stats?.sync?.running?`同步 ${stats.sync.done} / ${stats.sync.total}`:`${pending} 待处理 · ${counts.failed||0} 失败`}</small></div><div className="ocrQueueActions">{running?<button className="btn btn-outline" onClick={pauseQueue}>暂停识别</button>:<button className="btn btn-primary" disabled={busy||!hasWork} onClick={resumeQueue}>继续识别</button>}<button className="btn btn-outline ocrCancel" disabled={busy||!hasWork} onClick={cancelQueue}>取消队列</button></div></div>
         <div className="section-head"><h2 className="section-title">需要处理</h2><button type="button" className="text-btn" onClick={()=>{setPage('tasks');setFilter('');setQuery('');setOffset(0)}}>查看全部 <RefIcon name="chevron"/></button></div><div className="card activity">{attention.length?attention.map((q,i)=>row(q,i,true)):<div className="empty">暂无需要处理的题目</div>}</div>
@@ -183,7 +185,7 @@ export function OCRDatabase({onBack,sourceRevision,onQueueActive,onIndexed,onPre
       </section>
       <section className="tabpane" id="ocr-panel-settings" role="tabpanel" aria-labelledby="ocr-tab-settings" hidden={page!=='settings'}>
         <div className="settings-group"><h2>识别引擎</h2><div className="radio-grid" role="radiogroup" aria-label="默认识别引擎">{[['glm-ocr','GLM-OCR'],['mineru','MinerU']].map(([key,title])=><label key={key} className={`radio-card ${engine===key?'selected':''}`}><input type="radio" name="engine" value={key} checked={engine===key} disabled={busy||!settings} onChange={()=>chooseEngine(key)}/><div className="radio-top"><span className="radio-control"/>{title}</div></label>)}</div>
-          <div className="subsection-head">API 密钥</div><OCRCredential key={credentialRef} provider={provider} credentialRef={credentialRef} credential={credential} send={send} onSaved={async()=>{await loadSettings();onPreferencesChanged?.()}} onError={fail} Morph={Morph}/>
+          <div className="subsection-head">API 密钥</div><OCRCredential key={credentialRef} provider={provider} credentialRef={credentialRef} credential={credential} send={send} onSaved={async()=>{await loadSettings()}} onError={fail} Morph={Morph}/>
         </div>
         <div className="settings-group"><h2>识别行为</h2>{[['incremental','增量识别'],['autoRetry','失败任务自动重试'],['scheduled','定期自动 OCR']].map(([key,title])=><div className="setting-row" key={key}><div className="setting-name">{title}</div><button className="switch" type="button" role="switch" aria-checked={!!preferences?.[key]} aria-label={title} disabled={busy||!preferences} onClick={()=>{if(key==='scheduled'&&!preferences.scheduled)setMaintenance({kind:'schedule',intervalHours:24});else if(key==='incremental'&&preferences.incremental)setMaintenance({kind:'full'});else void savePreference({[key]:!preferences[key]})}}><span aria-hidden="true">{Switch?<Switch checked={!!preferences?.[key]} label={title}/>:<span className="switch-knob"/>}</span></button></div>)}</div>
         <div className="settings-group"><div className="row" style={{marginBottom:12}}><h2 style={{margin:0}}>本地数据库</h2></div><div className="card"><div className="db-info row"><div><strong className="db-size">{stats?.databaseBytes!=null?`${(stats.databaseBytes/1048576).toFixed(1)} MB`:'—'}</strong><div className="row-desc">cardlink-ocr.sqlite</div></div></div>
@@ -196,7 +198,7 @@ export function OCRDatabase({onBack,sourceRevision,onQueueActive,onIndexed,onPre
       </section>
     </div>
     {maintenance&&<div className="modal-scrim show" onClick={e=>{if(e.target===e.currentTarget)setMaintenance(null)}}><div className="dialog" role="dialog" aria-modal="true" aria-label={maintenance.kind==='import'?'导入 OCR 备份':maintenance.kind==='cleanup'?'清理孤立记录':maintenance.kind==='schedule'?'定期自动 OCR':'完整识别'}><div className="row"><h2>{maintenance.kind==='import'?'导入 OCR 备份':maintenance.kind==='cleanup'?'清理孤立记录':maintenance.kind==='schedule'?'定期自动 OCR':'完整识别'}</h2><button className="btn btn-ghost btn-sm" onClick={()=>setMaintenance(null)}>关闭</button></div>
-      <div className="body">{maintenance.kind==='import'?`备份含 ${maintenance.questions} 道题目、${maintenance.assets} 张图片。确认后替换当前 OCR 数据库，保留错题本与密钥。导入任务不会自动提交。`:maintenance.kind==='cleanup'?`将清理 ${maintenance.questions} 条已不在错题本的记录、${maintenance.assets} 张无引用图片；保留现有题目及其历史任务。`:maintenance.kind==='schedule'?`使用 ${provider}（${endpoint}），范围：${sets.find(s=>s.id===scope)?.title||'全部错题'}。工作台打开或刷新时增量检查新增和变更题干；OCR 数据库页还会按设定间隔检查。图片会发送至服务方，可能产生费用。`:'关闭后，每次同步都重新识别范围内的图片题，可能重复产生服务费用；人工修订保留。'}</div>
+      <div className="body">{maintenance.kind==='import'?`备份含 ${maintenance.questions} 道题目、${maintenance.assets} 张图片。确认后替换当前 OCR 数据库，保留错题本与密钥。导入任务不会自动提交。`:maintenance.kind==='cleanup'?`将清理 ${maintenance.questions} 条已不在错题本的记录、${maintenance.assets} 张无引用图片；保留现有题目及其历史任务。`:maintenance.kind==='schedule'?`使用 ${provider}（${endpoint}），范围：${sets.find(s=>s.id===scope)?.title||'全部错题'}。图片会发送至服务方，可能产生费用。`:'关闭后，同步重新识别范围内的图片题，可能重复产生服务费用；人工修订保留。'}</div>
       {maintenance.kind==='schedule'&&<label className="fieldlabel">执行间隔<Select aria-label="自动 OCR 间隔" value={maintenance.intervalHours} onChange={e=>setMaintenance(m=>({...m,intervalHours:Number(e.target.value)}))}>{[[1,'每小时'],[6,'每 6 小时'],[24,'每天']].map(([value,title])=><option key={value} value={value}>{title}</option>)}</Select></label>}
       <div className="dialog-actions"><button className="btn btn-outline" disabled={busy} onClick={()=>setMaintenance(null)}>取消</button><button className="btn btn-primary" disabled={busy||(maintenance.kind==='cleanup'&&!maintenance.questions&&!maintenance.assets)} onClick={maintain}>{maintenance.kind==='import'?'确认导入':maintenance.kind==='cleanup'?'确认清理':'确认开启'}</button></div></div></div>}
     {advanced&&<div className="modal-scrim show"><div className="dialog" role="dialog" aria-modal="true" aria-label="同步范围与服务地址"><div className="row"><h2>同步范围与服务地址</h2><button className="btn btn-ghost btn-sm" onClick={()=>setAdvanced(false)}>关闭</button></div><label className="fieldlabel">题目范围<Select aria-label="题目范围" value={scope} onChange={e=>{setScope(e.target.value);setOffset(0)}}><option value="">全部错题</option>{sets.map(set=><option key={set.id} value={set.id}>{set.title}</option>)}</Select></label><label className="fieldlabel">服务地址<input className="search-input" aria-label="OCR 服务地址" value={endpoint||''} onChange={e=>setSettings(s=>({...s,[engine==='mineru'?'mineru':'glmOcr']:{...s[engine==='mineru'?'mineru':'glmOcr'],baseUrl:e.target.value}}))}/></label><div className="dialog-actions"><button className="btn btn-primary" disabled={busy||!settings} onClick={()=>action(async()=>{setSettings(await send('ocrSaveSettings',{mineru:settings.mineru,glmOcr:settings.glmOcr}));setAdvanced(false)},'服务设置已保存')}>保存</button></div></div></div>}

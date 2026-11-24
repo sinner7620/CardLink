@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { readFileSync, existsSync } from "node:fs"
 import AdmZip from "adm-zip"
 
-test("安装包包含编译后的尺寸玻璃控件，但不附源码压缩包或原始上游文件", () => {
+test("安装包保持正式身份与运行资源，不带源码、玻璃控件或原始上游文件", () => {
   const pkg = JSON.parse(readFileSync('package.json','utf8'))
   const zip = new AdmZip(`dist/CardLink-v${pkg.version}.mnaddon`)
   const manifest = JSON.parse(zip.readAsText('mnaddon.json'))
@@ -18,7 +18,12 @@ test("安装包包含编译后的尺寸玻璃控件，但不附源码压缩包�
   assert.doesNotMatch(zip.readAsText('AnswerMatcherCore.js'),/__answerGlass|answerGlassRequested|setReviewGlass/)
   assert.equal(pkg.dependencies['html-to-image'],undefined)
   assert.ok(zip.getEntry('LICENSE'))
-  assert.ok(zip.getEntry('web-dist/size-grid.svg'))
+  assert.ok(zip.getEntry('web-dist/app.js'))
+  assert.ok(zip.getEntry('web-dist/app.css'))
+  assert.equal(zip.getEntry('web-dist/size-grid.svg'),null)
+  assert.doesNotMatch(zip.readAsText('web-dist/app.js'),/liquid-glass|LiquidGlassRenderer|kawase/i)
+  assert.doesNotMatch(zip.readAsText('web-dist/app.css'),/sceneGlassFooterAction|sceneSizeBackdrop/)
+  assert.doesNotMatch(zip.readAsText('THIRD_PARTY_NOTICES.txt'),/liquid-glass-webgl/)
   assert.equal(zip.getEntries().some(entry => /\.(tsx?|map)$/.test(entry.entryName) || entry.entryName.includes('liquid-glass-webgl/')), false)
   assert.ok(zip.getEntry('web-dist/card-command-surface.js'))
   assert.match(zip.readAsText('index.html'),/card-command-surface.js/)

@@ -48,7 +48,6 @@ test('经典浮窗不替换控制器根视图，WebView 从浮窗原点开始，
     children: any[] = []; scrollView = {}; delegate: any
     addSubview(view: any) { this.children.push(view) }
     addGestureRecognizer() {}
-    loadRequest() {}
   }
   const api = windowOpacityFixture(PanelView)
   const setup = readFileSync('rails-native/WebPanelController.js', 'utf8').match(/function setup\(controller\) \{[\s\S]*?\n  \}/)![0]
@@ -57,7 +56,7 @@ test('经典浮窗不替换控制器根视图，WebView 从浮窗原点开始，
   const scope: any = { controller, __MN_ANSWER_CORE_GLOBAL__: api, UIWebView: PanelView, UILabel: PanelView,
     UIPanGestureRecognizer: class {}, UIColor: { clearColor: () => null, blackColor: () => null, grayColor: () => null },
     layoutCloseButton() {}, panelCloseButtonSide: () => 'left',
-    NSURL: { fileURLWithPath: (p: string) => p }, NSURLRequest: { requestWithURL: (p: string) => p } }
+    savedFrame: () => ({ x: 16, y: 40, width: 620, height: 500 }) }
   runInNewContext(setup + ';setup(controller)', scope)
   assert.equal(controller.view, original)
   assert.equal(original.children.length, 0)

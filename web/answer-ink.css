@@ -1,0 +1,69 @@
+.cardlink-answer-ink-tools {
+  position: fixed;
+  top: 0;
+  right: var(--answer-ink-right);
+  z-index: 6;
+  transform-origin: top right;
+  pointer-events: none;
+}
+.answer-ink-toolbar-tray {
+  --fold-origin: right center;
+  --drawesome-tool-width: 56px;
+  --drawesome-control-width: 84px;
+  --horizontal-panel-gap: 12px;
+  position: absolute;
+  right: 0;
+  width: max-content;
+  transform-origin: right top;
+  pointer-events: auto;
+}
+.answer-ink-toolbar-tray button[aria-label="Undo"],
+.answer-ink-toolbar-tray button[aria-label="Redo"],
+.answer-ink-toolbar-tray button[aria-label="保存并收起批注"] {
+  height: 100%;
+}
+.answer-ink-toolbar-tray button[aria-label="Undo"] svg,
+.answer-ink-toolbar-tray button[aria-label="Redo"] svg,
+.answer-ink-toolbar-tray button[aria-label="保存并收起批注"] svg {
+  width: 44px;
+  height: 44px;
+}
+.answer-ink-toolbar-tray[aria-busy="true"],
+.answer-ink-toolbar-tray[aria-busy="true"] button { pointer-events: none; }
+.answer-ink-popups > [role="dialog"] { pointer-events: auto; }
+.cardlink-answer-ink-tools [role="status"]:empty { display: none; }
+.cardlink-answer-ink-tools [role="status"] {
+  position: absolute;
+  top: calc(var(--answer-ink-top) + var(--answer-ink-height) + 8px);
+  right: 0;
+  width: max-content;
+  max-width: min(320px, calc(100vw - var(--answer-ink-right) - 8px));
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: var(--mn-level-0, #fff);
+  box-shadow: 0 2px 8px #18243a26;
+  font-size: 12px;
+}
+.answer-ink-card { position: relative; }
+.answer-ink-workspace { position: fixed; inset: 0; display: flex; overflow: hidden; background: white; }
+.answer-ink-workspace[hidden], .answer-ink-workspace .ink-hint, .answer-ink-workspace .ink-view-status:empty { display: none; }
+.answer-ink-workspace > .ink-viewport { background: #e9eee7; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.answer-ink-paper { position: absolute; top: 0; left: 0; background: white; pointer-events: none; transform-origin: top left; }
+.answer-ink-paper-content { transform-origin: top left; }
+.answer-ink-card > .ink-tile { position: absolute; pointer-events: none; }
+.answer-ink-card > .ink-highlight, .answer-ink-workspace .ink-highlight { mix-blend-mode: multiply; }
+.answer-ink-card > .ink-dry { z-index: 1; }
+.ink-pencil-hover {
+  position: absolute;
+  z-index: 2;
+  box-sizing: border-box;
+  pointer-events: none;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 1px #fff;
+  opacity: .7;
+  transform: translate(-50%, -50%);
+}
+.answer-ink-saved { padding: 8px 16px; background: white; }
+.answer-ink-saved summary { color: var(--mn-accent); }
+.answer-ink-saved img { max-width: 100%; }

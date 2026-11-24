@@ -16,16 +16,6 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-Liquid Glass controls used by the scene window-size panel
-Upstream: martin65536/liquid-glass-webgl
-https://github.com/martin65536/liquid-glass-webgl
-Revision: 0b90f9fc1cea8c7e59825f9aff1cbb96674b5b80
-Web port by martin65536 / Z.ai Agent, based on Kyant's AndroidLiquidGlass.
-License: AGPL-3.0 (see LICENSE distributed with CardLink).
-Upstream renderer, shaders, element factories and pointer handlers are used unmodified.
-Source provenance: web/vendor/liquid-glass-webgl/UPSTREAM.json in the development repository.
-The installation package contains compiled runtime code and assets, without an embedded source archive or raw upstream TypeScript files.
-
 
 ts-fsrs 5.4.2 — https://github.com/open-spaced-repetition/ts-fsrs
 MIT License
@@ -193,3 +183,194 @@ ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
 WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+Chat UI page structure adapted from vercel/chatbot
+Upstream: https://github.com/vercel/chatbot
+Copyright 2024 Vercel, Inc.
+Licensed under the Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0).
+Adapted files (structure and Tailwind classes, rewritten to CardLink's harness data model):
+- web/src/components/chat/chat-shell.jsx  (upstream components/chat/shell.tsx)
+- web/src/components/chat/chat-header.jsx (upstream components/chat/chat-header.tsx)
+- web/src/components/chat/app-sidebar.jsx (upstream components/chat/app-sidebar.tsx, sidebar-history-item.tsx)
+- web/src/components/chat/messages.jsx    (upstream components/chat/messages.tsx)
+- web/src/components/chat/message.jsx     (upstream components/chat/message.tsx)
+- web/src/components/chat/multimodal-input.jsx (upstream components/chat/multimodal-input.tsx)
+- web/src/components/chat/greeting.jsx, suggested-actions.jsx
+- web/src/components/ui/sidebar.tsx, sheet.tsx, alert-dialog.tsx (upstream shadcn/ui copies)
+- web/src/hooks/use-messages.ts, use-scroll-to-bottom.ts, use-mobile.ts
+Changes: Next.js routing/auth/database/artifacts/attachments/visibility removed; data layer replaced
+with CardLink's JSB harness commands (startRun/getRunStatus polling); markdown rendering uses
+CardLink's existing Response/AnswerPresenter pipeline.
+
+assistant-ui (Registry Elements, homepage trace source, React runtime, Markdown renderer) and tw-shimmer
+Sources: https://github.com/assistant-ui/assistant-ui and https://r.assistant-ui.com/
+Registry Elements imported on 2026-11-17: elements-settings-panel,
+elements-typing-indicator, elements-run-activity, elements-tool-timeline,
+elements-tool-call, and elements-tool-error.
+CardLink adaptations include slots for real settings and tool payloads,
+localized accessible labels, and omission of unsupported tool retry controls.
+
+Additional v2.17 Registry ports for branches, editing, search, day labels,
+message surfaces, plans, question/option flow, errors, usage, citations,
+reasoning effort and artifact views are identified by their filenames under
+web/src/components/assistant-ui/elements. The Registry surfaces receive only
+CardLink's validated local content and trusted UI callbacks.
+
+MIT License
+
+Copyright (c) 2026 AgentbaseAI Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+dsh-context (context composition bar, legend and context trend chart)
+Source: https://github.com/bowenliang123/dsh-context
+Revision: 459e2369a4ff6caee912cf8b6dfc35cfac8c77c1
+Copyright 2025 bowenliang123
+Licensed under the Apache License, Version 2.0 (see licenses/dsh-context-LICENSE.txt).
+
+Ported files (upstream path -> local path):
+- src/shared/categories.ts -> web/src/vendor/dsh-context/categories.ts
+- src/client/reserve.ts -> web/src/vendor/dsh-context/reserve.ts
+- src/client/components/tip.tsx -> web/src/vendor/dsh-context/tip.tsx
+- src/client/components/stackedBar.tsx -> web/src/vendor/dsh-context/stackedBar.tsx
+- src/client/components/currentComposition.tsx -> web/src/vendor/dsh-context/currentComposition.tsx
+- src/client/components/trendChart.tsx + trendModel.ts -> web/src/vendor/dsh-context/trendChart.tsx
+- src/client/headline.ts -> web/src/vendor/dsh-context/headline.ts
+- src/client/viewkit.ts + i18nZh.ts + format.ts -> web/src/vendor/dsh-context/kit.ts
+- src/client/styles/{base,stats,stackedBar,trendChart}.css -> web/src/vendor/dsh-context/styles/
+
+Modifications: DeepSeek Harness host coupling (module loader, slots, API routes, ledger, pricing,
+DNA bands, duration curve, virtual scrolling, multi-language) is not included. Rendering logic,
+class names, ARIA and keyboard behaviour are kept. The only added stylesheet is
+web/src/vendor/dsh-context/styles/cardlink.css, which maps the DSH theme variables (--dsw-*)
+to CardLink design tokens. Chinese category labels are renamed to the CardLink context parts
+(system instruction / tool definitions / messages / compaction summary / tool results / overhead)
+while keys and colours from the upstream CATS table stay unchanged.
+Data comes from CardLink's own read-only telemetry command; no ledger or ledger-derived cost is
+copied from the upstream plugin.
+
+dsh-cost-meter (session cost cards and daily cost table)
+Sources: https://github.com/Han-1413141/dsh-cost-meter
+         docs/context-costs-design.md
+Revision: cff8dcdf115c4e29342d458d539c48329a17c1a9
+Copyright (c) 2026 dsh-cost-meter contributors
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Ported files (upstream path -> local path):
+- src/client/03-settings-panels-main.js (Card) -> web/src/vendor/dsh-cost-meter/card.jsx
+- src/client/03-settings-panels-main.js (HistoryTable day rows) -> web/src/vendor/dsh-cost-meter/card.jsx
+- src/client/01-open-styles-i18n.js (inline css array) -> web/src/vendor/dsh-cost-meter/styles/cost.css
+
+Modifications: only the presentation layer is ported (cost card markup and the daily table
+skeleton). Ledger sync, host projections, models.dev price catalogue, peak/off-peak pricing,
+currency conversion, balance/quota queries and the cost detail dialog are not included.
+Amounts are computed by CardLink's own local estimate (user configured rate snapshot) and are
+never copied from the upstream ledger. The added stylesheet
+web/src/vendor/dsh-cost-meter/styles/cardlink.css maps DSH theme variables to CardLink tokens.
+
+tw-animate-css
+Source: https://github.com/Wombosvideo/tw-animate-css
+
+MIT License
+
+Copyright (c) 2025 Wombosvideo
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Drawesome — toolbar, tool settings, styles, interface icons and highlighter stroke engine for answer preview
+https://github.com/benjitaylor/drawesome/tree/4ea1970723d031fbaa448950eb46a64e229de82f
+MIT License
+
+Copyright (c) 2026 Benji Taylor
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+React, React DOM and Scheduler — runtime for the Drawesome toolbar
+https://github.com/facebook/react
+MIT License
+
+Copyright (c) Meta Platforms, Inc. and affiliates.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

@@ -77,7 +77,6 @@ import {
   showAnswerCard,
   syncAnswerCardWindowControlSide
 } from "./answer-card-view"
-import { closeUpdateDialog } from "./update-dialog"
 import { checkForUpdates, installUpdateFromLink, showUpdateStatus, scheduleAutomaticUpdateCheck } from "./updater"
 import { scheduleTelemetryReport } from "./telemetry"
 import { isMindMapNotebook, notebookContainsNote, notebookNotes } from "./note-tree"
@@ -85,7 +84,7 @@ import { chooseNotebook, closeNotebookPicker, onNotebookPickerAction } from "./n
 import { completePendingNoteNavigation, focusNoteInFloatMindMap, recordRuntimeState , captureDiagnosticError , maskText } from "./note-navigation"
 import { describeError } from "./error-messages"
 import { isAnswerIndexError, promptAnswerIndexRecovery, AnswerIndexRecoveryResult } from "./answer-index-recovery"
-import { revealSameMapQuestion } from "./same-map-practice"
+import { revealPracticeAnswer } from "./same-map-practice"
 import { CardLinkError } from "./errors"
 import {
   ensureMnutilsEntrance,
@@ -547,11 +546,13 @@ export interface AnswerMatchingSettingsData {
   matchedGroups: number
   regexRules: RegexMatchingRules
   debugModeEnabled: boolean
+  debugAiAnalysisEnabled: boolean
   debugAnswerPreviewMode?: "custom" | "native"
   debugUpdateDownloadsEnabled: boolean
-  sourceLocateMode: "locate" | "focus"
+  sourceLocateMode: "locate" | "focus" | "float"
   subcardAnswerDisplay: "reveal" | "window"
   boundHandwritingDisplay: "always" | "doubleTap"
+  answerInkEnabled: boolean
   mistakeListDisplay: "always" | "autoHide"
   entranceDefaultMode: "practice" | "clipper"
   answerMaskStyle: "dark" | "light"
@@ -589,11 +590,13 @@ export function answerMatchingSettingsData(): AnswerMatchingSettingsData {
       answerPattern: ""
     },
     debugModeEnabled: settings.debugModeEnabled,
+    debugAiAnalysisEnabled: settings.debugAiAnalysisEnabled,
     debugAnswerPreviewMode: settings.debugAnswerPreviewMode ?? "custom",
     debugUpdateDownloadsEnabled: settings.debugUpdateDownloadsEnabled,
     sourceLocateMode: settings.sourceLocateMode,
     subcardAnswerDisplay: settings.subcardAnswerDisplay,
     boundHandwritingDisplay: settings.boundHandwritingDisplay,
+    answerInkEnabled: settings.answerInkEnabled,
     mistakeListDisplay: settings.mistakeListDisplay,
     entranceDefaultMode: settings.entranceDefaultMode,
     answerMaskStyle: settings.answerMaskStyle,
@@ -1033,7 +1036,10 @@ async function showAnswer(questionTitle: string, answer: IndexedAnswer, candidat
   owner.answerCardAnswerNoteId = answer.noteId
   owner.answerCardQuestionNoteId = question?.noteId
   owner.answerCardQuestionNotebookId = question?.notebookId
-  showAnswerCard(answerCardHtml(answer, questionTitle, undefined, true), owner)
+  const annotationKey = JSON.stringify([question?.notebookId, question?.noteId, answer.notebookId, answer.noteId])
+  showAnswerCard(answerCardHtml(answer, questionTitle, undefined, true, true, {
+    excludeAnswerInk: true, respectCommentDisplay: true
+  }), owner, annotationKey)
   answerQuestion = question
   if (question && candidates.length > 1) rememberAnswer(question.notebookId, question.noteId, answer)
   syncAnswerCandidatesControl(
@@ -1516,7 +1522,7 @@ export async function findCurrentAnswer(
         (answerTarget.designatedAnswer === "subcard" || answerTarget.selectionMode === "mixed") &&
       Array.from(lookupQuestion.childNodes ?? []).some(child => String(child.note?.noteId ?? "") === answer.noteId) &&
       loadMatcherSettings().subcardAnswerDisplay === "reveal") {
-      const revealed = revealSameMapQuestion(questionNoteId)
+      const revealed = await revealPracticeAnswer(questionNoteId)
       if (revealed) showHUD("已显示当前题目的子卡片答案", 3)
       else await showAnswer(questionTitle, answer, matches, { notebookId: bindingSourceNotebookId, noteId: questionNoteId }, owner)
     } else await showAnswer(questionTitle, answer, matches, { notebookId: bindingSourceNotebookId, noteId: questionNoteId }, owner)
@@ -1881,7 +1887,7 @@ export async function openMenu(): Promise<void> {
     [scoped ? "绑定/更换具体答案脑图" : "绑定/更换答案学习集", () => runSafely(bindAnswerNotebook)],
     ["刷新答案索引", () => runSafely(refreshCurrentIndex)],
     [`设置匹配方式：${matchingModeLabel(answerTarget)}`, () => runSafely(configureAnswerMatching)],
-    ["检查插件更新", () => checkForUpdates(true)],
+    ["检查插件更新", () => checkForUpdates(true, self)],
     ["从链接安装更新", () => installUpdateFromLink()],
     ["查看更新状态", () => showUpdateStatus()],
     ["解除当前答案绑定", () => runSafely(unbindCurrent)]
@@ -1900,7 +1906,7 @@ export async function openMenu(): Promise<void> {
 function activatePluginRuntime(): void {
   eventObservers.remove()
   eventObservers.add()
-  scheduleAutomaticUpdateCheck()
+  scheduleAutomaticUpdateCheck(self)
   scheduleTelemetryReport()
   scheduleMistakeReviewReminder()
   startMistakeReminderTimer()
@@ -1947,7 +1953,6 @@ export const lifecycle = defineLifecycleHandlers({
     },
     notebookWillClose() {
       recordRuntimeState("生命周期", "notebookWillClose 开始")
-      closeUpdateDialog(MN.studyController?.view)
       self.cardLinkReviewNotebookGeneration = Number(self.cardLinkReviewNotebookGeneration || 0) + 1
       suspendReviewModeToolbar()
       closeMnutilsQuickMenu()
@@ -1965,7 +1970,6 @@ export const lifecycle = defineLifecycleHandlers({
     },
     sceneDidDisconnect() {
       recordRuntimeState("生命周期", "sceneDidDisconnect 开始")
-      closeUpdateDialog(MN.studyController?.view)
       eventObservers.remove()
       removeMnutilsEntrance()
       destroyAnswerToolbar()
@@ -1983,7 +1987,7 @@ export const lifecycle = defineLifecycleHandlers({
     applicationWillEnterForeground() {
       if (!self.mistakeMigrationReady) return
       recordRuntimeState("生命周期", "applicationWillEnterForeground 开始")
-      scheduleAutomaticUpdateCheck()
+      scheduleAutomaticUpdateCheck(self)
       scheduleTelemetryReport()
       scheduleMistakeReviewReminder()
       recordRuntimeState("生命周期", "applicationWillEnterForeground 完成")

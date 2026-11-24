@@ -4,6 +4,7 @@ import { select, showHUD } from "marginnote"
 import { startPracticeMode, onReviewModeExit, goToPracticeQuestion } from "./review-mode"
 import { resetAnswerCardPosition } from "./answer-card-view"
 import { UI_COLORS } from "./ui-tokens"
+import { showPluginPanel } from "./plugin-panel"
 import { styleQuickMenuSurface, styleAnnotationReviewSurface } from "./quick-menu-surface"
 import { loadMatcherSettings } from "./settings"
 import { recordRuntimeState } from "./note-navigation"
@@ -497,7 +498,7 @@ function readQuickMenuQuestions(menu: QuickMenu): boolean {
 function updateStartTitle(menu: QuickMenu): void {
   if (clipperModeActive(menu.owner)) return
   const running = sameMapPracticeActive()
-  menu.startButton.backgroundColor = UIColor.colorWithHexString(running ? "#d92d20" : UI_COLORS.accent)
+  menu.startButton.backgroundColor = UIColor.colorWithHexString(running ? UI_COLORS.stop : UI_COLORS.accent)
   menu.startButton.setTitleForState(running
     ? "结束做题"
     : `开始做题${menu.selectedIds.size ? ` · ${menu.selectedIds.size}` : ""}`, 0)
@@ -590,13 +591,13 @@ function refreshClipperMenu(owner: any = self): void {
   const script = "window.updateClip&&window.updateClip(" + JSON.stringify(snapshot) + ")"
   ;(menu.segmentVisual as any).evaluateJavaScript(script, () => {})
   const updateControls = () => {
-    menu.clipControls!.backgroundColor = UIColor.colorWithHexString("#d92d20")
+    menu.clipControls!.backgroundColor = UIColor.colorWithHexString(UI_COLORS.stop)
     menu.startButton.setTitleForState(snapshot.started ? snapshot.running ? "暂停" : "继续" : "开始摘题", 0)
-    menu.startButton.backgroundColor = snapshot.started ? snapshot.running ? UIColor.whiteColor() : UIColor.colorWithHexString("#d92d20") : UIColor.colorWithHexString(UI_COLORS.accent)
+    menu.startButton.backgroundColor = snapshot.started ? snapshot.running ? UIColor.whiteColor() : UIColor.colorWithHexString(UI_COLORS.stop) : UIColor.colorWithHexString(UI_COLORS.accent)
     menu.startButton.setTitleColorForState(snapshot.started && snapshot.running ? UIColor.colorWithHexString(UI_COLORS.accent) : UIColor.whiteColor(), 0)
     if (menu.startButton.titleLabel) menu.startButton.titleLabel.font = UIFont.systemFontOfSize(snapshot.started ? 13 : 15)
     menu.clipEnd!.backgroundColor = snapshot.running ? UIColor.colorWithHexString(UI_COLORS.accent) : UIColor.whiteColor()
-    menu.clipEnd!.setTitleColorForState(snapshot.running ? UIColor.whiteColor() : UIColor.colorWithHexString("#d92d20"), 0)
+    menu.clipEnd!.setTitleColorForState(snapshot.running ? UIColor.whiteColor() : UIColor.colorWithHexString(UI_COLORS.stop), 0)
     layoutQuickMenu(menu, menu.geometry, false)
   }
   const state = `${snapshot.started}:${snapshot.running}`
@@ -1342,6 +1343,7 @@ export async function onMnutilsQuickMenuStart(): Promise<void> {
     return
   }
   if (sameMapPracticeActive()) {
+    // 主动结束做题属于正常退出：按题卡立即恢复折叠状态，不等后台计时器。
     stopSameMapPractice()
     practiceQueueSnapshot = undefined
     menu.mode = "all"
@@ -1393,9 +1395,7 @@ export async function onMnutilsQuickMenuStart(): Promise<void> {
 export function onMnutilsQuickMenuOpenPanel(): void {
   closeQuickMenu(true, self, "open-panel")
   try {
-    const panel = __MNAM_WEB_PANEL_GLOBAL__
-    const controller = self.webController
-    if (!panel.isVisible?.(controller)) panel.showPanel(controller)
+    showPluginPanel()
     const study = Application.sharedInstance().studyController(self.window)
     study?.refreshAddonCommands?.()
   } catch (error) {

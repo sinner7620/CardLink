@@ -4,6 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
     <title>答案与错题工作台</title>
+    <link rel="stylesheet" href="/src/ui/harness-tw.css" />
+    <script>
+      // 本地开发预览开关（与 ui-preview/CardLink-full-ui-preview.html 同一套约定）：
+      // 默认未启用场景模式 → AI 分析页显示 §12.7 引导卡；
+      // ?scene 或 localStorage["preview-scene"]="1" → 模拟 MN5 场景已启用（mock window.mn），
+      // 数据仍走 previewBridge 的 harness mock，真机行为不受影响（此文件不进插件包）。
+      window.__MN_FULL_UI_PREVIEW__ = true;
+      window.__MN_SCENE_ENABLED__ = /[?&]scene/.test(location.search) || localStorage.getItem("preview-scene") === "1";
+      window.mn = window.__MN_SCENE_ENABLED__ ? {} : undefined;
+    </script>
   </head>
   <body><div id="root"></div><script type="module" src="/src/main.jsx"></script></body>
 </html>

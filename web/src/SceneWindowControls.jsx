@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { readSceneSizePresets, removeSceneSizePreset, saveSceneSizePreset, setSceneWindowSize, readDefaultSceneSize, saveDefaultSceneSize, resetSceneWindowSize } from "./lib/sceneWindow"
-import { SceneSizeGlass } from "./SceneSizeGlass"
+import { SceneSizePanel } from "./SceneSizePanel"
 import "./scene-window.css"
 
 export function SceneWindowControls({ side = "left" }) {
@@ -60,7 +60,7 @@ export function SceneWindowControls({ side = "left" }) {
   };
   return <>
     {expanded && createPortal(<div className="sceneSizePopover" data-side={side} role="dialog" aria-label="窗口大小">
-      <SceneSizeGlass size={size} presets={presets} defaultSize={defaultSize} onDefault={selectDefault} onReset={reset} onResize={resize} onSave={save} onRemove={remove} onClose={close} />
+      <SceneSizePanel size={size} presets={presets} defaultSize={defaultSize} onDefault={selectDefault} onReset={reset} onResize={resize} onSave={save} onRemove={remove} onClose={close} />
     </div>, document.body)}
     {createPortal(<button type="button" className="sceneResizeGrip" aria-label="右下角拖动缩放窗口" title="拖动缩放；点击设置尺寸；方向键微调" aria-expanded={expanded}
       {...resizeHandlers} onClick={() => { if (!moved.current) setExpanded(value => !value); }}><svg viewBox="0 0 44 44" aria-hidden="true"><path d="M12 35C27 35 35 27 35 12" /></svg></button>, document.body)}

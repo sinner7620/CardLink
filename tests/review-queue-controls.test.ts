@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 // @ts-ignore browser JS helpers are also exercised without the UI
-import { buildReviewFilterTree, canExpandReviewNode, toggleReviewSelection, sortReviewRecords, reviewSourcePath, chooseReviewSources, chooseReviewLevels } from '../web/src/lib/reviewQueueControls.js'
+import { buildReviewFilterTree, canExpandReviewNode, toggleReviewSelection, sortReviewRecords, reviewSourcePath, reviewDayStatus, chooseReviewSources, chooseReviewLevels } from '../web/src/lib/reviewQueueControls.js'
 
 const record = (recordId: string, extra = {}) => ({ recordId, sourceNotebookId: 'book', sourceNotebookTitle: '学习集', sourceRootNodeId: 'root', sourceRootTitle: '脑图', sourcePathTitles: ['脑图', '章节', '小节'], sourceTitle: recordId, ...extra })
 
@@ -49,4 +49,21 @@ test('默认全选不冒充手动选择，第一次点击只选该来源或等�
   assert.deepEqual(chooseReviewLevels(null, 1), [1])
   assert.deepEqual(chooseReviewLevels([1], 2), [1, 2])
   assert.deepEqual(chooseReviewLevels([1], 1), [])
+})
+
+test('今日到期与逾期按本地日历计算，手动加入仅移动可复习的逾期题', () => {
+  const now = new Date(2026, 10, 20, 9)
+  const dueToday = new Date(2026, 10, 20, 23, 59).toISOString()
+  const overdue = new Date(2026, 10, 19, 23, 59).toISOString()
+  const tomorrow = new Date(2026, 10, 21).toISOString()
+  const { counts, statusOf } = reviewDayStatus([
+    record('today', { nextReviewAt: dueToday }),
+    record('overdue', { nextReviewAt: overdue }),
+    record('manual', { nextReviewAt: overdue }),
+    record('completed', { nextReviewAt: overdue, reviewCompleted: true }),
+    record('unavailable', { nextReviewAt: overdue, noteAvailable: false }),
+    record('tomorrow', { nextReviewAt: tomorrow }),
+  ], ['manual', 'completed', 'unavailable', 'tomorrow'], now)
+  assert.deepEqual(counts, { today: 2, overdue: 1, upcoming: 1, completed: 1 })
+  assert.equal(statusOf(record('manual', { nextReviewAt: overdue })), 'today')
 })

@@ -16,7 +16,7 @@ test('842 格式保存恢复完整笔画、每笔手感与局部擦除后的时�
   assert.equal(JSON.parse(record.strokes).generator, INK_GENERATOR)
   assert.equal(validatePluginInkRecord(record, 'q', 'b'), record)
   assert.deepEqual(restoreInkAnswer(record), answer)
-  assert.equal(restoreInkAnswer(record).styles[0].feel.stabilization, 1.2)
+  assert.equal(restoreInkAnswer(record).styles[0].feel.stabilization, .9)
 })
 
 test('旧版 InkCanvas 记录按1000宽映射坐标并保留原笔型与参数', () => {

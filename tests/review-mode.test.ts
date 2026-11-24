@@ -78,7 +78,7 @@ function harness(foreignSelf = false) {
   const calls: any = { practiceAvailable: true, masks: [], writes: [], reports: [], closed: 0, stopped: 0, targets: [], timers: [], timerHandles: [], notifications: [] }
   let save: (id: string, level: number) => Promise<any> = async (_id, level) => ({ level, reviewCount: 1, history: [{ level, at: "today" }] })
   const color = { colorWithAlphaComponent(alpha: number) { return { alpha } } }
-  const mn = { studyController: { view: host }, db: { getNotebookById: () => ({ title: '学习集' }), getNoteById: (id: string) => ({ noteId: id, noteTitle: id, colorIndex: 1 }) } }
+  const mn = { currnetNotebookId: 'book', studyController: { view: host }, db: { getNotebookById: () => ({ title: '学习集' }), getNoteById: (id: string) => ({ noteId: id, noteTitle: id, colorIndex: 1 }) } }
   const viewExports: any = {}
   const common: any = {
     __MNAM_SCENE_WORKBENCH_GLOBAL__: {
@@ -160,11 +160,13 @@ function harness(foreignSelf = false) {
   const workbenchNotification: any = {}
   load("src/workbench-notification.ts", workbenchNotification, {})
   const windowControls: any = {}
-  load("src/window-controls.ts", windowControls, { "./ui-tokens": { WINDOW_CONTROL_BACKGROUND_OPACITY: 0.96 } })
+  load("src/window-controls.ts", windowControls, { "./ui-tokens": { ...colors, WINDOW_CONTROL_BACKGROUND_OPACITY: 0.96 } })
   const previewMode: any = {}
-  load("src/answer-preview-mode.ts", previewMode, {})
+  const htmlUtils: any = {}
+  load("src/html-utils.ts", htmlUtils, {})
+  load("src/answer-preview-mode.ts", previewMode, { "./html-utils": htmlUtils })
   load("src/answer-card-view.ts", viewExports, { "./mistake-store": { loadMistakeState: () => ({ records: calls.records || {} }) }, "./mistake-domain": { reviewResultHint }, marginnote: { MN: mn }, "./answer-review-controls": reviewVisual, "./answer-card-layout": answerLayout,
-    "./window-controls": { ...windowControls, storedWindowControlSide: () => calls.side || "left" }, "./native-control-surface": surfaces, "./answer-preview-mode": previewMode, "./settings": { loadMatcherSettings: () => ({ ...calls.settings }) } })
+    "./window-controls": { ...windowControls, storedWindowControlSide: () => calls.side || "left" }, "./native-control-surface": surfaces, "./answer-preview-mode": previewMode, "./answer-ink-window": { closeAnswerInk: (_owner: any, next?: () => void) => next?.(), answerInkDocument: (target: any, html: string) => target.answerCardAnnotationKey ? html + '<span data-test-ink-toolbar></span>' : html }, "./settings": { loadMatcherSettings: () => ({ ...calls.settings }) } })
   const reasonApi: any = {}
   load('src/error-reasons.ts', reasonApi, { marginnote: { select: async (rows: string[]) => {
     calls.reasonPrompts = (calls.reasonPrompts || 0) + 1
@@ -245,7 +247,12 @@ function harness(foreignSelf = false) {
     "./note-navigation": { focusNoteInMindMapFocusMode: async () => "focused" },
     "./same-map-practice": {
       startSameMapPractice: async (...args: any[]) => { calls.masks.push(args); if (calls.focusWait) await calls.focusWait; return calls.practiceFailure ? { started: false, reason: calls.practiceFailure } : { started: true } },
-      stopSameMapPractice: () => calls.stopped++
+      preFoldCurrentQuestion: async (notebookId: string, noteId: string, _owner: any, _root: any, isCurrent?: () => boolean) => {
+        if (isCurrent && !isCurrent()) return false
+        ;(calls.prefolds ||= []).push([notebookId, noteId]); return calls.prefold === true
+      },
+      resetFoldFallbackHint: () => { calls.foldHintResets = (calls.foldHintResets || 0) + 1 },
+      stopSameMapPractice: () => { calls.stopped++ }
     },
     "./answer-card-view": { ...viewExports, closeAnswerCard: () => { calls.closed++; viewExports.closeAnswerCard() } },
     "./store": { loadBindings: () => ({}), getBindingForMode: () => calls.binding },
@@ -1669,6 +1676,22 @@ test("复习当前子卡题自动遮盖；横条拖动位置跨题保留，结�
   assert.equal(h.owner.answerCardReviewControls.hidden, true)
 })
 
+test("复习子卡题在定位前先按题卡收起分支，并把来源脑图交给遮盖会话", async () => {
+  const h = harness()
+  h.calls.binding = { designatedAnswer: "subcard", questionColors: [1] }
+  h.calls.prefold = true
+  await h.api.startReviewMode(h.items, h.owner)
+  assert.equal(h.calls.foldHintResets, 1, "每轮开始允许重新提示折叠回退")
+  assert.equal(h.calls.masks[0][1][0], "a")
+  assert.equal(h.calls.masks[0][2].rootNodeId, "root")
+  assert.equal(h.calls.masks[0][2].owner, h.owner)
+  assert.equal((h.calls.prefolds || []).length, 0, "跨脑图定位前不预先折叠")
+  h.answer("a")
+  await h.api.onReviewModeResult({ tag: 1 })
+  await h.api.onReviewModeResult({ tag: 1 })
+  assert.deepEqual(h.calls.prefolds, [["book", "b"]])
+})
+
 test("不匹配的答案不可评价；保存失败保留当前题；重复点击仅写一次", async () => {
   const h = harness()
   await h.api.startReviewMode(h.items, h.owner)
@@ -2098,6 +2121,21 @@ test("答案窗口始终采用原生模式，调试设置不能重新启用插�
   h.viewExports.refreshAnswerCard()
   assert.equal(h.owner.answerCardWebView.scalesPageToFit, true)
   assert.doesNotMatch(h.owner.answerCardWebView.html, /customGesture/)
+})
+
+test("答案预览保持可读，并随手写设置即时显示或隐藏批注入口", () => {
+  const h = harness()
+  const html = '<p>答案正文</p>'
+  h.viewExports.showAnswerCard(html, h.owner, 'answer-key')
+  assert.doesNotMatch(h.owner.answerCardWebView.html, /data-test-ink-toolbar/)
+  h.calls.settings = { answerInkEnabled: true }
+  h.viewExports.syncAnswerCardInkSetting(h.owner)
+  assert.match(h.owner.answerCardWebView.html, /data-test-ink-toolbar/)
+  h.calls.settings.answerInkEnabled = false
+  h.viewExports.syncAnswerCardInkSetting(h.owner)
+  assert.doesNotMatch(h.owner.answerCardWebView.html, /data-test-ink-toolbar/)
+  assert.match(h.owner.answerCardWebView.html, /答案正文/)
+  assert.equal(h.owner.answerCardView.hidden, false)
 })
 
 

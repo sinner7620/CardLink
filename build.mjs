@@ -1,8 +1,10 @@
 import { build as esbuild } from "esbuild"
 import { build as viteBuild } from "vite"
 import AdmZip from "adm-zip"
+import { spawnSync } from "node:child_process"
 import { copyFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
+import { buildAnswerInk } from "./scripts/build-answer-ink.mjs"
 
 const root = process.cwd()
 const pkg = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"))
@@ -11,7 +13,9 @@ if (!repository || !/^[\w.-]+\/[\w.-]+$/.test(repository)) {
   throw new Error("package.json repository.url 必须是 GitHub owner/repository 地址")
 }
 
-const distRoot = path.join(root, "dist")
+// 安装包输出目录。默认 dist/；设置 CARDLINK_DIST_DIR 可把安装包与暂存目录写到别处，
+// 用于在不覆盖已交付的同版本安装包时验证构建（web-dist/ 仍按原位置生成）。
+const distRoot = path.resolve(process.env.CARDLINK_DIST_DIR || path.join(root, "dist"))
 const addonRoot = path.join(distRoot, "CardLink")
 const webDist = path.join(root, "web-dist")
 // 渠道是正式版项目的固定属性，与版本号解耦：版本号按 2.3.3-beta.N 迭代时
@@ -60,6 +64,8 @@ const inkBuild = await esbuild({
 })
 const pluginInkScript = inkBuild.outputFiles[0].text.trim().replace(/<\/script/gi, "<\\/script")
 
+const answerInkScript = await buildAnswerInk(root, { sharedCapture: true })
+
 const completionBuild = await esbuild({
   entryPoints: [path.join(root, "web", "review-completion-effect.js")],
   bundle: true, minify: true, platform: "browser", target: "safari13", format: "iife", write: false
@@ -81,6 +87,8 @@ await esbuild({
       __PKDRAWING_CORE_SCRIPT__: JSON.stringify(pkdrawingCoreScript),
       __CARD_PREVIEW_SCRIPT__: JSON.stringify(cardPreviewScript),
       __PLUGIN_INK_SCRIPT__: JSON.stringify(pluginInkScript),
+      __ANSWER_INK_SCRIPT__: JSON.stringify(answerInkScript),
+      __ANSWER_INK_CARD_WRITE__: "false",
       __REVIEW_COMPLETION_SCRIPT__: JSON.stringify(reviewCompletionScript)
     },
   banner: { js: "try {" },
@@ -88,6 +96,19 @@ await esbuild({
 })
 
 await viteBuild({ configFile: path.join(root, "web", "vite.config.js") })
+
+// Harness UI(§3.1):Tailwind v4 CLI 预编译独立样式(与 vite lib 模式解耦;
+// 入口不含 preflight,插件既有页面不受影响)。内容扫描 web 源码。
+const tailwindCli = path.join(root, "node_modules", "@tailwindcss", "cli", "dist", "index.mjs")
+const tailwindRun = spawnSync(process.execPath, [
+  tailwindCli, "-i", path.join(root, "web", "src", "ui", "harness-tw.css"),
+  "-o", path.join(webDist, "harness-ui.css"),
+  "--content", (root + "/web/src/**/*.{jsx,js}"),
+], { cwd: root, encoding: "utf8" })
+if (tailwindRun.status !== 0) {
+  if (tailwindRun.stderr) console.error(tailwindRun.stderr)
+  throw new Error("Harness UI Tailwind 编译失败")
+}
 await esbuild({ entryPoints:[path.join(root,"web","card-command-surface.js")],outfile:path.join(webDist,"card-command-surface.js"),bundle:true,minify:true,format:"iife",platform:"browser",target:"safari13" })
 
 // A packaged, same-origin frame replaces srcDoc in scene panels. Drawing code
@@ -102,7 +123,7 @@ runInNewContext(rendererBuild.outputFiles[0].text, { module: rendererExports, ex
 await writeFile(path.join(webDist, "preview-runtime.js"), cardPreviewScript + "\n" + pkdrawingCoreScript + "\nwindow.__mnRenderDrawings=function(){" + rendererExports.exports.pkDrawingRendererBody + "};\n")
 for (const name of ["preview.html", "preview.css"]) await copyFile(path.join(root, "web", name), path.join(webDist, name))
 await writeFile(path.join(webDist, "index.html"), `<!doctype html>
-<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>答案与错题工作台</title><link rel="icon" href="./logo.png"><link rel="stylesheet" href="./app.css"></head><body><div id="root"><p id="boot-message" role="status" style="padding:24px;font:15px system-ui;color:#666">正在载入错题工作台…</p></div><script src="./host-policy.js"></script><script src="./annotation-client.js"></script><script src="./boot.js"></script></body></html>\n`)
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover"><title>答案与错题工作台</title><link rel="icon" href="./logo.png"><link rel="stylesheet" href="./harness-ui.css"><link rel="stylesheet" href="./app.css"></head><body><div id="root"><p id="boot-message" role="status" style="padding:24px;font:15px system-ui;color:#666">正在载入错题工作台…</p></div><script src="./host-policy.js"></script><script src="./annotation-client.js"></script><script src="./boot.js"></script></body></html>\n`)
 await copyFile(path.join(root, "web", "boot.js"), path.join(webDist, "boot.js"))
 for (const name of ["host-policy.js", "annotation-client.js", "scene-entry.js", "card-menu.js"]) {
   await copyFile(path.join(root, "web", name), path.join(webDist, name))
@@ -114,7 +135,7 @@ const vendorRoot = path.join(webDist, "vendor")
 await mkdir(vendorRoot, { recursive: true })
 for (const [source, name] of [
   [path.join(root, "node_modules", "html2canvas", "dist", "html2canvas.min.js"), "html2canvas.min.js"],
-  [path.join(root, "node_modules", "jspdf", "dist", "jspdf.umd.min.js"), "jspdf.umd.min.js"],
+  [path.join(root, "web", "pdf-jpeg-writer.js"), "pdf-jpeg-writer.js"],
   [path.join(root, "web", "pdf-export-runtime.js"), "pdf-export-runtime.js"]
 ]) {
   await copyFile(source, path.join(vendorRoot, name))
@@ -152,6 +173,21 @@ await copyFile(path.join(root, "assets", "logo.png"), path.join(addonRoot, "logo
 await cp(path.join(root, "assets", "review-toolbar"), path.join(addonRoot, "review-toolbar"), { recursive: true })
 await copyFile(path.join(root, "THIRD_PARTY_NOTICES.txt"), path.join(addonRoot, "THIRD_PARTY_NOTICES.txt"))
 await copyFile(path.join(root,"LICENSE"),path.join(addonRoot,"LICENSE"))
+// Package the license texts for redistributed fonts, libraries, and UI assets.
+const licenseFiles = [
+  ["assets/cardlink-math/OFL.txt", "CardLink-Math-OFL.txt"],
+  ["node_modules/preact/LICENSE", "Preact-LICENSE.txt"],
+  ["node_modules/highlight.js/LICENSE", "Highlight.js-LICENSE.txt"],
+  ["node_modules/lowlight/license", "Lowlight-LICENSE.txt"],
+  ["node_modules/hast-util-to-text/license", "hast-util-to-text-LICENSE.txt"],
+  ["node_modules/unist-util-visit/license", "unist-util-visit-LICENSE.txt"],
+  ["web/src/vendor/dsh-context/LICENSE", "dsh-context-LICENSE.txt"],
+  ["web/src/vendor/dsh-cost-meter/LICENSE", "dsh-cost-meter-LICENSE.txt"],
+]
+await mkdir(path.join(addonRoot, "licenses"), { recursive: true })
+for (const [source, name] of licenseFiles) {
+  await copyFile(path.join(root, ...source.split("/")), path.join(addonRoot, "licenses", name))
+}
 
 const manifest = {
   addonid: betaChannel

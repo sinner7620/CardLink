@@ -28,6 +28,9 @@ const isBrowserPreview = window.__MN_FULL_UI_PREVIEW__ === true ||
 let sceneTransport
 function scene() {
   if (!window.__MN_SCENE_ENABLED__ || !window.mn) return null
+  // 场景脚本（annotation-client/host-policy）缺失时降级回经典/预览通道，
+  // 不允许面板因单个脚本缺失而整体崩溃（显式降级优于崩溃；真机正常加载时不受影响）。
+  if (typeof window.createCardLinkAnnotationClient !== "function") return null
   if (!sceneTransport) {
     const fetchApi = async (path, options = {}) => {
       const opts = { ...options }

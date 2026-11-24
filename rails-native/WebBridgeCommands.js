@@ -58,7 +58,7 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
     if (source.indexOf("__MN_PDF_FILE_FALLBACK__") >= 0) return source;
     var script = '<link rel="stylesheet" href="./katex.min.css">' + (previewMode ? '<script>window.__MN_PDF_PREVIEW_MODE__=true;</script>' : "") +
       '<script src="./html2canvas.min.js"></script>' +
-      '<script src="./jspdf.umd.min.js"></script>' +
+      '<script src="./pdf-jpeg-writer.js"></script>' +
       '<script src="./pdf-export-runtime.js"></script>';
     var bodyEnd = source.toLowerCase().lastIndexOf("</body>");
     return bodyEnd < 0 ? source + script : source.slice(0, bodyEnd) + script + source.slice(bodyEnd);
@@ -114,7 +114,7 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
         !manager.createDirectoryAtPathWithIntermediateDirectoriesAttributes(directory, true, null)) {
       throw new Error("PDF 临时目录创建失败");
     }
-    ["html2canvas.min.js", "jspdf.umd.min.js", "pdf-export-runtime.js", "katex.min.css"].forEach(function (name) {
+    ["html2canvas.min.js", "pdf-jpeg-writer.js", "pdf-export-runtime.js", "katex.min.css"].forEach(function (name) {
       var destination = directory + "/" + name;
       var source = String(controller.mainPath || "") + "/web-dist/vendor/" + name;
       if (!manager.fileExistsAtPath(source)) throw new Error("PDF 兼容资源不存在：" + name);
@@ -489,6 +489,26 @@ var __MNAM_WEB_BRIDGE_GLOBAL__ = (function () {
   }
 
   function dispatch(context, command, payload) {
+    if (command === "armMistakeDrag" || command === "cancelMistakeDrag") {
+      var dragCore = __MN_ANSWER_CORE_GLOBAL__;
+      if (command === "cancelMistakeDrag") {
+        if (payload && typeof payload.id === "string") dragCore.cancelMistakeDrag(context.addon, payload.id);
+        return { cancelled: true };
+      }
+      var isActive = context.sceneDragActive || function () {
+        return context.webView === context.controller.webView && context.controller.panelSurface &&
+          !context.controller.panelSurface.hidden && !!context.controller.panelSurface.superview;
+      };
+      if (!isActive()) return { status: "cancelled" };
+      return dragCore.armMistakeDrag(context.addon, context.webView, payload, isActive);
+    }
+    if (command === "linkMistakeOnDrop") {
+      var panel = context.controller;
+      if (context.webView !== panel.webView || panel.panelSurface.hidden || !panel.panelSurface.superview) {
+        throw new Error("错题工作台已关闭");
+      }
+      return __MN_ANSWER_CORE_GLOBAL__.linkMistakeOnDrop(context.addon.window, context.webView, payload);
+    }
     if (command === "clearLocalCache") {
       var cacheTask = context.controller.exportPdfTask;
       if (context.controller.exportPdfRequest || (cacheTask && ["preparing", "rendering", "saving"].indexOf(cacheTask.status) >= 0)) {

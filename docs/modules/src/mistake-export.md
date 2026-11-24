@@ -28,4 +28,4 @@ PDF 与 Markdown：选题、素材暂存、内容组装、快速预览、取消�
 
 公式通过 MathML 中的 TeX annotation 转为 KaTeX HTML，使用本地字体和 CSS；没有 TeX annotation 的 MathML 明确报错，不静默漏画。预览与正式导出使用同一分页链路，预览仍限前三题。
 
-当前仍以整题为读取/暂存单位，单题极大正文可能影响峰值；jsPDF 最终序列化及原生 NSData 仍与输出大小相关。没有实现任意规模恒定内存，也未引入原生 WKWebView PDF 后端。
+当前以整题为读取和暂存单位，单题极大正文可能影响峰值。JPEG 写入器最终组装的 PDF 与原生 NSData 内存用量仍随输出大小增长。

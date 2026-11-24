@@ -43,6 +43,7 @@ var __MNAM_WEB_ADDON_GLOBAL__ = (function () {
     };
 
     methods.notebookWillClose = function () {
+      core.cancelMistakeDrag(self);
       if (self.pendingMistakeNavigation && __MNAM_WEB_PANEL_GLOBAL__.isVisible(self.webController)) {
         __MNAM_WEB_PANEL_GLOBAL__.preservePanelForNotebookSwitch(self.webController);
       } else {

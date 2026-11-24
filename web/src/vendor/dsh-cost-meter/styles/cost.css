@@ -1,0 +1,43 @@
+/*
+ * Vendored from dsh-cost-meter (MIT)
+ * https://github.com/Han-1413141/dsh-cost-meter/tree/cff8dcdf115c4e29342d458d539c48329a17c1a9
+ *   src/client/01-open-styles-i18n.js  （内联 css 数组：按本面板实际使用拆离）
+ *
+ * 被移植的规则（逐字保留取值与选择器）：
+ *   .cm-cards / .cm-card / .cm-card-title / .cm-card-value / .cm-card-sub / .cm-num /
+ *   .cm-scroll / .cm-table* / .cm-sess-title / .cm-sess-id / .cm-empty / .cm-hint /
+ *   .cm-note / .cm-h / .cm-msg* / 两条 .cm-cards 响应式媒体查询
+ *
+ * CardLink 修改：未移植账本、弹窗、额度、峰谷、价格编辑等其它区块的样式；
+ * 上游 `--dsw-*` 变量由 cardlink.css 映射到 CardLink 语义 token。
+ */
+
+.cm-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));gap:12px}
+.cm-card,.cm-budget{border:1px solid var(--dsw-alias-border-l1);border-radius:12px;padding:14px 16px;background:var(--dsw-alias-bg-layer-1)}
+.cm-card-title{font-size:12px;color:var(--dsw-alias-label-tertiary);margin:0 0 8px}
+.cm-card-value{font-size:20px;line-height:28px;font-weight:600}
+.cm-card-sub{font-size:12px;color:var(--dsw-alias-label-tertiary);margin-top:4px}
+.cm-num{font-variant-numeric:tabular-nums}
+.cm-h{font-size:13px;font-weight:600;margin:0}
+.cm-note{font-size:12px;color:var(--dsw-alias-label-tertiary);margin:0}
+.cm-hint{font-size:12px;color:var(--dsw-alias-label-tertiary)}
+.cm-table{width:100%;border-collapse:collapse;font-size:12px}
+.cm-table th,.cm-table td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--dsw-alias-border-l1);white-space:nowrap}
+.cm-table th{color:var(--dsw-alias-label-tertiary);font-weight:500}
+.cm-table td.num,.cm-table th.num{text-align:right;font-variant-numeric:tabular-nums}
+.cm-table tr:last-child td{border-bottom:none}
+.cm-table tr.cm-row-click{cursor:pointer}
+.cm-table tr.cm-row-click:hover td{background:var(--dsw-alias-bg-hover,rgba(127,127,127,.08))}
+.cm-sess-title{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cm-sess-id{font-size:11px;font-family:ui-monospace,Consolas,monospace;color:var(--dsw-alias-label-tertiary)}
+.cm-empty{font-size:12px;color:var(--dsw-alias-label-tertiary);padding:8px 0}
+.cm-scroll{max-height:320px;overflow:auto;border:1px solid var(--dsw-alias-border-l1);border-radius:10px}
+.cm-msg{font-size:12px;line-height:18px;padding:8px 12px;border-radius:8px;border:1px solid var(--dsw-alias-border-l1)}
+.cm-msg.ok{color:var(--dsw-alias-state-success-primary)}
+.cm-msg.err{color:var(--dsw-alias-state-error-primary)}
+@media (max-width:640px){.cm-cards{grid-template-columns:1fr}}
+@media (max-width:1023px){.cm-cards{grid-template-columns:1fr;gap:8px}}
+.cm-btn{font:inherit;font-size:13px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-button-elevated-fill);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:6px 14px;cursor:pointer}
+.cm-btn:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.cm-btn.small{padding:3px 10px;font-size:12px}
+.cm-btn:disabled{opacity:.55;cursor:default}

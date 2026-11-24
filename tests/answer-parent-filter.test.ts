@@ -52,13 +52,13 @@ test("同名答案按直接父节点硬筛选，顶层脑图名不同仍匹配",
   assert.deepEqual((await lookup()).map(answer => answer.noteId), ["right", "right-two"])
 })
 
-test("只剩一个同名答案但父节点不符，也返回空；缺少父级不放宽", async () => {
-  answers = [{ ...candidate("wrong", "2014年"), tags: ["标准答案"] }]
-  assert.deepEqual(await lookup(), [])
+test("没有同父节点时返回全部同名候选，父级缺失也能匹配", async () => {
+  answers = [candidate("a", "2014年"), candidate("b", "2015年"), candidate("q", "2013年")]
+  assert.deepEqual((await lookup()).map(answer => answer.noteId), ["a", "b"])
   answers = [candidate("right", "2013年")]
-  assert.deepEqual(await lookup(target, []), [])
+  assert.deepEqual(await lookup(target, []), answers)
   answers = [{ ...candidate("unknown", "2013年"), pathTitles: [] }]
-  assert.deepEqual(await lookup(), [])
+  assert.deepEqual(await lookup(), answers)
 })
 
 test("正则匹配也排除父节点不符的候选，不能绕过筛选", async () => {
@@ -70,8 +70,8 @@ test("旧固定配对父节点不符时不使用该答案，同名回退仍筛�
   answers = [candidate("stale-pair", "2014年"), candidate("right", "2013年")]
   const config = { ...target, matchMode: "parent-order", orderedPairing: { pairs: [{ questionNoteId: "q", answerNoteId: "stale-pair", answerNodeId: "stale-pair" }] } }
   assert.deepEqual((await lookup(config)).map(answer => answer.noteId), ["right"])
-  answers = [candidate("stale-pair", "2014年")]
-  assert.deepEqual(await lookup(config), [])
+  answers = [candidate("same-title", "2015年")]
+  assert.deepEqual((await lookup(config)).map(answer => answer.noteId), ["same-title"])
 })
 
 test("明确绑定的题目直接子卡保留，混合模式的脑图答案仍被筛选", async () => {
@@ -83,6 +83,10 @@ test("明确绑定的题目直接子卡保留，混合模式的脑图答案仍�
   assert.deepEqual((await lookup(config)).map(answer => answer.noteId), ["child", "right"])
   question.childNotes = []
 })
+
+function exportedPdfUnits() {
+  return [...writtenFiles.entries()].filter(([path]) => /unit-\d+\.js$/.test(path)).map(([, text]) => text).join("\n")
+}
 
 async function seedRecord() {
   const { createMistakeRecord } = await import("../src/mistake-domain")
@@ -106,13 +110,16 @@ test("真实错题详情、AI/复习读取和 PDF/MD 导出都不渲染被排除
   const markdown = await exporter.previewMistakeExport({ format: "md", recordIds: [recordId] })
   assert.match(markdown.markdown, /BODY-right/)
   assert.doesNotMatch(markdown.markdown, /BODY-wrong/)
+  writtenFiles.clear()
   const pdf = await exporter.previewMistakeExport({ format: "pdf", recordIds: [recordId] })
-  assert.match(pdf.html, /BODY-right/)
-  assert.doesNotMatch(pdf.html, /BODY-wrong/)
+  assert.equal(pdf.renderPdfPreview, true)
+  assert.match(exportedPdfUnits(), /BODY-right/)
+  assert.doesNotMatch(exportedPdfUnits(), /BODY-wrong/)
+  writtenFiles.clear()
   const formalPdf = await exporter.exportMistakes({ format: "pdf", recordIds: [recordId] })
   assert.equal(formalPdf.renderPdf, true)
-  assert.match(formalPdf.html, /BODY-right/)
-  assert.doesNotMatch(formalPdf.html, /BODY-wrong/)
+  assert.match(exportedPdfUnits(), /BODY-right/)
+  assert.doesNotMatch(exportedPdfUnits(), /BODY-wrong/)
   writtenFiles.clear()
   const formalMarkdown = await exporter.exportMistakes({ format: "md", recordIds: [recordId], filename: "父级筛选" })
   assert.equal(formalMarkdown.saved, true)
@@ -123,13 +130,12 @@ test("真实错题详情、AI/复习读取和 PDF/MD 导出都不渲染被排除
   assert.ok(rendered.every(id => id === "right"))
 })
 
-test("所有候选父级不符时，导出明确无匹配，不输出其他章节答案", async () => {
+test("所有候选父级不符时，导出同名候选", async () => {
   const recordId = await seedRecord()
   const { previewMistakeExport } = await import("../src/mistake-export")
   answers = [candidate("wrong", "2014年")]
   const markdown = await previewMistakeExport({ format: "md", recordIds: [recordId] })
-  assert.match(markdown.markdown, /当前未匹配到答案/)
-  assert.doesNotMatch(markdown.markdown, /BODY-wrong/)
+  assert.match(markdown.markdown, /BODY-wrong/)
 })
 
 
@@ -147,14 +153,15 @@ test("PDF/Markdown 正式导出与快速预览默认跳过手写及子评论，�
       for (const run of [exporter.previewMistakeExport, exporter.exportMistakes]) {
         mediaReads.length = 0; sketchReads = 0; writtenFiles.clear()
         const result = await run({ format, recordIds: [recordId] })
-        const output = result.html || result.markdown || [...writtenFiles.values()].join("\n")
+        const output = format === "pdf" ? exportedPdfUnits() : result.markdown || [...writtenFiles.values()].join("\n")
         assert.doesNotMatch(output, /EXPORT-COMMENT|ANSWER-COMMENT|data-pdf-drawing-id=|data-drawing=|脑图绑定手写/)
         assert.equal(sketchReads, 0)
         assert.ok(!mediaReads.includes("question-ink"))
         assert.ok(!mediaReads.includes("bound-image"))
         assert.ok(!mediaReads.includes("answer-ink"))
+        writtenFiles.clear()
         const enabled = await run({ format, recordIds: [recordId], include: { handwriting: true, comments: true } })
-        const enabledOutput = enabled.html || enabled.markdown || [...writtenFiles.values()].join("\n")
+        const enabledOutput = format === "pdf" ? exportedPdfUnits() : enabled.markdown || [...writtenFiles.values()].join("\n")
         assert.match(enabledOutput, /EXPORT-COMMENT/)
         assert.match(enabledOutput, /ANSWER-COMMENT/)
         assert.ok(mediaReads.includes("answer-ink"))

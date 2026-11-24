@@ -30,7 +30,7 @@ export function createGoodnotesSession(mainCtx,activeCtx,style,{commitByReplay=f
      inInputSpace(()=>{if(!rendered){engine.onPointerDown(point(points[0],0,style),options,context);rendered=1;}
      if(points.length>rendered){engine.onPointerMove(points.slice(rendered).map((p,i)=>point(p,rendered+i,style)),options,context);rendered=points.length;}});
    },
-   end(points){this.feed(style.engine==='goodnotes-ink-v2'?points.slice(0,-1):points);if(points.length){inInputSpace(()=>engine.onPointerUp(point(points.at(-1),points.length-1,style),options,context));if(commitByReplay)replayGoodnotesStroke(mainCtx,points,style);}},
+   end(points){this.feed(style.engine==='goodnotes-ink-v2'?points.slice(0,-1):points);if(points.length){const last=points.length-1;inInputSpace(()=>engine.onPointerUp(point(points[last],last,style),options,context));if(commitByReplay)replayGoodnotesStroke(mainCtx,points,style);}},
  };
 }
 export function replayGoodnotesStroke(mainCtx,points,style) {

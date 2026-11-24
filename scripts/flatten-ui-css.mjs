@@ -13,7 +13,7 @@ import path from "node:path"
 import postcss from "postcss"
 
 const dry = process.argv.includes("--dry")
-const uiDir = path.resolve("web/src/ui")
+const uiDir = path.resolve("web/src/ui/_legacy")
 const FILE_ORDER = ["tokens.css", "controls.css", "shell.css", "overview.css", "mistakes.css", "review.css", "export.css", "settings.css"]
 // 由 JS 在运行时注入/消费的自定义属性：永不消除、永不改值。
 const JS_SET = new Set(["--mn-accent", "--mn-gray-fill", "--mn-level-0", "--mn-level-1", "--mn-level-2", "--mn-topbar-height", "--progress"])

@@ -681,6 +681,29 @@ test("详情可先读原题并延后答案；答案请求不再次读取原题�
   } finally { delete db.getSketchNoteForMindMapFocusNoteId }
 })
 
+test("原题详情按 ID 读取跨学习集链接，并只为已收录的目标返回错题 ID", async () => {
+  const notebookId = `nbLinks${seq++}`
+  const otherNotebookId = `${notebookId}-other`
+  const noteId = `${notebookId}-source`
+  const linkedId = `${notebookId}-linked`
+  const externalId = `${notebookId}-external`
+  const id = await seedRecord(notebookId, noteId, 0)
+  const linkedRecordId = await seedRecord(otherNotebookId, linkedId, 0)
+  notesById[linkedId].notebookId = otherNotebookId
+  notesById[linkedId].noteTitle = "实时链接题名"
+  notesById[externalId] = { noteId: externalId, notebookId, noteTitle: "未收录题目" }
+  notesById[noteId].linkedNotes = [{ noteid: linkedId }, { noteid: "missing" }, { noteid: noteId }]
+  notesById[noteId].comments.push({ type: "TextNote", text: `marginnote4app://note/${externalId}` })
+
+  const result = manager.mistakeDetailById(id, "question")
+  assert.deepEqual(result.linkedQuestions, [
+    { noteId: linkedId, title: "实时链接题名", recordId: linkedRecordId },
+    { noteId: externalId, title: "未收录题目", recordId: undefined },
+  ])
+  assert.equal(manager.mistakeDetailById(id, "answers").linkedQuestions, undefined)
+  assert.equal(manager.mistakeDetailById(id, "question", true).linkedQuestions, undefined)
+})
+
 test("待复习轻量原题读取同步标题，绑定手写仅加入本地预览", async () => {
   const notebookId = `nbQuestion${seq++}`
   const noteId = `${notebookId}-note`

@@ -183,20 +183,6 @@
       opacity: .45;
     }
   }
-  ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-  }
-  ::-webkit-scrollbar-track {
-    background: 0 0;
-  }
-  ::-webkit-scrollbar-thumb {
-    background: #e2e8f0;
-    border-radius: 999px;
-  }
-  ::-webkit-scrollbar-thumb:hover {
-    background: #cbd5e1;
-  }
   @media (max-width: 800px) {
     main {
       padding: 0 10px 10px;
@@ -551,7 +537,7 @@
   .mindMapSelectOptions > button > span small {
     color: #667182;
     margin-top: 1px;
-    font-size: 8px;
+    font-size: 9px;
   }
   .mindMapSelectOptions > button > b {
     color: #7b8495;
@@ -570,12 +556,7 @@
     display: inline-block;
     overflow: visible;
   }
-  button:has(> .morphIcon) {
-    justify-content: center;
-    align-items: center;
-    gap: 5px;
-    display: inline-flex;
-  }
+  button:has(> .morphIcon),
   button:has(> span > .morphIcon) {
     justify-content: center;
     align-items: center;
@@ -614,10 +595,10 @@
     height: 18px;
   }
   .svgCheckbox:has(input:checked) {
-    color: var(--mn-accent,var(--mn-accent));
+    color: var(--mn-accent);
   }
   .svgCheckbox:has(input:focus-visible) {
-    outline: 2px solid var(--mn-accent,var(--mn-accent));
+    outline: 2px solid var(--mn-accent);
     outline-offset: 2px;
     border-radius: 4px;
   }
@@ -939,6 +920,11 @@
     --rd-accent:var(--mn-accent);
     --rd-accent-strong:#0b7ae3;
     --rd-accent-tint:rgba(14,141,253,.1);
+    --rd-linked-question-ink:var(--rd-muted);
+    --rd-linked-question-bg:var(--preview-ui-button);
+    --rd-linked-question-hover:var(--mn-gray-fill);
+    --rd-tag-font-size:11px;
+    --rd-tag-height:calc(5 * var(--cardlink-space-unit));
     --rd-sel:var(--mn-gray-fill);
     --rd-sel-strong:#c2c2c8;
     --rd-ink:#1d1d1f;
@@ -956,6 +942,7 @@
     --rd-shadow-lift:0 1px 2px rgba(0,0,0,.04), 0 10px 24px -12px rgba(0,0,0,.14);
     color: #20283a;
     font-synthesis: none;
+    font-optical-sizing: auto;
     --study-ink:#0f172a;
     --study-text:#334155;
     --study-muted:#64748b;
@@ -1830,7 +1817,7 @@
     display: block;
   }
   .masteryRing small {
-    font-size: 7px;
+    font-size: 9px;
   }
   .overviewPanel {
     transition: transform .16s, box-shadow .16s;
@@ -1936,7 +1923,7 @@
   }
   .sourceDonut small {
     color: #8b95a7;
-    font-size: 8px;
+    font-size: 9px;
   }
   .sourceBars {
     grid-template-columns: 1fr 1fr;
@@ -1980,7 +1967,7 @@
   }
   .sourceBars > button > span small {
     color: #9099aa;
-    font-size: 8px;
+    font-size: 9px;
   }
   .sourceBars > button > span em {
     background: #edf0f5;
@@ -2003,7 +1990,7 @@
   }
   .sourceBars > button > b small {
     color: #97a0b0;
-    font-size: 7px;
+    font-size: 9px;
     display: block;
   }
   @media (max-width: 800px) {
@@ -2072,7 +2059,7 @@
     width: -webkit-max-content;
     width: -moz-max-content;
     width: max-content;
-    font-size: 8px;
+    font-size: 9px;
   }
   .overviewHero > div > strong {
     color: var(--study-ink);
@@ -2770,7 +2757,7 @@
     }
   }
   .mistakeItem[role=button]:focus-visible {
-    outline: 2px solid var(--mn-accent,var(--mn-accent));
+    outline: 2px solid var(--mn-accent);
     outline-offset: -2px;
   }
   .batchBar .batchExport:disabled {
@@ -2885,7 +2872,7 @@
   }
   .mistakeReviewState {
     color: #687386;
-    font-size: 9px;
+    font-size: 10px;
     line-height: 15px;
   }
   .filterBar > .listToolbar > .batchToggle {
@@ -3640,7 +3627,6 @@
     --export-accent:var(--mn-accent);
     --export-border:#e2e7ef;
     --export-muted:#667085;
-    font-optical-sizing: auto;
     max-width: 1220px;
     margin: 0 auto;
     padding-bottom: 28px;
@@ -3820,7 +3806,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 100%;
-    font-size: 9px;
+    font-size: 10px;
     line-height: 1.25;
     overflow: hidden;
   }
@@ -3906,7 +3892,7 @@
   }
   .exportDisclosure small {
     color: var(--export-muted);
-    font-size: 9px;
+    font-size: 10px;
   }
   .exportDisclosure svg {
     color: #7d899b;
@@ -3953,7 +3939,7 @@
     flex: 0 auto;
     max-width: 94px;
     padding: 3px 6px;
-    font-size: 9px;
+    font-size: 10px;
     font-style: normal;
     overflow: hidden;
   }
@@ -3987,7 +3973,7 @@
   }
   .exportContentChoices small {
     color: var(--export-muted);
-    font-size: 9px;
+    font-size: 10px;
     line-height: 1.35;
   }
   .exportInlineSetting {
@@ -4010,7 +3996,7 @@
   }
   .exportInlineSetting small {
     color: var(--export-muted);
-    font-size: 9px;
+    font-size: 10px;
   }
   .exportInlineSetting select {
     background: #fff;
@@ -4041,7 +4027,7 @@
   }
   .exportFormatChoices button > span small {
     color: var(--export-muted);
-    font-size: 9px;
+    font-size: 10px;
   }
   .exportPdfSettings {
     background: 0 0;
@@ -4090,7 +4076,7 @@
     color: var(--export-muted);
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 9px;
+    font-size: 10px;
     overflow: hidden;
   }
   .exportCommitBar > .exportCountBadge {
@@ -4137,8 +4123,11 @@
   .exportProgressTrack i {
     border-radius: inherit;
     background: var(--export-accent);
-    min-width: 7px;
-    transition: width .35s;
+    /* 只动 transform：进度条宽度占满轨道，JSX 用 scaleX 表达进度（规范 §11） */
+    width: 100%;
+    transform-origin: 0 50%;
+    transition: transform .35s;
+    will-change: transform;
     position: absolute;
     top: 0;
     bottom: 0;
@@ -5094,7 +5083,8 @@
   .mistakeLevelGuide footer button:hover {
     background: var(--rd-accent-strong);
   }
-  .svgSwitch[aria-checked=true] {
+  .svgSwitch[aria-checked=true],
+  .svgSwitch[data-checked=true] {
     color: var(--rd-accent);
   }
   .filterBar input:focus,
@@ -6178,7 +6168,7 @@
     .mistakeSidebar .batchBar.active button {
       padding-left: 3px;
       padding-right: 3px;
-      font-size: 9.5px;
+      font-size: 10px;
     }
   }
   .mistakeItem.selectable {
@@ -7370,8 +7360,12 @@
     align-items: center;
     padding: 7px 6px;
   }
-  .settingsGroup > div > button + button {
+  .settingsGroup > div > button + button,
+  .settingsDisclosure > button {
     border-top: 1px solid var(--rd-line);
+  }
+  .settingsDisclosure {
+    margin-inline-start: calc(3 * var(--cardlink-space-unit));
   }
   .settingsGroup button:hover {
     background: var(--rd-hover);
@@ -7391,9 +7385,6 @@
     display: block;
   }
   svg.sfIconGlyph {
-    fill: currentColor;
-  }
-  .sfIconGlyph:svg {
     fill: currentColor;
   }
   .settingsGroup > div > button:not(:first-child):after {
@@ -7477,30 +7468,6 @@
   .settingsCapsule button[aria-pressed],
   .settingsCapsule button:hover,
   .settingsCapsule.reviewToolbar button {
-    z-index: 1;
-    box-shadow: none;
-    color: #68788d;
-    cursor: pointer;
-    background: 0 0;
-    border: 0;
-    border-radius: 999px;
-    font-size: 13px;
-    font-weight: 600;
-    transition: color .28s 60ms;
-  }
-  .settingsCapsule.reviewToolbar button:-webkit-any(.active, [aria-pressed], :hover) {
-    z-index: 1;
-    box-shadow: none;
-    color: #68788d;
-    cursor: pointer;
-    background: 0 0;
-    border: 0;
-    border-radius: 999px;
-    font-size: 13px;
-    font-weight: 600;
-    transition: color .28s 60ms;
-  }
-  .settingsCapsule.reviewToolbar button:-moz-any(.active, [aria-pressed], :hover) {
     z-index: 1;
     box-shadow: none;
     color: #68788d;
@@ -7674,6 +7641,116 @@
     border-radius: 11px;
     padding: 10px 12px;
   }
+  .answerInkReminder form {
+    gap: 8px;
+  }
+  .answerInkReminder form button {
+    min-width: 100px;
+  }
+  .answerInkReminder form button:first-child {
+    color: inherit;
+    background: transparent;
+    border: 1px solid currentColor;
+  }
+  .updatePrompt form {
+    gap: 8px;
+  }
+  .updatePrompt form button {
+    min-width: 100px;
+  }
+  .updatePrompt form button:first-child {
+    color: inherit;
+    background: transparent;
+    border: 1px solid currentColor;
+  }
+  .updatePromptNotes {
+    max-height: 40vh;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    font-size: 13px;
+    line-height: 1.75;
+    color: #4a5b73;
+  }  /* Release 说明按 Markdown 渲染：容器仍负责滚动，正文恢复块级排版。
+     弹窗在 .harness-ui 之外，Tailwind 工具类不生效，这里补最小 Markdown 样式。 */
+  .updatePromptMarkdown {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .updatePromptMarkdown > :first-child { margin-top: 0; }
+  .updatePromptMarkdown > :last-child { margin-bottom: 0; }
+  .updatePromptMarkdown p,
+  .updatePromptMarkdown ul,
+  .updatePromptMarkdown ol,
+  .updatePromptMarkdown blockquote,
+  .updatePromptMarkdown pre,
+  .updatePromptMarkdown .mdTableScroll {
+    margin: 0 0 8px;
+  }
+  .updatePromptMarkdown h1,
+  .updatePromptMarkdown h2,
+  .updatePromptMarkdown h3,
+  .updatePromptMarkdown h4,
+  .updatePromptMarkdown h5,
+  .updatePromptMarkdown h6 {
+    margin: 12px 0 6px;
+    color: #17345f;
+    font-weight: 600;
+    line-height: 1.4;
+  }
+  .updatePromptMarkdown h1 { font-size: 15px; }
+  .updatePromptMarkdown h2 { font-size: 14px; }
+  .updatePromptMarkdown h3,
+  .updatePromptMarkdown h4,
+  .updatePromptMarkdown h5,
+  .updatePromptMarkdown h6 { font-size: 13px; }
+  .updatePromptMarkdown ul,
+  .updatePromptMarkdown ol {
+    padding-left: 20px;
+    list-style: revert;
+  }
+  .updatePromptMarkdown li { margin: 2px 0; }
+  .updatePromptMarkdown strong { font-weight: 600; color: #17345f; }
+  .updatePromptMarkdown em { font-style: italic; }
+  .updatePromptMarkdown code {
+    padding: 1px 4px;
+    border-radius: 4px;
+    background: rgba(23, 52, 95, 0.08);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .updatePromptMarkdown pre {
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: rgba(23, 52, 95, 0.06);
+    overflow-x: auto;
+  }
+  .updatePromptMarkdown pre code { padding: 0; background: none; white-space: pre; }
+  .updatePromptMarkdown blockquote {
+    padding: 2px 0 2px 10px;
+    border-left: 3px solid rgba(23, 52, 95, 0.18);
+    color: #4a5b73;
+  }
+  .updatePromptMarkdown a {
+    color: #2563eb;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    overflow-wrap: anywhere;
+  }
+  .updatePromptMarkdown .mdTableScroll { max-width: 100%; overflow-x: auto; }
+  .updatePromptMarkdown table { border-collapse: collapse; font-size: 12.5px; }
+  .updatePromptMarkdown th,
+  .updatePromptMarkdown td {
+    padding: 4px 8px;
+    border: 1px solid rgba(23, 52, 95, 0.16);
+    text-align: left;
+  }
+  .updatePromptMarkdown th { background: rgba(23, 52, 95, 0.05); font-weight: 600; }
+  .updatePromptMarkdown hr { margin: 10px 0; border: 0; border-top: 1px solid rgba(23, 52, 95, 0.14); }
+  .updatePromptMarkdown .mdImagePlaceholder { display: block; color: #6b7c93; font-size: 12px; }
+  .updatePromptMarkdown .mdImageUrl { display: block; color: #8a97a8; overflow-wrap: anywhere; }
+  .updatePromptPlainNotes { margin: 0; }
   .answerBindingName,
   .answerBindingTarget,
   .answerBindingTargetEmpty {
@@ -8115,43 +8192,74 @@
     margin: 0;
     position: relative;
   }
+  .detailTagStrip,
+  .detailLinkedQuestions {
+    display: flex;
+    align-items: center;
+    gap: var(--cardlink-space-unit);
+    overflow-x: auto;
+    scrollbar-width: none;
+    white-space: nowrap;
+  }
+  .detailLinkedQuestions {
+    flex: 0 1 auto;
+    min-width: 32px;
+  }
   .detailTagBarTrigger {
-    width: 100%;
-    max-width: 100%;
-    min-height: 20px;
+    flex: none;
+    min-height: var(--rd-tag-height);
     box-shadow: none;
     text-align: left;
     background: 0 0;
     border: 0;
-    flex-wrap: wrap;
     align-items: center;
-    gap: 4px;
+    gap: var(--cardlink-space-unit);
     padding: 0;
     display: flex;
   }
   .detailTagBarTrigger .detailMorphIcon {
-    width: 18px;
-    height: 18px;
+    flex: none;
+    width: var(--rd-tag-height);
+    height: var(--rd-tag-height);
     color: var(--rd-accent);
     background: var(--rd-accent-tint);
-    border-radius: 6px;
+    border-radius: var(--rd-radius-sm);
     place-items: center;
     display: inline-grid;
   }
-  .detailTagBarTrigger > em {
-    max-width: min(160px, 100%);
+  .detailTagBarTrigger > em,
+  .detailLinkedQuestion {
     color: var(--rd-accent);
     background: var(--rd-accent-tint);
     text-overflow: ellipsis;
     white-space: nowrap;
-    border-radius: 5px;
+    border-radius: var(--rd-radius-sm);
     flex: none;
-    padding: 1px 5px;
-    font-size: 11px;
+    padding: 0 var(--cardlink-space-unit);
+    font-size: var(--rd-tag-font-size);
     font-style: normal;
-    line-height: 15px;
+    line-height: var(--rd-tag-height);
     display: inline-block;
     overflow: hidden;
+  }
+  .detailLinkedQuestion {
+    flex: 0 1 auto;
+    min-width: 32px;
+    max-width: 160px;
+    color: var(--rd-linked-question-ink);
+    background: var(--rd-linked-question-bg);
+    border: 0;
+    margin: 0;
+    text-align: left;
+    text-decoration: none;
+  }
+  a.detailLinkedQuestion:hover {
+    background: var(--rd-linked-question-hover);
+    color: var(--rd-ink);
+  }
+  .detailTagStrip :is(button, a):focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: -2px;
   }
   .detailCategoryMenu {
     width: min(280px, 100vw - 28px);
@@ -8170,16 +8278,6 @@
     white-space: nowrap;
     color: var(--rd-accent);
     overflow: hidden;
-  }
-  .detailHeadingBlock.tagsCrowded .detailStatusCard {
-    border-radius: 12px;
-    grid-template-rows: 32px 1px 32px;
-    grid-template-columns: minmax(68px, 1fr);
-    min-height: 65px;
-  }
-  .detailHeadingBlock.tagsCrowded .detailStatusDivider {
-    width: 100%;
-    height: 1px;
   }
   .detailDock {
     z-index: 6;
@@ -8743,4 +8841,35 @@ body > #root > .shell > main > section.mistakeWorkspace {
 .mistakeWorkspace .mistakeDetailSurface {
   box-sizing: border-box;
   padding-top: var(--mn-topbar-height);
+}
+
+/* ── prefers-reduced-transparency：全部毛玻璃面降级为纯色（Apple 设计规范 §14）──
+   覆盖顶栏 / 错题列表悬浮条 / 抽屉底 / 设置分类胶囊 / 复习筛选与次级菜单 /
+   详情悬浮条 / 批量条 / 等待通知 / 流式状态角标。
+   exportCommitBar 已有局部降级（见上方 mn-ui-priority 层）；.mistakeAcrylic
+   由 mistake-search.css 隐藏；sticky-toolbars.css 已处理 reviewToolbar 胶囊。 */
+@media (prefers-reduced-transparency: reduce) {
+  body > #root > .shell > main > header.topBar,
+  .mistakeListHeader,
+  .reviewActionCapsule > .reviewFilterPanel,
+  .reviewActionCapsule > .reviewSecondaryMenu,
+  .detailDock,
+  .batchBar,
+  .pendingNotice,
+  .dataStreamStatus,
+  .settingsCapsule:not(.reviewToolbar) {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: #fbfbfd;
+  }
+  .batchBar.active,
+  .reviewToolbar .reviewFilterPanel select {
+    background: #fff;
+  }
+  .mistakeWorkspace .mistakeAutoHide > .mistakeSidebar {
+    --drawer-background: #fafafc;
+  }
+  .detailDock {
+    border-color: var(--rd-line-strong, rgba(0, 0, 0, .14));
+  }
 }

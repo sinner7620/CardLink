@@ -127,6 +127,13 @@ async function capture(outFile) {
     await clickNav("设置")
     await settle(page)
     snapshots.push({ viewport: [width, height], state: "settings", entries: await dumpVisible(page) })
+    // 设置页有子页签（答案配置/错题管理/…）：导出入口在“错题管理”下
+    await page.evaluate(() => {
+      const sectionTab = [...document.querySelectorAll(".settingsCapsule button")]
+        .find(button => button.textContent?.includes("错题管理"))
+      if (sectionTab) sectionTab.click()
+    })
+    await page.waitForTimeout(200)
     // 导出页：只能从设置页入口进入
     await page.evaluate(() => {
       const target = [...document.querySelectorAll("button")].find(button => button.textContent?.includes("导出错题") && button.closest(".settingsGroup"))

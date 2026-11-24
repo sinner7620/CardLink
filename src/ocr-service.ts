@@ -110,6 +110,11 @@ export async function ocrBridge(command:string,payload:any = {}) {
     if (text.length > 500000) throw new Error('预览正文过长')
     return { html: renderOCRMarkdownPreview(text) }
   }
+  const schedule = command === 'ocrDbAutoTick' ? preferences() : undefined
+  if (schedule && (paused || running || syncing || refreshing || !schedule.scheduled || !schedule.consentAt || Date.now() < schedule.nextAt)) return {started:false}
+  const automatic = command === 'ocrDbNext' && payload.automatic === true
+  const consent = automatic ? automaticConsent(false) : undefined
+  if (automatic && !consent) return paused ? {paused:true} : {idle:true}
   const s = ocrStore()
   if(command==='ocrDbGetPreferences')return preferences()
   if(command==='ocrDbSavePreferences'){
@@ -123,18 +128,16 @@ export async function ocrBridge(command:string,payload:any = {}) {
     if(next.scheduled&&!previous.scheduled)paused=false
     return savePreferences(next)
   }
-  if(command==='ocrDbAutoTick'){
-    const p=preferences()
-    if((paused&&payload.enter!==true)||running||syncing||refreshing||!p.scheduled||!p.consentAt||Date.now()<p.nextAt)return {started:false}
+  if(schedule){
+    const p=schedule
     if(p.configKey!==JSON.stringify(providerConfig(p.engine))){savePreferences({...p,scheduled:false});throw new Error('服务设置已变化，请重新开启定期 OCR 并确认范围')}
     const progress=syncProgress||savedSync()
     if(progress&&!progress.cancelled&&progress.done<progress.total)return {started:false}
     if(s.db.rows("SELECT id FROM ocr_jobs WHERE state IN ('pending','rendering','recognizing','uploading','downloading','normalizing') LIMIT 1").length)return {started:false}
-    checkCredential(p.engine);paused=false
-    const ids=liveIds().filter(id=>!p.notebookId||loadMistakeState().records[id].sourceNotebookId===p.notebookId)
+    checkCredential(p.engine)
+    const ids=Object.values(loadMistakeState().records).filter(record=>!p.notebookId||record.sourceNotebookId===p.notebookId).map(record=>record.recordId)
     savePreferences({...p,nextAt:Date.now()+p.intervalHours*3600000})
-    const config=providerConfig(p.engine,p.incremental?'':`${Date.now()}-${++counter}`)
-    void syncQuestions(ids,config,p.consentAt,!p.incremental).catch(()=>{syncProgress.error='定期同步中断，请检查数据库'})
+    void syncQuestions(ids,providerConfig(p.engine),p.consentAt,false).catch(()=>{syncProgress.error='定期同步中断，请检查数据库'})
     return {started:true,total:ids.length}
   }
   if(command==='ocrDbBackup'){requireIdle();return backupOCR()}
@@ -150,7 +153,7 @@ export async function ocrBridge(command:string,payload:any = {}) {
     if (running || syncing || refreshing || s.db.rows("SELECT id FROM ocr_jobs WHERE state='rendering' AND lease_until>? LIMIT 1",[Date.now()]).length) throw new Error('请先暂停或取消队列，再检查数据库')
     return diagnoseOCR()
   }
-  if (command === 'ocrDbRefreshSources') return refreshSources()
+  if (command === 'ocrDbRefreshSources') return refreshSources(String(payload.recordId || ''), String(payload.notebookId || ''))
   if (command === 'ocrDbReleaseCapture') {
     s.releaseCapture(Number(payload.jobId),String(payload.lease))
     return {accepted:true}
@@ -201,9 +204,6 @@ export async function ocrBridge(command:string,payload:any = {}) {
       return {busy:true}
     }
     if (refreshing || s.db.rows("SELECT id FROM ocr_jobs WHERE state='rendering' AND lease_until>? LIMIT 1",[Date.now()]).length) return {busy:true}
-    const automatic = payload.automatic === true
-    const consent = automatic ? automaticConsent() : undefined
-    if (automatic && !consent) return {idle:true}
     const j = s.claim(Date.now(),`${session}-${++counter}`,consent?.at)
     if (!j) return {idle:true}
     try {
@@ -231,9 +231,9 @@ export async function ocrBridge(command:string,payload:any = {}) {
   throw new Error('未知 OCR 数据库命令')
 }
 
-function automaticConsent() {
+function automaticConsent(requireSourceConsent = true) {
   const prefs = preferences()
-  if (paused || !prefs.scheduled || !prefs.sourceConsent || !prefs.consentAt) return
+  if (paused || !prefs.scheduled || (requireSourceConsent && !prefs.sourceConsent) || !prefs.consentAt) return
   try {
     const config = providerConfig(prefs.engine)
     if (JSON.stringify(config) !== prefs.configKey) return
@@ -246,25 +246,33 @@ function automaticConsent() {
 }
 
 let refreshing: Promise<{ changed: boolean }> | undefined
-let refreshRequested = false
-function refreshSources() {
-  refreshRequested = true
+const pendingSourceRefreshes = new Map<string, { recordId: string; notebookId: string }>()
+function refreshSources(recordId: string, notebookId: string) {
+  if (syncing) return { changed: false }
+  pendingSourceRefreshes.set(JSON.stringify([recordId, notebookId]), { recordId, notebookId })
   if (refreshing) return refreshing
   refreshing = (async () => {
     let changed = false
-    do {
-      refreshRequested = false
-      const result = await indexLiveSources()
+    while (pendingSourceRefreshes.size) {
+      const batch = [...pendingSourceRefreshes.values()]
+      pendingSourceRefreshes.clear()
+      const result = await indexLiveSources(batch)
       changed ||= result.changed
-    } while (refreshRequested)
+    }
     return { changed }
   })().finally(() => { refreshing = undefined })
   return refreshing
 }
 
-async function indexLiveSources() {
+async function indexLiveSources(batch: Array<{ recordId: string; notebookId: string }>) {
   const store = ocrStore()
-  const records = Object.values(loadMistakeState().records)
+  const liveRecords = loadMistakeState().records
+  const full = batch.some(request => !request.recordId && !request.notebookId)
+  const notebooks = new Set(batch.filter(request => !request.recordId).map(request => request.notebookId))
+  const selected = new Set(batch.map(request => request.recordId).filter(Boolean))
+  const records = full || notebooks.size
+    ? Object.values(liveRecords).filter(record => full || notebooks.has(record.sourceNotebookId) || selected.has(record.recordId))
+    : [...selected].flatMap(id => liveRecords[id] ? [liveRecords[id]] : [])
   const started = Date.now()
   let checked = 0, skipped = 0, extracted = 0, failed = 0, removed = 0, extractMs = 0, writeMs = 0
   let changed = false
@@ -299,7 +307,9 @@ async function indexLiveSources() {
     }
   }
   const live = loadMistakeState().records
-  for (const row of store.db.rows('SELECT record_id FROM ocr_questions')) {
+  const indexed = full ? store.db.rows('SELECT record_id FROM ocr_questions')
+    : [...selected].filter(id => !live[id] && store.question(id)).map(id => ({ record_id: id }))
+  for (const row of indexed) {
     if (live[row.record_id]) continue
     const writeStarted = Date.now()
     store.db.exec('DELETE FROM ocr_questions WHERE record_id=?',[row.record_id])

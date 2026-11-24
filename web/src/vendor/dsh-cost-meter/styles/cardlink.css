@@ -1,0 +1,36 @@
+/*
+ * CardLink 适配层（非上游文件）：dsh-cost-meter 主题变量桥
+ *
+ * 与 dsh-context 的桥接同源（同一批 `--dsw-*` 变量名映射到 CardLink 语义 token），
+ * 例外是金额与卡片场景用到的额外变量。深色沿用插件缓存页取值，由适配组件加 `.cm-dark`。
+ */
+.cm-cardlink {
+  --dsw-alias-label-primary: var(--foreground, #1f2328);
+  --dsw-alias-label-secondary: var(--text-secondary, #6e6e73);
+  --dsw-alias-label-tertiary: var(--text-secondary, #6e6e73);
+  --dsw-alias-bg-base: var(--background, #ffffff);
+  --dsw-alias-bg-layer-1: var(--card, #ffffff);
+  --dsw-alias-bg-layer-2: var(--muted, #f2f3f5);
+  --dsw-alias-bg-layer-3: var(--secondary, #eceef1);
+  --dsw-alias-border-l1: var(--border-subtle, rgba(0, 0, 0, 0.08));
+  --dsw-alias-brand-primary: var(--primary, #0e8dfd);
+  --dsw-alias-interactive-bg-hover: color-mix(in srgb, var(--primary, #0e8dfd) 8%, transparent);
+  --dsw-alias-state-success-primary: var(--mn-level-2, #248a3d);
+  --dsw-alias-state-error-primary: var(--destructive, #d70015);
+  --dsw-alias-bg-hover: color-mix(in srgb, var(--primary, #0e8dfd) 6%, transparent);
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+}
+
+.cm-cardlink.cm-dark {
+  --dsw-alias-label-primary: #f4f4f6;
+  --dsw-alias-label-secondary: #a9adb6;
+  --dsw-alias-label-tertiary: #8f949d;
+  --dsw-alias-bg-base: #1b1c1e;
+  --dsw-alias-bg-layer-1: #242426;
+  --dsw-alias-bg-layer-2: #2c2d30;
+  --dsw-alias-bg-layer-3: #34363a;
+  --dsw-alias-border-l1: rgba(255, 255, 255, 0.10);
+  --dsw-alias-interactive-bg-hover: rgba(255, 255, 255, 0.08);
+  --dsw-alias-bg-hover: rgba(255, 255, 255, 0.06);
+}

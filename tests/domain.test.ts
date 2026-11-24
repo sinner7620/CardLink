@@ -82,8 +82,8 @@ test("评论中的 Markdown 标题保留正文，仅隐藏纯标签评论", () =
 })
 import { compareVersions } from "../src/version"
 import { freePositionFrame, isFrameFullyOutside } from "../src/answer-card-layout"
-import { answerControlBarLayout } from "../src/window-controls"
-import { noteReferenceUrl, noteReferenceUrlCandidates } from "../src/note-link"
+import { answerControlBarLayout, answerDragStripFrames } from "../src/window-controls"
+import { linkedNoteIds, noteReferenceUrl, noteReferenceUrlCandidates } from "../src/note-link"
 import {
   answerOnlyBindingScopes,
   bindingAnswerTargets,
@@ -141,6 +141,23 @@ test("答案悬浮条左右换边时整体贴边并镜像控件顺序", () => {
   assert.equal(left.locate.width, 44)
   assert.equal(answerControlBarLayout(500, "left", false).bar.width, 132)
   assert.equal(left.bar.width, 176)
+})
+
+test("答案窗口顶部可拖动区域跟随批注工具条的占用范围", () => {
+  const covers = (frames: ReturnType<typeof answerDragStripFrames>, x: number, y: number) =>
+    frames.some(frame => x >= frame.x && x < frame.x + frame.width && y >= frame.y && y < frame.y + frame.height)
+  const footprint = { top: 6, height: 36, right: 6, width: 36 }
+  const collapsed = answerDragStripFrames(500, footprint)
+  assert.equal(covers(collapsed, 420, 24), true)
+  assert.equal(covers(collapsed, 475, 24), false)
+  assert.equal(covers(collapsed, 475, 3), true)
+  assert.equal(covers(collapsed, 475, 45), true)
+  assert.equal(covers(collapsed, 497, 24), true)
+  const expanded = answerDragStripFrames(500, { ...footprint, width: 144, right: 144 })
+  assert.equal(covers(expanded, 211, 24), true)
+  assert.equal(covers(expanded, 212, 24), false)
+  assert.equal(covers(expanded, 356, 24), true)
+  assert.equal(covers(answerDragStripFrames(500), 475, 24), true)
 })
 
 test("同一学习集中的不同脑图可保存独立答案绑定并兼容旧绑定", () => {
@@ -933,6 +950,22 @@ test("跨脑图定位使用官方 MN4 卡片链接并保留 MN3 回退", () => {
   const [primary, legacy] = noteReferenceUrlCandidates("note id")
   assert.equal(primary, "marginnote4app://note/note%20id")
   assert.equal(legacy, "marginnote3app://note/note%20id")
+})
+
+test("读取卡片链接时去重，并跳过摘要、普通文本和损坏的链接", () => {
+  const ids = linkedNoteIds({
+    linkedNotes: [
+      { summary: false, noteid: "direct", linktext: "题目" },
+      { summary: true, noteid: "summary", linktext: "摘要" },
+    ],
+    comments: [
+      { type: "TextNote", text: noteReferenceUrl("direct") },
+      { type: "TextNote", text: " marginnote3app://note/other%20note " },
+      { type: "TextNote", text: "参见 marginnote4app://note/inline" },
+      { type: "TextNote", text: "marginnote4app://note/%broken" },
+    ],
+  })
+  assert.deepEqual(ids, ["direct", "other note"])
 })
 
 test("三档掌握状态采用 1/3/7、2/5/10、14 天复习间隔", () => {

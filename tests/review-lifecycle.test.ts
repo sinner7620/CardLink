@@ -17,6 +17,7 @@ test("脑图关闭清除复习界面并使迟到恢复失效，重新打开只�
     delay: () => new Promise<void>(resolve => pending.push(resolve)),
     restoreReviewModeToolbar: () => calls.push('restore'),
     suspendReviewModeToolbar: () => calls.push('suspend'),
+    MN: { studyController: {} },
     closeMnutilsQuickMenu: () => calls.push('menu-close'),
     removeMnutilsEntrance: () => calls.push('entrance-remove'),
     hideAnswerToolbar() {}, closeAnswerCard() {}, closeNotebookPicker() {}, closeMistakeLevelPicker() {},

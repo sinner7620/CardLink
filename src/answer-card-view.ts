@@ -2,6 +2,7 @@ import { createWindowSurface, setWindowFrame } from "./window-opacity"
 import { MN } from "marginnote"
 import { loadMatcherSettings } from "./settings"
 import { loadAnswerPreview } from "./answer-preview-mode"
+import { answerInkDocument, closeAnswerInk } from "./answer-ink-window"
 import { answerReviewControlsHtml, REVIEW_CONTROL_WIDTH, REVIEW_CONTROL_HEIGHT, REVIEW_COLLAPSED_WIDTH, REVIEW_VISUAL_INSET, REVIEW_LEVEL_NAMES } from "./answer-review-controls"
 import { defaultAnswerFrame, freePositionFrame, isFrameFullyOutside } from "./answer-card-layout"
 import { pauseControlSurface, syncControlSurface } from "./native-control-surface"
@@ -10,9 +11,9 @@ import {
   createWindowControlIcon,
   styleWindowControlCapsule,
   answerControlBarLayout,
+  answerDragStripFrames,
   normalizeWindowControlSide,
   storedWindowControlSide,
-  ANSWER_BAR_DRAG_STRIP_HEIGHT,
   ANSWER_BAR_TOP_OFFSET,
   ANSWER_BAR_SIDE_INSET,
   type WindowControlSide
@@ -21,8 +22,25 @@ import {
 const ANSWER_WINDOW_Z_POSITION = 100000
 const ANSWER_WINDOW_FRONT_INTERVAL = 0.25
 
-function loadAnswerCardDocument(owner: any): void {
-  loadAnswerPreview(owner.answerCardWebView, owner.answerCardHtml, "native")
+function loadAnswerCardDocument(owner: any, next?: { html: string; annotationKey?: string }): void {
+  if (next) {
+    owner.answerCardSourceAnnotationKey = next.annotationKey
+    owner.answerCardHtml = next.html
+  }
+  closeAnswerInk(owner, () => {
+    owner.answerInkToolbarHitWidth = undefined
+    const annotationKey = loadMatcherSettings().answerInkEnabled ? owner.answerCardSourceAnnotationKey : undefined
+    if (owner.answerCardAnnotationKey !== annotationKey) owner.answerInkToolbarFrame = undefined
+    owner.answerCardAnnotationKey = annotationKey
+    layoutAnswerCardWindowControls(owner.answerCardView.frame.width, undefined, owner)
+    loadAnswerPreview(owner.answerCardWebView, owner.answerCardHtml, "native", html => answerInkDocument(owner, html))
+  })
+}
+
+export function syncAnswerCardInkSetting(owner: any = self): void {
+  if (owner.answerCardView && !owner.answerCardView.hidden && owner.answerCardSourceAnnotationKey) {
+    loadAnswerCardDocument(owner)
+  }
 }
 
 /** UIWebView 加载后可能重置内部内容层底色，只清理评分绘制层，不改答案正文。 */
@@ -210,6 +228,18 @@ function startAnswerCardFrontCorrection(owner: any = self): void {
   )
 }
 
+function layoutAnswerCardDragAreas(owner: any): void {
+  const toolbar = owner.answerCardAnnotationKey && owner.answerInkToolbarFrame
+  const frames = answerDragStripFrames(owner.answerCardView.frame.width, toolbar ? {
+    top: toolbar[0], height: toolbar[1], right: toolbar[2], width: owner.answerInkToolbarHitWidth ?? toolbar[1]
+  } : undefined)
+  owner.answerCardDragAreas?.forEach((area: UIView, index: number) => {
+    const frame = frames[index]
+    if (frame) area.frame = frame
+    area.hidden = !frame || frame.width <= 0 || frame.height <= 0
+  })
+}
+
 function layoutAnswerCardWindowControls(width: number, side: WindowControlSide = storedWindowControlSide(), owner: any = self): void {
   if (!owner.answerCardView) return
   syncAnswerReviewControls(owner)
@@ -219,8 +249,15 @@ function layoutAnswerCardWindowControls(width: number, side: WindowControlSide =
   owner.answerCardCloseButton.frame = frames.close
   owner.answerCardLocateButton.frame = frames.locate
   owner.answerCardRefreshButton.frame = frames.refresh
-  // 拖动区覆盖顶部整条：关闭/刷新/候选控件叠于其上（可点），其余区域拖动窗口
-  if (owner.answerCardDragArea) owner.answerCardDragArea.frame = { x: 0, y: 0, width, height: ANSWER_BAR_DRAG_STRIP_HEIGHT }
+  const right = side === "right" ? width - frames.bar.x + ANSWER_BAR_SIDE_INSET : ANSWER_BAR_SIDE_INSET
+  const left = side === "left" ? frames.bar.x + frames.bar.width + ANSWER_BAR_SIDE_INSET : ANSWER_BAR_SIDE_INSET
+  const toolbarFrame = [frames.bar.y, frames.bar.height, right, left]
+  const previous = owner.answerInkToolbarFrame
+  owner.answerInkToolbarFrame = toolbarFrame
+  layoutAnswerCardDragAreas(owner)
+  if (owner.answerCardAnnotationKey && previous && toolbarFrame.some((value, i) => value !== previous[i])) {
+    owner.answerCardWebView.evaluateJavaScript("window.cardLinkAnswerInkLayout && window.cardLinkAnswerInkLayout(" + toolbarFrame.join(",") + ")", null)
+  }
   if (owner.answerCandidatesButton) {
     owner.answerCandidatesButton.frame = frames.candidates
   }
@@ -308,7 +345,7 @@ export function syncAnswerCandidatesControl(
   layoutAnswerCardWindowControls(owner.answerCardView.frame.width, undefined, owner)
 }
 
-export function showAnswerCard(html: string, owner: any = self): void {
+export function showAnswerCard(html: string, owner: any = self, annotationKey?: string): void {
   owner.answerReviewExpanded = false
   const host = MN.studyController.view
   const hostFrame = host.bounds
@@ -327,21 +364,20 @@ export function showAnswerCard(html: string, owner: any = self): void {
     layer.shadowOpacity = 0.35
 
     const webView = new UIWebView({ x: 0, y: 0, width: defaultWidth, height: defaultHeight })
-    webView.scalesPageToFit = false
     webView.autoresizingMask = (1 << 1) | (1 << 4)
     webView.layer.cornerRadius = 12
     webView.layer.masksToBounds = true
     container.addSubview(webView)
 
-    // 顶部整条都是拖动区：先加入（垫在控件底层），关闭/刷新/候选控件叠于其上——
-    // 控件本身可点，控件之间的空隙与留白都能拖动窗口。
-    const dragArea = new UIView({ x: 0, y: 0, width: defaultWidth, height: ANSWER_BAR_DRAG_STRIP_HEIGHT })
-    dragArea.autoresizingMask = 0
-    dragArea.backgroundColor = UIColor.blackColor().colorWithAlphaComponent(0.001)
-    // 构造器 (target, action) 即完成注册；再调 addTargetAction 会重复注册导致回调双发。
-    const dragGesture = new UIPanGestureRecognizer(owner, "onAnswerCardPan:")
-    dragArea.addGestureRecognizer(dragGesture)
-    container.addSubview(dragArea)
+    // The four regions cover the space around the WebView toolbar, below the native controls.
+    const dragAreas = Array.from({ length: 4 }, () => {
+      const area = new UIView({ x: 0, y: 0, width: 0, height: 0 })
+      area.autoresizingMask = 0
+      area.backgroundColor = UIColor.blackColor().colorWithAlphaComponent(0.001)
+      area.addGestureRecognizer(new UIPanGestureRecognizer(owner, "onAnswerCardPan:"))
+      container.addSubview(area)
+      return area
+    })
 
     // 悬浮条初始帧取自同一布局函数（双控件形态），创建与重排永远同源。
     const initialBar = answerControlBarLayout(defaultWidth, storedWindowControlSide(), false).bar
@@ -390,7 +426,11 @@ export function showAnswerCard(html: string, owner: any = self): void {
     owner.answerCardRefreshButton = refreshButton
     owner.answerCandidatesButton = candidatesButton
     owner.answerCardControlBar = controlBar
-    owner.answerCardDragArea = dragArea
+    owner.answerCardDragAreas = dragAreas
+    owner.answerInkHitAreaChanged = (width: number) => {
+      owner.answerInkToolbarHitWidth = width
+      layoutAnswerCardDragAreas(owner)
+    }
     owner.answerCardResizeHandle = resizeHandle
   }
 
@@ -402,10 +442,8 @@ export function showAnswerCard(html: string, owner: any = self): void {
   const { width, height } = frame
   owner.answerCardView.frame = frame
   owner.answerCardWebView.frame = { x: 0, y: 0, width, height }
-  layoutAnswerCardWindowControls(width, undefined, owner)
   owner.answerCardResizeHandle.frame = { x: width - 52, y: height - 52, width: 44, height: 44 }
-  owner.answerCardHtml = html
-  loadAnswerCardDocument(owner)
+  loadAnswerCardDocument(owner, { html, annotationKey })
   owner.answerCardView.hidden = false
   if (!owner.answerCardView.superview) host.addSubview(owner.answerCardView)
   syncAnswerReviewControls(owner)
@@ -413,11 +451,15 @@ export function showAnswerCard(html: string, owner: any = self): void {
 }
 
 export function closeAnswerCard(): void {
-  pauseControlSurface(self.answerCardReviewControls)
-  self.answerReviewExpanded = false
-  detachAnswerReviewDismiss()
-  if (self.answerCardView) self.answerCardView.hidden = true
-  stopAnswerCardFrontCorrection()
+  const hide = () => {
+    pauseControlSurface(self.answerCardReviewControls)
+    self.answerReviewExpanded = false
+    detachAnswerReviewDismiss()
+    if (self.answerCardView) self.answerCardView.hidden = true
+    stopAnswerCardFrontCorrection()
+  }
+  if (self.answerCardAnnotationKey) closeAnswerInk(self, hide)
+  else hide()
 }
 
 /** 设置切换时仅重排已创建的答案窗口；不会创建、显示或复位窗口。 */

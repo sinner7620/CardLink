@@ -1,0 +1,67 @@
+/*
+ * CardLink 面板外壳（非上游文件）
+ *
+ * 唯一新增的布局样式：展开入口所在的摘要行 + 可滚动容器 + 折叠箭头。
+ * 面板内部（构成条、图例、趋势图、费用卡片与表格）全部使用 dsh-context /
+ * dsh-cost-meter 的上游类名与 CSS，不在此重新定义视觉。
+ */
+.agentContextBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(2 * var(--cardlink-space-unit, 4px));
+  padding: 0 var(--cardlink-space-unit, 4px);
+}
+
+.agentContextSummary {
+  display: flex;
+  flex: 1 1 12rem;
+  flex-wrap: wrap;
+  gap: 0 calc(3 * var(--cardlink-space-unit, 4px));
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.agentContextToggle {
+  flex: 0 0 auto;
+  gap: var(--cardlink-space-unit, 4px);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.agentContextToggle:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.agentContextChevron {
+  width: 12px;
+  height: 12px;
+  transition: transform 0.18s ease;
+}
+
+.agentContextChevron.open {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agentContextChevron {
+    transition: none;
+  }
+}
+
+/* 面板容器：面板内滚动（上游 .lc-root 也是 overflow-y:auto，去掉其整页内边距）。 */
+.lc-cardlink,
+.cm-cardlink {
+  margin-top: var(--cardlink-space-unit, 4px);
+  max-height: min(56vh, 460px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.lc-cardlink > .lc-card:first-child {
+  margin-top: 0;
+}

@@ -12,6 +12,8 @@ export const UI_COLORS = {
   level0: "#ff453a",
   level1: "#ff9f0a",
   level2: "#30d158",
+  /** 停止/结束类危险操作（摘题停止、结束做题）：与等级红区分的深红 */
+  stop: "#d92d20",
   /** 下拉面板底色：柔化纸感（原纯白） */
   surface: "#f7f8fa"
 } as const

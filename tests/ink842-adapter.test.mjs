@@ -51,11 +51,11 @@ test('mixed legacy/new image export uses GoodNotes without clearing earlier stro
  assert.equal(goodnotesOptions({...style,kind:'marker',size:24}).size*4.2,24);
  assert.equal(goodnotesOptions({...style,penType:'brush'}).penType,'brush');
 });
-test('photo preset matches the upstream golden parameters and persists every adjustment',()=>{
+test('default ink settings use the configured feel parameters and persist every adjustment',()=>{
  const s=strokeStyle(DEFAULT_INK_SETTINGS),o=goodnotesOptions(s);
- assert.equal(o.size,3.5);assert.equal(o.color,'#1c1917');
- assert.deepEqual([o.tipSharpness,o.pressureSensitivity,o.flatness,o.stabilization,o.rectification],[.66,.66,.66,1.2,1]);
- assert.deepEqual([o.pressureModel,o.pressureFloor,o.pressureCeiling,o.pressureGain],['logarithmic',.2,1,1.8]);
+ assert.equal(o.size,2);assert.equal(o.color,'#1c1917');
+ assert.deepEqual([o.tipSharpness,o.pressureSensitivity,o.flatness,o.stabilization,o.rectification],[.8,.5,0,.9,1]);
+ assert.deepEqual([o.pressureModel,o.pressureFloor,o.pressureCeiling,o.pressureGain],['logarithmic',.2,1,1.4]);
  s.feel.stabilization=.33;assert.equal(goodnotesOptions(s).stabilization,.33);assert.equal(validInkStyle(s),true);
  s.feel.flatness=2;assert.equal(validInkStyle(s),false);
 });

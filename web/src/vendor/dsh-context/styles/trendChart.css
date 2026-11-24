@@ -1,0 +1,68 @@
+/*
+ * Vendored from dsh-context (Apache-2.0)
+ * https://github.com/bowenliang123/dsh-context/tree/459e2369a4ff6caee912cf8b6dfc35cfac8c77c1
+ *   src/client/styles/trendChart.css  （拆离：只保留精简版趋势图实际使用的规则）
+ *
+ * CardLink 修改：
+ *  - 未移植 `.lc-dna-*`、`.lc-duration*`、`.lc-bar-dna`、`.lc-bar-up`、`.lc-chart-dim`、
+ *    `.lc-chart-fit*`、`.lc-fit-*`、`.lc-trend-lane`（依赖 DNA 条带、耗时曲线、轮次选择
+ *    与总览适配，H1 遥测无对应数据）。
+ *  - 上游柱子的 `hover:bg-(--dsw-alias-interactive-bg-hover)` 是 Tailwind 任意值工具类，
+ *    改为等价普通规则 `.lc-cardlink .lc-bar:hover`（见文件末尾）。
+ *  - `.lc-turn` 的 `cursor: pointer` 保留样式但 H1 轮次行不可点击（上游点击=选轮），
+ *    仅作视觉分组；如需禁用可加 `aria-disabled`（见 trendChart.tsx）。
+ */
+
+.lc-chartrow { display: flex; gap: 6px; align-items: stretch; }
+.lc-axis { position: relative; width: 40px; height: 150px; padding-top: 18px; box-sizing: border-box; color: var(--dsw-alias-label-secondary); font-size: 11px; }
+.lc-axis span { position: absolute; right: 0; line-height: 1; }
+.lc-axis-top { top: 13px; }
+.lc-axis-q3 { top: 41px; }
+.lc-axis-mid { top: 69px; }
+.lc-axis-q1 { top: 97px; }
+.lc-axis-bot { top: 125px; }
+.lc-chart-wrap { position: relative; flex: 1; min-width: 0; }
+.lc-chart-scroll { overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-gutter: stable; padding-bottom: var(--dsh-scrollbar-width, 8px); }
+.lc-chart { position: relative; display: flex; align-items: flex-end; gap: 2px; height: 130px; padding: 18px 2px 0; box-sizing: border-box; width: max-content; min-width: 100%; }
+.lc-grid { position: absolute; left: 0; right: 0; border-top: var(--lc-line-dashed, 1px dashed var(--dsw-alias-border-l2)); pointer-events: none; }
+.lc-grid-top { top: 18px; }
+.lc-grid-q3 { top: 46px; }
+.lc-grid-mid { top: 74px; }
+.lc-grid-q1 { top: 102px; }
+.lc-grid-zero { top: 130px; border-top-style: solid; border-top-color: color-mix(in srgb, var(--color-neutral-500) 50%, transparent); }
+.lc-bar { position: relative; width: 14px; flex: none; height: 100%; display: flex; align-items: flex-end; cursor: pointer; border-radius: 2px; outline: 1px dashed transparent; outline-offset: 1px; transition: opacity var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out), background-color var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out), outline-color var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out); }
+.lc-chart-tip { position: absolute; bottom: calc(100% + 4px); left: 0; z-index: 5; display: flex; flex-direction: column; gap: 2px; max-width: 100%; box-sizing: border-box; overflow-wrap: break-word; background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l1); border-radius: 6px; padding: 3px 8px; font-size: 12px; color: var(--dsw-alias-label-primary); box-shadow: 0 2px 8px rgba(0,0,0,0.18); pointer-events: none; }
+.lc-chart-tip span + span { color: var(--dsw-alias-label-secondary); }
+.lc-bar-hovered { outline-color: var(--dsw-alias-brand-primary); }
+.lc-bar-selected { outline: 2px solid var(--dsw-alias-label-primary); outline-offset: 1px; }
+.lc-bar-stack { display: flex; flex-direction: column-reverse; width: 100%; }
+.lc-bar-stack > div { width: 100%; }
+.lc-bar-stack, .lc-bar-up, .lc-bar-dna { transform-origin: 50% 100%; }
+.lc-bar-stack > div:first-child { border-radius: 0 0 2px 2px; }
+.lc-bar-stack > div:last-child { border-radius: 2px 2px 0 0; }
+.lc-bar-stack > div:only-child { border-radius: 2px; }
+.lc-cat-seg { transition: opacity var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out); }
+.lc-chart[data-catdim] .lc-cat-seg { opacity: 0.35; }
+.lc-chart[data-catdim='system'] .lc-cat-seg[data-cat='system'],
+.lc-chart[data-catdim='tools'] .lc-cat-seg[data-cat='tools'],
+.lc-chart[data-catdim='user'] .lc-cat-seg[data-cat='user'],
+.lc-chart[data-catdim='inject'] .lc-cat-seg[data-cat='inject'],
+.lc-chart[data-catdim='skill'] .lc-cat-seg[data-cat='skill'],
+.lc-chart[data-catdim='assistant'] .lc-cat-seg[data-cat='assistant'],
+.lc-chart[data-catdim='tool'] .lc-cat-seg[data-cat='tool'] { opacity: 1; }
+.lc-bar-marker { position: absolute; top: -16px; left: 50%; transform: translateX(-50%); z-index: 2; font-size: 11px; color: var(--dsw-alias-state-warn-primary); }
+.lc-trend-flag { position: absolute; right: -1px; top: -17px; bottom: 0; z-index: 2; width: 1px; background: color-mix(in srgb, var(--color-neutral-500) 45%, transparent); pointer-events: none; }
+.lc-trend-flag-label { position: absolute; top: 0; right: 0; box-sizing: border-box; padding: 1px 3px; border: 1px solid color-mix(in srgb, var(--color-neutral-500) 45%, transparent); border-radius: 3px; background: var(--dsw-alias-bg-layer-1); font-size: 9px; line-height: 1; font-weight: 600; color: var(--dsw-alias-label-secondary); white-space: nowrap; }
+.lc-turns { display: flex; gap: 2px; overflow: hidden; margin-top: 4px; padding: 0 2px; box-sizing: border-box; width: max-content; min-width: 100%; }
+.lc-turn { flex: none; box-sizing: border-box; text-align: center; font-size: 10px; line-height: 14px; font-weight: 600; color: var(--dsw-alias-label-secondary); border-radius: 3px; height: 14px; white-space: nowrap; cursor: pointer; transition: filter var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out), opacity var(--ds-transition-duration, 0.2s) var(--ds-ease-in-out, ease-in-out); }
+.lc-turn-label { display: inline-block; }
+
+.lc-bar:focus-visible, .lc-turn:focus-visible, .lc-chart:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: 1px;
+}
+
+/* 上游 className 里的 hover:bg-(--dsw-alias-interactive-bg-hover) 等价规则。 */
+.lc-cardlink .lc-bar:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}

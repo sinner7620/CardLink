@@ -2,7 +2,7 @@ import fs from "node:fs"
 import path from "node:path"
 import postcss from "postcss"
 
-const uiDir = path.resolve("web/src/ui")
+const uiDir = path.resolve("web/src/ui/_legacy")
 const files = fs.readdirSync(uiDir).filter(name => name.endsWith(".css"))
 const retiredClasses = new Set([
   "previewPaper", "previewMore", "mn-glass-control-title", "mn-glass-presets",

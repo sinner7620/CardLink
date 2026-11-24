@@ -1,0 +1,121 @@
+/*
+ * CardLink 适配层（非上游文件）：dsh-context 主题变量桥 + 命名空间
+ *
+ * 上游样式全部使用 DeepSeek Harness 的 `--dsw-*` / `--dsw-static-*` / `--ds-*` 变量。
+ * 本文件把同一批变量名的**取值**换成 CardLink 的语义 token（harness-tw.css 定义的
+ * --foreground / --text-secondary / --card / --border / --primary / --mn-level-* 等），
+ * 上游 CSS 内容不需要改动；这是唯一新增的样式文件。
+ *
+ * 深色：插件没有全局深色主题，这里沿用插件缓存页已有的深色取值
+ * （web/src/ui/local-cache.css: --cache-surface #242426 / --cache-text #f4f4f6），
+ * 由适配组件按 prefers-color-scheme 给容器加 `.lc-dark`。
+ *
+ * 容器 `.lc-cardlink` 对应上游 `.lc-root`，但去掉宿主整页的内边距、背景与滚动
+ * （面板自身在对话框内滚动），保留字号与前景色。
+ */
+.lc-cardlink {
+  /* ---- 上游变量 → CardLink 语义 token ---- */
+  --dsw-alias-label-primary: var(--foreground, #1f2328);
+  --dsw-alias-label-secondary: var(--text-secondary, #6e6e73);
+  --dsw-alias-label-tertiary: var(--text-secondary, #6e6e73);
+  --dsw-alias-label-dimmed: color-mix(in srgb, var(--text-secondary, #6e6e73) 70%, transparent);
+  --dsw-alias-label-primary-foreground: var(--primary-foreground, #ffffff);
+  --dsw-alias-label-primary-inverted: var(--primary-foreground, #ffffff);
+  --dsw-alias-bg-base: var(--background, #ffffff);
+  --dsw-alias-bg-layer-1: var(--card, #ffffff);
+  --dsw-alias-bg-layer-2: var(--muted, #f2f3f5);
+  --dsw-alias-bg-layer-3: var(--secondary, #eceef1);
+  --dsw-alias-border-l1: var(--border-subtle, rgba(0, 0, 0, 0.08));
+  --dsw-alias-border-l2: var(--border, rgba(0, 0, 0, 0.12));
+  --dsw-alias-border-l3: var(--border, rgba(0, 0, 0, 0.12));
+  --dsw-alias-border-l4: var(--border, rgba(0, 0, 0, 0.16));
+  --dsw-alias-brand-primary: var(--primary, #0e8dfd);
+  --dsw-alias-interactive-bg-hover: color-mix(in srgb, var(--primary, #0e8dfd) 8%, transparent);
+  --dsw-alias-interactive-bg-active: color-mix(in srgb, var(--primary, #0e8dfd) 14%, transparent);
+  --dsw-alias-button-primary-fill: var(--primary, #0e8dfd);
+  --dsw-alias-button-elevated-fill: var(--secondary, #eceef1);
+  --dsw-alias-state-warn-primary: var(--mn-level-1, #b25000);
+  --dsw-alias-state-business-primary: var(--primary, #0e8dfd);
+  --dsw-alias-state-error-primary: var(--destructive, #d70015);
+  --dsw-alias-state-success-primary: var(--mn-level-2, #248a3d);
+  --dsw-alias-state-info-primary: var(--primary, #0e8dfd);
+  --dsw-static-neutral-bluish-75: var(--muted, #f2f3f5);
+  --dsw-shadow-lv1: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --dsw-shadow-lv2: 0 4px 16px rgba(0, 0, 0, 0.10);
+  --dsw-shadow-lv3: 0 2px 8px rgba(0, 0, 0, 0.18);
+  --dsh-scrollbar-width: 8px;
+  --ds-transition-duration: 0.2s;
+  --ds-ease-in-out: ease-in-out;
+  --ds-font-family-code: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* ---- 上游 base.css 的浅色分支取值（深色在 .lc-dark 复位） ---- */
+  --lc-gap: 9px;
+  --lc-canvas: var(--dsw-static-neutral-bluish-75);
+  --lc-subpanel-bg: var(--dsw-alias-bg-layer-1);
+  --lc-control-track: var(--dsw-static-neutral-bluish-75);
+  --lc-line-fine: 0.5px solid var(--dsw-alias-border-l3);
+  --lc-line-strong: 0.5px solid var(--dsw-alias-border-l4);
+  --lc-line-dashed: 0.5px dashed var(--dsw-alias-border-l3);
+  --lc-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.06), 0 8px 24px rgba(0, 0, 0, 0.06);
+  --lc-shadow-tile: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --lc-shadow-hover: 0 4px 16px rgba(0, 0, 0, 0.10);
+
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* 上游 base.css 的浅色补丁（body:not([data-ds-dark-theme]) 分支）。 */
+.lc-cardlink .lc-card {
+  border-radius: 12px;
+  box-shadow: var(--lc-shadow-card);
+  padding: 8px 9px;
+}
+
+.lc-cardlink .lc-card-title {
+  padding-bottom: 7px;
+  margin-bottom: 9px;
+  border-bottom: var(--lc-line-strong);
+}
+
+/* 深色：上游默认值（10px 圆角 / 无阴影 / 7px 内边距 / 标题无分隔线）。 */
+.lc-cardlink.lc-dark {
+  --dsw-alias-label-primary: #f4f4f6;
+  --dsw-alias-label-secondary: #a9adb6;
+  --dsw-alias-label-tertiary: #8f949d;
+  --dsw-alias-label-dimmed: color-mix(in srgb, #a9adb6 70%, transparent);
+  --dsw-alias-label-primary-foreground: #ffffff;
+  --dsw-alias-label-primary-inverted: #ffffff;
+  --dsw-alias-bg-base: #1b1c1e;
+  --dsw-alias-bg-layer-1: #242426;
+  --dsw-alias-bg-layer-2: #2c2d30;
+  --dsw-alias-bg-layer-3: #34363a;
+  --dsw-alias-border-l1: rgba(255, 255, 255, 0.10);
+  --dsw-alias-border-l2: rgba(255, 255, 255, 0.14);
+  --dsw-alias-border-l3: rgba(255, 255, 255, 0.16);
+  --dsw-alias-border-l4: rgba(255, 255, 255, 0.20);
+  --dsw-alias-interactive-bg-hover: rgba(255, 255, 255, 0.08);
+  --dsw-alias-interactive-bg-active: rgba(255, 255, 255, 0.12);
+  --dsw-alias-button-elevated-fill: #34363a;
+  --dsw-static-neutral-bluish-75: #2c2d30;
+  --dsw-shadow-lv1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --dsw-shadow-lv2: 0 4px 16px rgba(0, 0, 0, 0.45);
+  --dsw-shadow-lv3: 0 2px 8px rgba(0, 0, 0, 0.5);
+  --lc-gap: 7px;
+  --lc-control-track: var(--dsw-alias-bg-layer-2);
+  --lc-line-fine: 1px solid var(--dsw-alias-border-l2);
+  --lc-line-strong: 1px solid var(--dsw-alias-border-l2);
+  --lc-line-dashed: 1px dashed var(--dsw-alias-border-l2);
+}
+
+.lc-cardlink.lc-dark .lc-card {
+  border-radius: 10px;
+  box-shadow: none;
+  padding: 7px 8px;
+}
+
+.lc-cardlink.lc-dark .lc-card-title {
+  padding-bottom: 0;
+  margin-bottom: 10px;
+  border-bottom: none;
+}

@@ -28,6 +28,23 @@ function snapshot(value: any) {
   return JSON.parse(JSON.stringify(value))
 }
 
+test("答案预览手写批注默认关闭，保存后重启保留设置", () => {
+  const store = storage()
+  const modules = { marginnote: store, "./mistake-review-settings": { normalizeMistakeReviewCurves: (value: any) => value ?? {} } }
+  const load = () => moduleAt("src/settings.ts", modules)
+  assert.equal(load().loadMatcherSettings().answerInkEnabled, false)
+  load().saveMatcherSettings({ boundHandwritingDisplay: "always" })
+  for (const value of store.data.values()) delete value.answerInkEnabled
+  assert.equal(load().loadMatcherSettings().answerInkEnabled, false)
+  load().saveMatcherSettings({ answerInkEnabled: true })
+  assert.equal(load().loadMatcherSettings().answerInkEnabled, true)
+  load().saveMatcherSettings({ answerInkEnabled: "false" })
+  assert.equal(load().loadMatcherSettings().answerInkEnabled, true)
+  load().saveMatcherSettings({ answerInkEnabled: false })
+  assert.equal(load().loadMatcherSettings().answerInkEnabled, false)
+  assert.equal(load().loadMatcherSettings().boundHandwritingDisplay, "always")
+})
+
 test("复习完成彩纸默认开启，旧设置缺少字段时保留其他偏好，开关可保存并重启恢复", () => {
   const store = storage()
   const modules = { marginnote: store, "./mistake-review-settings": { normalizeMistakeReviewCurves: (value: any) => value ?? {} } }

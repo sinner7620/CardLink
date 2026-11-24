@@ -4,19 +4,19 @@ export const INK_COLORS = [['#1c1917','黑'],['#2563eb','蓝'],['#dc2626','红']
 export const PEN_SIZES = [1,2,3.2,4.8,7,10,12];
 export const MARKER_SIZES = [8,16,24,32];
 export const FEEL_CONTROLS = [
- ['tipSharpness','出锋',0,1,.01,.66],['pressureSensitivity','压力',0,1,.01,.66],['flatness','扁平',0,1,.01,.66],
- ['stabilization','稳定',0,2,.01,1.2],['rectification','纠偏',0,1,.01,1],
+ ['tipSharpness','出锋',0,1,.01,.8],['pressureSensitivity','压力',0,1,.01,.5],['flatness','扁平',0,1,.01,0],
+ ['stabilization','稳定',0,2,.01,.9],['rectification','纠偏',0,1,.01,1],
  ['smoothing','平滑',0,1,.01,.6],['wobbleFilter','微颤过滤',0,1,.01,.6],
- ['pressureFloor','轻写底座',.05,.8,.01,.2],['pressureCeiling','重压封顶',.8,2,.01,1],['pressureGain','压力增益',.5,3,.1,1.8]
+ ['pressureFloor','轻写底座',.05,.8,.01,.2],['pressureCeiling','重压封顶',.8,2,.01,1],['pressureGain','压力增益',.5,3,.1,1.4]
 ];
 export const FEEL_DEFAULTS=Object.fromEntries(FEEL_CONTROLS.map(([key,,,,,value])=>[key,value]));
-export const DEFAULT_INK_SETTINGS = {tool:'pen',lastDrawTool:'pen',penType:'fountain',color:'#1c1917',markerColor:'#facc15',size:3.5,markerSize:24,pressure:true,eraserSize:13,eraserMode:'partial',eraserAutoReturn:true,scribble:true,...FEEL_DEFAULTS};
+export const DEFAULT_INK_SETTINGS = {tool:'pen',lastDrawTool:'pen',penType:'fountain',color:'#1c1917',markerColor:'#facc15',size:2,markerSize:24,pressure:true,eraserSize:13,eraserMode:'partial',eraserAutoReturn:true,scribble:true,...FEEL_DEFAULTS};
 let sessionSettings = null;
 export function normalizeInkSettings(value = {}) {
  const s = {...DEFAULT_INK_SETTINGS};
  if (!value || typeof value !== 'object') return s;
- if (['pen','marker','line','eraser'].includes(value.tool)) s.tool=value.tool;
- if (['pen','marker','line'].includes(value.lastDrawTool))s.lastDrawTool=value.lastDrawTool;
+ if (['pen','marker','line','eraser','lasso'].includes(value.tool)) s.tool=value.tool;
+ if (['pen','marker','line','lasso'].includes(value.lastDrawTool))s.lastDrawTool=value.lastDrawTool;
  if (['fountain','ballpoint','brush'].includes(value.penType))s.penType=value.penType;
  if(['partial','stroke'].includes(value.eraserMode))s.eraserMode=value.eraserMode;
  for (const key of ['color','markerColor']) if (/^#[0-9a-f]{6}$/i.test(value[key]||'')) s[key]=value[key];

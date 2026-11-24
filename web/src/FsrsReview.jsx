@@ -1,5 +1,6 @@
-import React, { useEffect, useRef, useState } from "react"
+import React, { useEffect, useMemo, useRef, useState } from "react"
 import MNBridge from "./lib/mnBridge"
+import { reviewDayStatus } from "./lib/reviewQueueControls"
 import { fsrsQueueRecord } from "./lib/fsrsQueue"
 import "./ui/fsrs-controls.css"
 
@@ -17,7 +18,7 @@ function ErrorEditor({ initial, busy, onSave, onCancel }) {
 }
 
 /** Data/controller adapter only: the existing queue owns all page layout. */
-export default function FsrsReview({ recordsRevision, sources, children }) {
+export default function FsrsReview({ recordsRevision, sources, onDayCounts, children }) {
   const [data, setData] = useState(null), [error, setError] = useState("")
   const [busy, setBusy] = useState(false), [editor, setEditor] = useState(null), [manualIds, setManualIds] = useState([])
   const lock = useRef(false), retry = useRef({}), alive = useRef(true), serial = useRef(0)
@@ -46,7 +47,14 @@ export default function FsrsReview({ recordsRevision, sources, children }) {
       setEditor(null); await refresh(); return saved
     })
   }
-  const records = (data?.records || []).map(item => fsrsQueueRecord(item, sources.find(source => source.recordId === item.recordId)))
+  const records = useMemo(() => {
+    const byId = new Map(sources.map(source => [source.recordId, source]))
+    return (data?.records || []).map(item => fsrsQueueRecord(item, byId.get(item.recordId)))
+  }, [data, sources])
+  const day = new Date().toDateString()
+  useEffect(() => {
+    onDayCounts?.(data ? reviewDayStatus(records, manualIds).counts : null)
+  }, [onDayCounts, data, records, manualIds, day])
   const adapter = {
     names: feedbackNames, busy: busy || !!editor, notice: error || (!data ? "正在读取复习记录…" : ""), manualTodayIds: manualIds,
     content: async recordId => ({ ...await MNBridge.send("fsrsContent", { recordId }), record: records.find(item => item.recordId === recordId) }),

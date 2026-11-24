@@ -1,3 +1,4 @@
+import {erasePath} from './ink-eraser.js';
 export const PAGE_WIDTH = 1000;
 export const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
 const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
@@ -37,9 +38,9 @@ export function eraseCircle(strokes, styles, center, radius) {
         const from = cuts[j - 1], to = cuts[j];
         if (inside(mix(a, b, (from + to) / 2))) { changed = true; finish(); continue; }
         const start = mix(a, b, from), end = mix(a, b, to);
-        if (run.length && !close(run.at(-1), start)) finish();
+        if (run.length && !close(run[run.length - 1], start)) finish();
         if (!run.length) run.push(start);
-        if (!close(run.at(-1), end)) run.push(end);
+        if (!close(run[run.length - 1], end)) run.push(end);
       }
     }
     finish();
@@ -66,28 +67,31 @@ export function rejectPalm(event, penActive, lastPen, now) {
 
 // Require a quick, dense zigzag and an actual intersection with older ink.
 // A normal crossing-out line or a long waveform remains ordinary handwriting.
-export function scribbleErase(strokes, styles, points, elapsed) {
-  if (elapsed > 1600 || points.length < 7) return null;
-  const xs = points.map(p => p[0]), ys = points.map(p => p[1]);
-  const width = Math.max(...xs) - Math.min(...xs), height = Math.max(...ys) - Math.min(...ys);
-  if (width < 28 || width > 260 || height > 100) return null;
-  let turns = 0, direction = 0, anchor = points[0][0], length = 0;
-  for (let i = 1; i < points.length; i++) {
-    length += Math.hypot(points[i][0] - points[i-1][0], points[i][1] - points[i-1][1]);
-    const dx = points[i][0] - anchor;
-    if (Math.abs(dx) < 12) continue;
-    const next = Math.sign(dx);
-    if (direction && direction !== next) turns++;
-    direction = next; anchor = points[i][0];
+export function scribbleErase(strokes, styles, points, elapsed, index, scale = 1) {
+  if (elapsed > 1600 || points.length < 5) return null;
+  const [x, y] = points[0];
+  let farthest = 0, axisX = 0, axisY = 0;
+  for (const p of points) {
+    const distance = Math.hypot(p[0] - x, p[1] - y);
+    if (distance > farthest) { farthest = distance; axisX = (p[0] - x) / distance; axisY = (p[1] - y) / distance; }
   }
-  if (turns < 5 || length < width * 4) return null;
-  let result = {strokes, styles, changed:false};
+  if (farthest * scale < 10) return null;
+  let min = 0, max = 0, crossMin = 0, crossMax = 0;
+  let turns = 0, direction = 0, extreme = 0, travel = 0, previous = 0;
   for (let i = 1; i < points.length; i++) {
-    const a = points[i-1], b = points[i], n = Math.max(1, Math.ceil(Math.hypot(a[0]-b[0], a[1]-b[1])/6));
-    for (let j = 0; j <= n; j++) {
-      const erased = eraseCircle(result.strokes, result.styles, mix(a,b,j/n), 12);
-      result = {...erased, changed: result.changed || erased.changed};
+    const dx = (points[i][0] - x) * scale, dy = (points[i][1] - y) * scale;
+    const along = dx * axisX + dy * axisY, across = dy * axisX - dx * axisY;
+    min = Math.min(min, along); max = Math.max(max, along);
+    crossMin = Math.min(crossMin, across); crossMax = Math.max(crossMax, across);
+    travel += Math.abs(along - previous); previous = along;
+    const delta = along - extreme;
+    if (direction && delta * direction >= 0) extreme = along;
+    else if (Math.abs(delta) >= 7) {
+      if (direction) turns++;
+      direction = Math.sign(delta); extreme = along;
     }
   }
-  return result;
+  const span = max - min;
+  if (turns < 3 || travel < span * 3 || span > 240 || crossMax - crossMin > Math.min(100, span)) return null;
+  return erasePath(strokes, styles, points, 8 / scale, {index,wholeStroke:true});
 }

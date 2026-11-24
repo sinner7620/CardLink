@@ -31,11 +31,15 @@ export function penIsDown(event) {
 // Reconcile the two event streams by physical contact, rather than selecting
 // one API for the entire iPad. Touch tracks contact lifetime while timely
 // Pointer samples retain their higher-frequency coalesced input.
-export function createInkInputRouter(callbacks) {
+export function createInkInputRouter(callbacks, report, { finishPenOnPointerUp = false } = {}) {
   const pointers=new Map(), touches=new Map();
+  const completedPenTouches=new Set();
   const entries=()=>new Set([...pointers.values(),...touches.values()]);
   const remove=entry=>{if(entry.pointerId!==undefined)pointers.delete(entry.pointerId);if(entry.touchId!==undefined)touches.delete(entry.touchId);};
-  const end=(entry,event)=>{remove(entry);callbacks.end({type:event.type,pointerId:entry.id,pointerType:entry.type,timeStamp:event.timeStamp,inkTouch:!!event.inkTouch,clientX:event.clientX??entry.x,clientY:event.clientY??entry.y,pressure:0,buttons:0});};
+  const end=(entry,event,reason=event.type)=>{
+    report?.('route.end',entry.type,entry.id,reason);
+    remove(entry);callbacks.end({type:event.type,pointerId:entry.id,pointerType:entry.type,timeStamp:event.timeStamp,inkTouch:!!event.inkTouch,clientX:event.clientX??entry.x,clientY:event.clientY??entry.y,pressure:0,buttons:0});
+  };
   const match=(type,x,y)=>[...entries()].find(c=>c.type===type&&Math.hypot(c.x-x,c.y-y)<24);
   const canonical=(event,entry)=>event.pointerId===entry.id?event:{type:event.type,pointerId:entry.id,pointerType:event.pointerType,clientX:event.clientX,clientY:event.clientY,pressure:event.pressure,buttons:event.buttons,button:event.button,width:event.width,height:event.height,timeStamp:event.timeStamp,preventDefault:()=>event.preventDefault(),getCoalescedEvents:()=>event.getCoalescedEvents?.()||[]};
   function pointer(event) {
@@ -43,21 +47,54 @@ export function createInkInputRouter(callbacks) {
     let entry=pointers.get(event.pointerId);
     // A new down is a new physical contact, even when the previous contact
     // still has a Touch association whose end never reached the WebView.
-    if(event.type==='pointerdown'&&entry){end(entry,{type:'pointercancel'});entry=null;}
+    if(event.type==='pointerdown'&&entry){end(entry,{type:'pointercancel'},'reused-pointer-id');entry=null;}
     if(entry?.touchId!==undefined){
-      if(ending)entry.lastPointer=-Infinity;
-      if(event.pointerType==='pen'&&event.type==='pointermove'&&penIsDown(event)){entry.lastPointer=performance.now();entry.x=event.clientX;entry.y=event.clientY;callbacks.move(canonical(event,entry));}
+      // As in 842practice, a real Pointer up is enough to commit the stroke.
+      // A cancelled pointer can still have a live native Touch stream.
+      if(finishPenOnPointerUp&&entry.type==='pen'&&event.type==='pointerup'){
+        completedPenTouches.add(entry.touchId);
+        end(entry,event);
+        return;
+      }
+      if (ending) {
+        entry.lastPointer = -Infinity;
+        if (entry.pointerEnd !== 'pointerup') entry.pointerEnd = event.type;
+        report?.('route.await-touch-end',entry.type,entry.id,event.type);
+      }
+      if(event.pointerType==='pen'&&event.type==='pointermove'&&penIsDown(event)){
+        entry.pointerEnd=undefined;
+        entry.lastPointer=performance.now();entry.x=event.clientX;entry.y=event.clientY;callbacks.move(canonical(event,entry));
+      }
       return;
     }
     if(ending){if(entry)end(entry,event);return;}
     if(!entry){
       if(event.type!=='pointerdown'&&!penIsDown(event))return;
       entry=match(event.pointerType,event.clientX,event.clientY);
-      // Only an unpaired, Touch-first contact may adopt a fresh pointerdown.
-      // A Touch contact already paired to a pointer belongs to the old stroke.
-      if(event.type==='pointerdown'&&entry?.touchId!==undefined&&entry.pointerId!==undefined){end(entry,{type:'pointercancel'});entry=null;}
-      if(entry?.touchId!==undefined){if(entry.pointerId!==undefined)pointers.delete(entry.pointerId);entry.pointerId=event.pointerId;pointers.set(event.pointerId,entry);if(event.type==='pointermove'&&penIsDown(event)){entry.lastPointer=performance.now();callbacks.move(canonical(event,entry));}return;}
+      if (entry?.touchId !== undefined && entry.pointerId !== undefined) {
+        const interrupted = entry.pointerEnd === 'pointercancel' || entry.pointerEnd === 'lostpointercapture';
+        // A new pressed Pointer may arrive without down after the old up was missed.
+        // Resume a paired Touch only when the previous Pencil Pointer was interrupted.
+        if (event.type === 'pointerdown' || (event.pointerType === 'pen' && !interrupted)) {
+          end(entry, {type:'pointercancel'}, 'new-pointer-paired-touch');
+          entry = null;
+        }
+      }
+      if (entry?.touchId !== undefined) {
+        if (entry.pointerId !== undefined) pointers.delete(entry.pointerId);
+        entry.pointerId = event.pointerId;
+        entry.pointerEnd = undefined;
+        pointers.set(event.pointerId,entry);
+        report?.('route.pair',entry.type,entry.id,event.pointerId,entry.touchId);
+        if (event.type === 'pointermove' && penIsDown(event)) {
+          entry.lastPointer = performance.now();
+          entry.x = event.clientX; entry.y = event.clientY;
+          callbacks.move(canonical(event,entry));
+        }
+        return;
+      }
       entry={id:event.pointerId,pointerId:event.pointerId,type:event.pointerType,x:event.clientX,y:event.clientY,lastPointer:performance.now()};pointers.set(event.pointerId,entry);
+      report?.('route.down',entry.type,entry.id,event.type);
       callbacks.down(event);
       if(event.type==='pointerdown')return;
     }
@@ -65,32 +102,43 @@ export function createInkInputRouter(callbacks) {
     entry.lastPointer=performance.now();
     callbacks.move(event);
   }
-  function touch(event, startAllowed=true) {
-    if(!startAllowed&&!touches.size)return;
+  function touch(event, startAllowed=true, penOnly=false, fingerOnly=false) {
+    if(!startAllowed&&!touches.size&&!completedPenTouches.size)return;
     const ending=event.type==='touchend'||event.type==='touchcancel';
-    if(startAllowed&&event.cancelable)event.preventDefault();
+    const changedTouches = Array.from(event.changedTouches || []).filter(t => {
+      if (!penOnly && !fingerOnly) return true;
+      const isPen = t.touchType === 'stylus' || touches.get(t.identifier)?.type === 'pen' ||
+        (t.touchType !== 'direct' && match('pen', t.clientX, t.clientY));
+      return penOnly ? isPen : !isPen;
+    });
+    if(startAllowed&&event.cancelable&&changedTouches.length)event.preventDefault();
     // A complete TouchList repairs omitted end/cancel events before new gestures.
     if(event.touches!==undefined){
       const live=new Set(Array.from(event.touches,t=>t.identifier));
-      const changed=new Set(Array.from(event.changedTouches||[],t=>t.identifier));
-      for(const [id,entry]of touches)if(!live.has(id)&&!(ending&&changed.has(id)))end(entry,{type:'pointercancel',clientX:entry.x,clientY:entry.y,pressure:0,buttons:0});
+      const changed=new Set(changedTouches.map(t=>t.identifier));
+      for(const id of completedPenTouches)if(!live.has(id)&&!changed.has(id))completedPenTouches.delete(id);
+      for(const [id,entry]of touches)if(!live.has(id)&&!(ending&&changed.has(id)))end(entry,{type:'pointercancel',clientX:entry.x,clientY:entry.y,pressure:0,buttons:0},'missing-from-touch-list');
     }
-    for(const t of Array.from(event.changedTouches||[])){
+    for(const t of changedTouches){
+      if(completedPenTouches.has(t.identifier)){
+        if(ending||event.type==='touchstart')completedPenTouches.delete(t.identifier);
+        if(event.type!=='touchstart')continue;
+      }
       let entry=touches.get(t.identifier);
       if(ending){if(entry)end(entry,touchPointer(t,event,true));continue;}
-      if(event.type==='touchstart'&&entry){end(entry,{type:'pointercancel'});entry=null;}
+      if(event.type==='touchstart'&&entry){end(entry,{type:'pointercancel'},'reused-touch-id');entry=null;}
       if(!entry){
         if(!startAllowed)continue;
         const knownPen=t.touchType!=='direct'&&match('pen',t.clientX,t.clientY);
         const type=t.touchType==='stylus'||knownPen?'pen':'touch';
         entry=match(type,t.clientX,t.clientY);
         if(entry?.touchId!==undefined)entry=null;
-        if(entry){entry.touchId=t.identifier;touches.set(t.identifier,entry);if(type==='touch')callbacks.down({...touchPointer(t,event),pointerId:entry.id,pointerType:type});}
-        else{entry={id:`touch:${t.identifier}`,touchId:t.identifier,type,x:t.clientX,y:t.clientY};touches.set(t.identifier,entry);callbacks.down({...touchPointer(t,event),pointerId:entry.id,pointerType:type});}
+        if(entry){entry.touchId=t.identifier;touches.set(t.identifier,entry);report?.('route.pair',entry.type,entry.id,entry.pointerId,t.identifier);if(type==='touch')callbacks.down({...touchPointer(t,event),pointerId:entry.id,pointerType:type});}
+        else{entry={id:`touch:${t.identifier}`,touchId:t.identifier,type,x:t.clientX,y:t.clientY};touches.set(t.identifier,entry);report?.('route.down',entry.type,entry.id,event.type);callbacks.down({...touchPointer(t,event),pointerId:entry.id,pointerType:type});}
       }
       entry.x=t.clientX;entry.y=t.clientY;
       if(event.type==='touchmove'&&!(entry.type==='pen'&&entry.pointerId!==undefined&&performance.now()-(entry.lastPointer??-Infinity)<32))callbacks.move({...touchPointer(t,event),pointerId:entry.id,pointerType:entry.type});
     }
   }
-  return {pointer,touch,hasNativePen:()=>[...touches.values()].some(c=>c.type==='pen'),reset(){for(const entry of entries())end(entry,{type:'pointercancel',pressure:0,buttons:0});pointers.clear();touches.clear();}};
+  return {pointer,touch,hasNativePen:()=>[...touches.values()].some(c=>c.type==='pen'),reset(){for(const entry of entries())end(entry,{type:'pointercancel',pressure:0,buttons:0},'input-reset');pointers.clear();touches.clear();completedPenTouches.clear();}};
 }

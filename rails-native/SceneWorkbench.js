@@ -14,8 +14,8 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
   function eligible(owner) { return __MN_ANSWER_CORE_GLOBAL__.isSceneMode(owner) && typeof AddonWebPanel !== "undefined"; }
   function log(event, detail) { __MN_ANSWER_CORE_GLOBAL__.annotationLog(event, String(detail || "").slice(0, 400)); }
   function remember(open) { NSUserDefaults.standardUserDefaults().setObjectForKey(open, OPEN_KEY); }
-  function opacityLog(current, event, detail) {
-    current.owner.cardLinkSceneOpacityStatus = { event: event, detail: detail, at: Date.now() };
+  function surfaceLog(current, event, detail) {
+    current.owner.cardLinkSceneSurfaceStatus = { event: event, detail: detail, at: Date.now() };
     try { console.log('CardLink ' + event + ': ' + detail); } catch (_) {}
     log(event, detail);
   }
@@ -35,16 +35,16 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
     } catch (_) {}
     return '';
   }
-  // Native acquisition/restoration follows the user-supplied
-  // FuckShitOpacity v0.2.1: no URL, JavaScript evaluation or DOM handshake.
+  // 面板表面可见性补偿：宿主会把承载插件的原生容器淡化到约 0.6，这里只读取
+  // 原生 alpha／图层值，在被淡化时校正回可见；不依赖 URL、网页脚本或页面标识。
   function opacityNumber(value) { return typeof value === 'number' && isFinite(value) ? Math.round(value * 1000) / 1000 : null; }
-  function nativeOpacityState(view) {
+  function nativeSurfaceState(view) {
     var alpha = null, opacity = null;
     try { alpha = opacityNumber(view.alpha); } catch (_) {}
     try { opacity = opacityNumber(view.layer.opacity); } catch (_) {}
     return { alpha: alpha, opacity: opacity };
   }
-  function fadedPanelCandidates(owner) {
+  function fadedSurfaceCandidates(owner) {
     var result = [], scanned = 0, stack = [{ view: owner.window, depth: 0 }];
     while (stack.length && scanned++ < 2600) {
       var entry = stack.pop(), view = entry.view;
@@ -66,83 +66,81 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
     }
     return result;
   }
-  function tryLayerRestore(view) {
-    var before = nativeOpacityState(view);
+  function restoreSurfaceVisibility(view) {
+    var before = nativeSurfaceState(view);
     try { if (view.layer) view.layer.opacity = 1; } catch (_) {}
-    var after = nativeOpacityState(view);
+    var after = nativeSurfaceState(view);
     if ((after.opacity === null || after.opacity < .985) && typeof view.setAlpha === 'function') {
       try { view.setAlpha(1); } catch (_) {}
-      after = nativeOpacityState(view);
+      after = nativeSurfaceState(view);
     }
     return { before: before, after: after,
       success: after.opacity !== null && after.opacity >= .985 || after.alpha !== null && after.alpha >= .985 };
   }
-  function restoreOpacityTarget(current, target) {
-    var result = tryLayerRestore(target);
-    current.opacityFailures = result.success ? 0 : (current.opacityFailures || 0) + 1;
-    current.opacityRepairs = (current.opacityRepairs || 0) + 1;
-    if (current.opacityRestored !== result.success || current.opacityRepairs === 1) {
-      opacityLog(current, result.success ? 'panel.opacityRestored' : 'panel.opacityRestoreFailed',
+  function applySurfaceVisibility(current, target) {
+    var result = restoreSurfaceVisibility(target);
+    current.surfaceFailures = result.success ? 0 : (current.surfaceFailures || 0) + 1;
+    current.surfaceRepairs = (current.surfaceRepairs || 0) + 1;
+    if (current.surfaceVisible !== result.success || current.surfaceRepairs === 1) {
+      surfaceLog(current, result.success ? 'panel.surfaceVisible' : 'panel.surfaceHidden',
         'alpha=' + result.before.alpha + ', layer=' + result.before.opacity + ' -> alpha=' + result.after.alpha + ', layer=' + result.after.opacity);
     }
-    current.opacityRestored = result.success;
+    current.surfaceVisible = result.success;
     return result.success;
   }
-  function startOpacityLock(current) {
-    if (current.opacityTimer || current.collapsed || current.rejected) return;
+  function watchPanelSurface(current) {
+    if (current.surfaceTimer || current.collapsed || current.rejected) return;
     var lastLookup = 0;
-    function checkOpacity() {
+    function checkSurface() {
       if (current.collapsed || current.rejected) return;
       try {
-        var target = current.opacityTarget;
+        var target = current.surfaceTarget;
         if (!target || !target.superview) {
-          current.opacityTarget = null;
+          current.surfaceTarget = null;
           if (Date.now() - lastLookup < 1000) return;
           lastLookup = Date.now();
-          var candidates = fadedPanelCandidates(current.owner);
-          if (current.opacityCandidateCount !== candidates.length) {
-            current.opacityCandidateCount = candidates.length;
-            opacityLog(current, 'panel.opacityCandidates', candidates.length === 0 ? '等待原生网页容器 alpha 变为约 0.6'
-              : candidates.length === 1 ? '发现唯一半透明原生网页容器，执行首次恢复'
-              : '检测到 ' + candidates.length + ' 个半透明原生网页容器，与参考插件一致，不修改任何一个');
+          var candidates = fadedSurfaceCandidates(current.owner);
+          if (current.surfaceCandidateCount !== candidates.length) {
+            current.surfaceCandidateCount = candidates.length;
+            surfaceLog(current, 'panel.surfaceCandidates', candidates.length === 0 ? '等待原生网页容器 alpha 变为约 0.6'
+              : candidates.length === 1 ? '发现唯一被淡化的原生网页容器，执行首次校正'
+              : '检测到 ' + candidates.length + ' 个被淡化的原生网页容器，为避免误改，不处理任何一个');
           }
           if (candidates.length !== 1) return;
           target = candidates[0].view;
-          // Like the reference's restorePanelOpacity, always restore first,
-          // even if alpha is .6 while CALayer.opacity happens to read as 1.
-          if (restoreOpacityTarget(current, target)) current.opacityTarget = target;
+          // 首次绑定即校正一次：alpha 可能已读为 .6，而 CALayer.opacity 仍读为 1。
+          if (applySurfaceVisibility(current, target)) current.surfaceTarget = target;
           return;
         }
         if (target.hidden || !target.layer) return;
-        var state = nativeOpacityState(target);
-        // Same as reference lockOpacityTick: layer is authoritative; alpha
-        // is used only when the layer property cannot be read.
+        var state = nativeSurfaceState(target);
+        // 图层值优先，仅当图层属性不可读时才回退到 alpha。
         var value = state.opacity !== null ? state.opacity : state.alpha;
         if (value !== null && value > .05 && value < .97) {
-          restoreOpacityTarget(current, target);
-          if (current.opacityFailures > 10) {
-            current.opacityTarget = null;
-            opacityLog(current, 'panel.opacityLockStopped', '连续恢复失败，停止锁定此容器，等待重新检测');
+          applySurfaceVisibility(current, target);
+          if (current.surfaceFailures > 10) {
+            current.surfaceTarget = null;
+            surfaceLog(current, 'panel.surfaceWatchStopped', '连续校正失败，停止监视此容器，等待重新检测');
           }
         }
       } catch (error) {
-        current.opacityTarget = null;
-        opacityLog(current, 'panel.opacityLock', error.message || String(error));
+        current.surfaceTarget = null;
+        surfaceLog(current, 'panel.surfaceWatch', error.message || String(error));
       }
     }
-    current.opacityTimer = NSTimer.scheduledTimerWithTimeInterval(0.5, true, checkOpacity);
+    current.surfaceTimer = NSTimer.scheduledTimerWithTimeInterval(0.5, true, checkSurface);
     try {
       if (typeof NSRunLoop !== 'undefined') {
         var loop = typeof NSRunLoop.mainRunLoop === 'function' ? NSRunLoop.mainRunLoop()
           : typeof NSRunLoop.currentRunLoop === 'function' ? NSRunLoop.currentRunLoop() : null;
-        if (loop && typeof loop.addTimerForMode === 'function') loop.addTimerForMode(current.opacityTimer,
+        if (loop && typeof loop.addTimerForMode === 'function') loop.addTimerForMode(current.surfaceTimer,
           typeof NSRunLoopCommonModes !== 'undefined' ? NSRunLoopCommonModes : 'kCFRunLoopCommonModes');
       }
     } catch (_) {}
-    checkOpacity();
+    checkSurface();
   }
-  function stopOpacityLock(current) {
-    if (current.opacityTimer) { current.opacityTimer.invalidate(); current.opacityTimer = null; }
+  function unwatchPanelSurface(current) {
+    if (current.surfaceTimer) { current.surfaceTimer.invalidate(); current.surfaceTimer = null; }
   }
   function clearStartTimer(current) {
     if (current.startTimer) { current.startTimer.invalidate(); current.startTimer = null; }
@@ -158,6 +156,7 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
     if (core && typeof core.closeCardMistakePanel === "function") core.closeCardMistakePanel(owner);
     var current = session(owner);
     if (!current) return;
+    core.disableMistakeDrag(owner);
     if (current.clipperToolsRequest) {
       current.clipperToolsRequest.timer.invalidate();
       current.clipperToolsRequest.reject(new Error("场景面板已关闭，未读取摘录工具"));
@@ -168,9 +167,14 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
       current.annotationRequest.reject(new Error("场景面板已关闭，请检查批注窗口"));
       current.annotationRequest = null;
     }
+    if (current.foldRequest) {
+      current.foldRequest.timer.invalidate();
+      current.foldRequest.reject(new Error("场景面板已关闭，分支折叠结果未确认"));
+      current.foldRequest = null;
+    }
     clearStartTimer(current);
-    stopOpacityLock(current);
-    current.opacityTarget = null;
+    unwatchPanelSurface(current);
+    current.surfaceTarget = null;
     finishReady(current, false);
     delete sessions[key(owner)];
     current.confirmed = false;
@@ -180,13 +184,15 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
   function defer(callback) { NSTimer.scheduledTimerWithTimeInterval(0.05, false, callback); }
   function collapse(current) {
     current.collapsed = true;
-    stopOpacityLock(current);
+    __MN_ANSWER_CORE_GLOBAL__.disableMistakeDrag(current.owner);
+    unwatchPanelSurface(current);
     clearStartTimer(current);
     remember(false);
     current.panel.post("workbenchCollapse", {});
   }
   function rejectScene(current, controller, reason) {
     finishReady(current, false);
+    __MN_ANSWER_CORE_GLOBAL__.disableMistakeDrag(current.owner);
     if (reviewing(current)) {
       current.confirmed = false;
       clearStartTimer(current);
@@ -195,7 +201,7 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
     }
     if (current.rejected) return;
     current.rejected = true;
-    stopOpacityLock(current);
+    unwatchPanelSurface(current);
     current.confirmed = false;
     clearStartTimer(current);
     log("panel.sceneRejected", reason || "回到经典面板");
@@ -214,11 +220,12 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
     }
     var current = session(owner);
     if (current) {
+      if (current.confirmed) __MN_ANSWER_CORE_GLOBAL__.enableMistakeDrag(owner);
       var wasCollapsed = current.collapsed === true;
       current.collapsed = false;
       remember(true);
       current.panel.showFloatingIn(Application.sharedInstance().studyController(owner.window));
-      startOpacityLock(current);
+      watchPanelSurface(current);
       current.panel.post("workbenchRequested", {});
       if (current.confirmed) current.panel.post("panelShown", { skipReload: wasCollapsed || !!controller.preserveAcrossNotebookSwitch });
       controller.preserveAcrossNotebookSwitch = false;
@@ -247,6 +254,7 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
       if (name === "sceneReady") {
         if (current.rejected) return { enabled: false };
         current.confirmed = eligible(owner) && CardLinkHostPolicy.sceneEnabled(version(), data);
+        if (current.confirmed && !current.collapsed) __MN_ANSWER_CORE_GLOBAL__.enableMistakeDrag(owner);
         current.stage = "加载并渲染工作台脚本";
         log("panel.sceneReady", "host=" + version() + "; enabled=" + current.confirmed);
         return { enabled: current.confirmed };
@@ -277,6 +285,17 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
         else toolRequest.resolve(data.result);
         return { accepted: true };
       }
+      // 分支折叠只接受当前题卡与该请求的回执；身份在回执里一并带回，供 JSB 读回前核对。
+      if (name === "foldBranchReply") {
+        var foldRequest = current.foldRequest;
+        if (!foldRequest || !data || foldRequest.id !== data.requestId) return { ignored: true };
+        foldRequest.timer.invalidate(); current.foldRequest = null;
+        var foldResult = Object.assign({}, data.result || {}, { noteid: foldRequest.noteid, sceneToken: key(owner) });
+        if (data.error) foldRequest.reject(Object.assign(new Error(String(data.error)),
+          { code: data.code, topicid: data.topicid, dispatched: data.dispatched === true }));
+        else foldRequest.resolve(foldResult);
+        return { accepted: true };
+      }
       if (name === "reviewAnnotationClosed") {
         var opening = current.annotationRequest;
         if (opening && !opening.operation && data && opening.reviewToken === data.reviewToken) {
@@ -297,8 +316,9 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
           return { fallback: true };
         }
         current.collapsed = false;
+        __MN_ANSWER_CORE_GLOBAL__.enableMistakeDrag(owner);
         remember(true);
-        startOpacityLock(current);
+        watchPanelSurface(current);
         current.panel.post("workbenchRequested", {});
         return { expanded: true };
       }
@@ -330,6 +350,9 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
         }
         var context = {
           addon: owner, controller: controller,
+          sceneDragActive: function () {
+            return sessions[token] === current && eligible(owner) && current.confirmed && !current.collapsed && !current.rejected;
+          },
           closePanel: function () { hide(owner, true); },
           resetPanelFrame: function () { return { reset: true, scene: true }; },
           panelCloseButtonSide: legacy.panelCloseButtonSide,
@@ -363,7 +386,7 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
       }
       originalHide(controller, false);
       panel.showFloatingIn(Application.sharedInstance().studyController(owner.window));
-      startOpacityLock(current);
+      watchPanelSurface(current);
       remember(true);
       if (!current.appRendered) current.startTimer = NSTimer.scheduledTimerWithTimeInterval(20, false, function () {
         if (sessions[token] !== current || current.appRendered) return;
@@ -463,6 +486,39 @@ var __MNAM_SCENE_WORKBENCH_GLOBAL__ = (function () {
       });
     },
     dispose: function (owner) { hide(owner, false); },
-    notify: function (owner, event, data) { var current = session(owner); if (current && current.confirmed) current.panel.post(event, data || {}); }
+    // 空数据默认仍是 {}（既有通知不变）；显式 null 原样传递，让更新提示等
+    // 关闭信号到达面板时仍是关闭，而不是变成空壳载荷。
+    notify: function (owner, event, data) {
+      var current = session(owner);
+      if (current && current.confirmed) current.panel.post(event, data === null ? null : (data || {}));
+    },
+    // 当前已授权场景会话的身份；JSB 用它在写入前后核对窗口与代次。
+    sceneToken: function (owner) { var current = session(owner); return current && current.confirmed ? key(owner) : ""; },
+    // 分支折叠：只把当前题卡与目标折叠值交给面板，由面板用官方 SDK 调用
+    // POST /notes/fold。响应不作为成功依据，JSB 侧另行读回。
+    foldBranch: function (owner, request) {
+      var current = session(owner);
+      if (!current || !current.confirmed) return Promise.reject(new Error("场景面板尚未授权，无法折叠脑图分支"));
+      if (!current.appRendered) return Promise.reject(new Error("场景面板尚未完成渲染，无法折叠脑图分支"));
+      if (!request || typeof request.noteid !== "string" || !request.noteid) return Promise.reject(new Error("折叠请求缺少题卡"));
+      if (current.foldRequest) return Promise.reject(new Error("正在处理分支折叠请求，请稍候"));
+      return new Promise(function (resolve, reject) {
+        var id = "fold-branch-" + (++sequence);
+        var timer = NSTimer.scheduledTimerWithTimeInterval(8, false, function () {
+          if (!current.foldRequest || current.foldRequest.id !== id) return;
+          current.foldRequest = null;
+          // 已投递给面板却没有回执：可能已写入，JSB 必须按"结果未知"处理并读回。
+          reject(Object.assign(new Error("分支折叠请求超时，结果未确认"), { dispatched: true }));
+        });
+        current.foldRequest = { id: id, noteid: request.noteid, timer: timer, resolve: resolve, reject: reject };
+        try {
+          current.panel.post("foldBranch", { requestId: id, noteid: request.noteid,
+            notebookId: request.notebookId || "", folded: request.folded === true });
+        } catch (error) {
+          timer.invalidate(); current.foldRequest = null;
+          reject(Object.assign(new Error(error.message || String(error)), { accepted: false }));
+        }
+      });
+    }
   };
 })();

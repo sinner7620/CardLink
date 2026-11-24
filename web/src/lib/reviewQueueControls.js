@@ -37,6 +37,23 @@ export function toggleReviewSelection(selected, ids) {
   return next
 }
 
+export function reviewDayStatus(records, manualTodayIds = [], now = new Date()) {
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime()
+  const manual = new Set(manualTodayIds)
+  const statusOf = item => {
+    if (item.reviewCompleted) return "completed"
+    const due = Date.parse(item.nextReviewAt)
+    if (due < start) return manual.has(item.recordId) ? "today" : "overdue"
+    return due < end ? "today" : "upcoming"
+  }
+  const counts = { today: 0, overdue: 0, upcoming: 0, completed: 0 }
+  for (const item of records) {
+    if (item.noteAvailable !== false) counts[statusOf(item)]++
+  }
+  return { counts, statusOf, startToday: start }
+}
+
 const timestamp = value => Number.isFinite(Date.parse(value)) ? Date.parse(value) : 0
 export function sortReviewRecords(records, order) {
   return [...records].sort((a, b) => {

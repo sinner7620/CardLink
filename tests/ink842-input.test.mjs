@@ -1,7 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {useNativeTouch,dispatchTouches,touchPointer,penIsDown} from '../web/ink842/ink-input.js';
+import {useNativeTouch,dispatchTouches,touchPointer,penIsDown,createInkInputRouter} from '../web/ink842/ink-input.js';
 import {createInkSurface} from '../web/ink842/ink-surface.js';
+import {createInlineInkTiles} from '../web/ink842/inline-ink-tiles.js';
+import {createInkDiagnostics, observeInkInput} from '../web/ink842/ink-diagnostics.js';
+import {scribbleErase} from '../web/ink842/ink-geometry.js';
 
 function environment(ipad=true){
  const originals=new Map();const install=(name,value)=>{originals.set(name,Object.getOwnPropertyDescriptor(globalThis,name));Object.defineProperty(globalThis,name,{configurable:true,writable:true,value})};
@@ -36,6 +39,230 @@ function environment(ipad=true){
 function event(target,type,props={}){const e=new Event(type,{cancelable:true});for(const [key,value]of Object.entries(props))Object.defineProperty(e,key,{value});target.dispatchEvent(e);return e}
 const pencil=(id,x,y)=>({identifier:id,touchType:'stylus',force:.5,clientX:x,clientY:y});
 const finger=(id,x,y)=>({identifier:id,touchType:'direct',radiusX:8,radiusY:8,clientX:x,clientY:y});
+test('ink diagnostics sample move events, retain cancellation reasons and bound the export queue',()=>{
+ let time=0;
+ const trace=createInkDiagnostics(()=>time);
+ const router=createInkInputRouter({down(){},move(){},end(){}},trace.add);
+ const down={type:'pointerdown',pointerType:'pen',pointerId:7,clientX:30,clientY:30,buttons:1};
+ router.pointer(down);
+ for(time=1;time<200;time++) trace.add('raw.pointermove','pen',7);
+ router.pointer(down);
+ const first=trace.drain();
+ assert.equal(first.events.filter(row=>row[2]==='raw.pointermove').length,2);
+ assert.ok(first.events.some(row=>row[2]==='route.end' && row[5]==='reused-pointer-id'));
+ for(let i=0;i<210;i++) trace.add('raw.pointercancel','pen',7);
+ const overflow=trace.drain(true);
+ assert.equal(overflow.dropped,18);
+ assert.equal(overflow.events.length,192);
+ assert.equal(trace.drain(),undefined);
+});
+test('a pressed Pencil move without a down remains visible even after a sampled hover',()=>{
+ const env=environment(), trace=createInkDiagnostics();
+ const report=trace.add;
+ try {
+  observeInkInput({},(target,type,handle,options)=>target.addEventListener(type,handle,options),report,()=>true);
+  const pen={pointerId:1,pointerType:'pen',buttons:0,pressure:0};
+  event(env.win,'pointermove',pen);
+  event(env.win,'pointermove',{...pen,pointerId:7,buttons:1,pressure:.5});
+  event(env.win,'pointermove',{...pen,pointerId:7,buttons:1,pressure:.5});
+  const rows=trace.drain().events;
+  assert.equal(rows.filter(row=>row[2]==='raw.pointermove').length,1);
+  assert.deepEqual(rows.filter(row=>row[2]==='raw.pen-contact-without-down').map(row=>row.slice(3)),[[7,'outside']]);
+ } finally { env.restore(); }
+});
+test('long inline answers paint nearby tiles at display density and release them when scrolling or zooming',()=>{
+ const env=environment(false);
+ let top=0,removed=0;
+ env.win.visualViewport={scale:1,width:500,height:600};
+ const card={getBoundingClientRect:()=>({left:0,top,width:500,height:15000}),append(canvas){canvas.remove=()=>{removed++}}};
+ const tiles=createInlineInkTiles(card);
+ try {
+  const first=tiles.update(500,15000,1000);
+  assert.ok(first.length>0&&first.length<12);
+  const context=tiles.context(first[0],'dry',true);
+  assert.equal(context.canvas.width,first[0].w*2);
+  assert.ok(context.canvas.height<=768);
+  top=-12000;
+  const distant=tiles.update(500,15000,1000);
+  assert.ok(distant.every(tile=>tile.y>11000));
+  assert.equal(context.canvas.width,1);
+  assert.equal(removed,1);
+  env.win.visualViewport={scale:2,width:250,height:300};
+  const zoomed=tiles.update(500,15000,1000)[0];
+  assert.equal(tiles.context(zoomed,'wet',true).canvas.width,zoomed.w*4);
+ } finally { tiles.clear(); env.restore(); }
+});
+test('inline Pencil routing leaves native finger pan and pinch uncancelled',()=>{
+ const calls=[];
+ const router=createInkInputRouter({down:e=>calls.push(e.pointerType),move(){},end(){}});
+ const start=changedTouches=>({type:'touchstart',touches:changedTouches,changedTouches,cancelable:true,preventDefault(){this.cancelled=true}});
+ const fingers=start([finger(1,20,20),finger(2,80,20)]);
+ router.touch(fingers,true,true);
+ assert.equal(fingers.cancelled,undefined);
+ assert.deepEqual(calls,[]);
+ const stylus=start([pencil(3,25,30)]);
+ router.touch(stylus,true,true);
+ assert.equal(stylus.cancelled,true);
+ assert.deepEqual(calls,['pen']);
+});
+test('inline hand gestures pan and zoom while Pencil keeps answer coordinates',()=>{
+ const env=environment(), card=document.createElement('article'), viewport=document.createElement('div');
+ const answer={height:1,strokes:[]};
+ let current={x:0,y:0,zoom:1}, locked=true;
+ card.clientWidth=500;card.clientHeight=1000;
+ card.contains=target=>target===card;
+ card.querySelectorAll=()=>[];
+ card.getBoundingClientRect=()=>({left:current.x,top:current.y,width:500*current.zoom,height:1000*current.zoom});
+ card.append=canvas=>{canvas.remove=()=>{}};
+ env.win.innerWidth=500;env.win.innerHeight=500;
+ const surface=createInkSurface(env.box,answer,{inlineCard:card,isLocked:()=>locked,inlineNavigation:{
+  viewport,point:e=>[e.clientX,e.clientY],apply:view=>(current=view)
+ }});
+ const touch=(type, list, active)=>event(viewport,type,{changedTouches:list,touches:active});
+ try {
+  const first=finger(1,150,100),second=finger(2,250,100);
+  assert.equal(touch('touchstart',[first],[first]).defaultPrevented,false);
+  assert.equal(event(viewport,'gesturestart').defaultPrevented,false);
+  locked=false;
+  card.classList.toggle('answer-ink-writing',true);
+  const initial={x:0,y:0,zoom:1};
+  surface.setInlineView(initial);
+  for (const type of ['gesturestart','gesturechange','contextmenu','selectstart']) {
+    assert.equal(event(viewport,type).defaultPrevented,true);
+  }
+  const toolbar={closest:selector=>selector==='.cardlink-answer-ink-tools'?{}:null};
+  assert.equal(event(viewport,'gesturestart',{target:toolbar}).defaultPrevented,false);
+  assert.equal(touch('touchstart',[first,second],[first,second]).defaultPrevented,true);
+  const wider=finger(2,350,100);
+  touch('touchmove',[wider],[first,wider]);
+  assert.deepEqual(current,{x:-150,y:-100,zoom:2});
+  touch('touchend',[wider],[first]);
+  const dragged=finger(1,150,70);
+  touch('touchmove',[dragged],[dragged]);
+  touch('touchend',[dragged],[]);
+  assert.equal(current.y,-130);
+  assert.equal(answer.strokes.length,0);
+
+  const pen={target:card,pointerId:8,pointerType:'pen',clientX:100,clientY:100,buttons:1,pressure:.5};
+  event(viewport,'pointerdown',pen);
+  event(viewport,'pointerup',{...pen,clientX:120,buttons:0,pressure:0});
+  assert.deepEqual(answer.strokes[0][0].slice(0,2),[250,230]);
+  assert.equal(answer.styles[0].inputScale,.5);
+  locked=true;
+  card.classList.toggle('answer-ink-writing',false);
+  surface.setInlineView(initial);
+  assert.equal(touch('touchstart',[first],[first]).defaultPrevented,false);
+  assert.equal(event(viewport,'gesturechange').defaultPrevented,false);
+  assert.deepEqual(current,initial);
+ } finally { surface.dispose();env.restore(); }
+});
+test('answer Pencil commits on pointerup and uses native Touch after pointercancel',()=>{
+ const calls=[];
+ const router=createInkInputRouter({
+  down:e=>calls.push(['down',e.pointerId]),
+  move:e=>calls.push(['move',e.pointerId]),
+  end:e=>calls.push([e.type,e.pointerId]),
+ },undefined,{finishPenOnPointerUp:true});
+ const pointer=(type,id)=>router.pointer({type,pointerId:id,pointerType:'pen',clientX:30,clientY:30,buttons:type==='pointerdown'?1:0});
+ const touch=(type,x=30)=>{
+  const contact=pencil(3,x,30);
+  router.touch({type,changedTouches:[contact],touches:type==='touchend'?[]:[contact],cancelable:false},true,true);
+ };
+ pointer('pointerdown',3);
+ touch('touchstart');
+ pointer('pointerup',3);
+ assert.deepEqual(calls,[['down',3],['pointerup',3]]);
+ assert.equal(router.hasNativePen(),false);
+ touch('touchmove',32);
+ touch('touchend',32);
+ assert.equal(calls.length,2);
+
+ pointer('pointerdown',3);
+ touch('touchstart');
+ pointer('pointercancel',3);
+ touch('touchmove',45);
+ touch('touchend',45);
+ assert.deepEqual(calls.slice(2),[['down',3],['move',3],['pointerup',3]]);
+});
+test('native zoom keeps ink tiles when the reported visual offset repeats the scroll movement',()=>{
+ const env=environment();
+ const card=document.createElement('article');
+ card.clientWidth=655;
+ card.clientHeight=2939;
+ card.getBoundingClientRect=()=>({left:0,top:-790,width:655,height:2939});
+ const image=document.createElement('IMG');
+ image.dataset.mediaId='sample';
+ image.isConnected=true;
+ image.closest=selector=>selector==='.cardlink-answer-ink-tools'?null:image;
+ let imageBox={left:22,top:850,width:611,height:750};
+ image.getBoundingClientRect=()=>{
+  const root=card.getBoundingClientRect();
+  return {...imageBox,left:root.left+imageBox.left,top:root.top+imageBox.top};
+ };
+ const inputSurface=document.createElement('div');
+ card.querySelectorAll=()=>[image];
+ card.contains=element=>element===image||element===inputSurface;
+ document.elementsFromPoint=()=>[inputSurface,image];
+ card.append=canvas=>{
+  card.children.push(canvas);
+  canvas.remove=()=>{card.children=card.children.filter(child=>child!==canvas)};
+ };
+ env.win.visualViewport=Object.assign(new EventTarget(),{scale:1,width:655,height:681});
+ const answer={height:1,strokes:[]};
+ const diagnostics=[];
+ const surface=createInkSurface(env.box,answer,{inlineCard:card,onDiagnostic:(...entry)=>diagnostics.push(entry)});
+ const pen={pointerId:8,pointerType:'pen',clientX:160,clientY:100,button:0,buttons:1,pressure:.5};
+ try {
+  event(card,'pointerdown',pen);
+  event(card,'pointermove',{...pen,clientX:200,clientY:125});
+  event(card,'pointerup',{...pen,clientX:220,clientY:130,buttons:0,pressure:0});
+  const expectPainted=()=>assert.ok(card.children.some(canvas=>canvas.className==='ink-tile ink-dry'&&canvas.draws>0));
+  expectPainted();
+  assert.ok(diagnostics.some(([kind,id,count])=>kind==='render.commit'&&id===8&&count>0));
+  const committed=structuredClone(answer.strokes);
+  assert.equal(answer.styles[0].anchor.key,'IMG:sample:1');
+
+  env.win.scrollY=790;
+  Object.assign(env.win.visualViewport,{scale:2,width:327.5,height:340.5,offsetLeft:122,offsetTop:790});
+  card.getBoundingClientRect=()=>({left:-122,top:-790,width:655,height:2939});
+  surface.refresh();
+  expectPainted();
+  assert.deepEqual(answer.strokes,committed);
+
+  card.clientWidth=500;
+  card.clientHeight=2480;
+  card.getBoundingClientRect=()=>({left:-80,top:-790,width:500,height:2480});
+  imageBox={left:22,top:900,width:456,height:560};
+  surface.refresh();
+  const [x,y]=answer.strokes[0][0].map(n=>n*500/1000);
+  assert.ok(Math.abs(x-(22+(160-22)*456/611))<.001);
+  assert.ok(Math.abs(y-(900+(890-850)*560/750))<.001);
+  expectPainted();
+
+  event(env.buttons.get('undo'),'click');
+  assert.equal(answer.strokes.length,0);
+  event(env.buttons.get('redo'),'click');
+  expectPainted();
+  assert.ok(Math.abs(answer.strokes[0][0][1]*500/1000-y)<.001);
+ } finally { surface.dispose(); env.restore(); }
+});
+test('842practice scribble erases intersected ink even with short reversals',()=>{
+ const strokes=[[[110,120,.5],[200,120,.5]]], styles=[null];
+ const points=xs=>xs.map(x=>[100+x,120,.5]);
+ const scribble=points([0,80,25,60,33,50,30,65,30,65,30]);
+ assert.deepEqual(scribbleErase(strokes,styles,scribble,400)?.strokes,[]);
+ assert.equal(scribbleErase(strokes,styles,points([0,10,20,30,40,50,60,70]),400),null);
+});
+
+test('涂抹识别按屏幕距离计算，窄窗口中的竖向往返能擦掉命中的笔迹', () => {
+  const stroke = [[80, 130, .5], [140, 130, .5]];
+  const other = [[380, 130, .5], [440, 130, .5]];
+  const scribble = [[104, 96], [106, 160], [108, 96], [110, 160], [112, 96]];
+  const strokes = [stroke, other], styles = [null, null];
+  assert.deepEqual(scribbleErase(strokes, styles, scribble, 350, undefined, .25)?.strokes, [other]);
+  assert.equal(scribbleErase(strokes, styles, scribble.slice(0, 2), 350, undefined, .25), null);
+  assert.equal(scribbleErase(strokes, styles, scribble, 1700, undefined, .25), null);
+});
 test('tool preferences persist, new strokes keep independent styles, and line/undo preserve metadata',()=>{
  const env=environment(false),answer={height:500,text:'',strokes:[]};let surface=createInkSurface(env.box,answer),v=env.box.viewport;
  const pen=(x,y)=>({pointerId:1,pointerType:'pen',clientX:x,clientY:y,button:0,buttons:1,pressure:.5});
@@ -195,7 +422,7 @@ test('ink paints before RAF, keeps low hardware pressure, and the eraser returns
   event(v,'pointermove',{...p(1,150),getCoalescedEvents:()=>[{...p(1,110),timeStamp:2},{...p(1,130),timeStamp:4},{...p(1,150),timeStamp:6}]});
   event(v,'pointerup',{...p(1,160),pressure:0,buttons:0,timeStamp:8});
   assert.equal(answer.strokes[0][0][2],.02);assert.equal(answer.strokes[0].at(-1)[2],0);
-  assert.equal(answer.styles[0].feel.stabilization,1.2);assert.equal(answer.styles[0].inputScale,1);
+  assert.equal(answer.styles[0].feel.stabilization,.9);assert.equal(answer.styles[0].inputScale,1);
   event(env.buttons.get('marker'),'click');event(env.buttons.get('eraser'),'click');
   event(v,'pointerdown',p(2,100));event(v,'pointerup',{...p(2,110),pressure:0,buttons:0});
   event(v,'pointerdown',p(3,300));event(v,'pointerup',{...p(3,320),pressure:0,buttons:0});
@@ -285,4 +512,25 @@ test('alternating Touch-first and Pointer-first contacts recover missing ends wi
   assert.equal(answer.strokes.length,50);
   event(env.buttons.get('undo'),'click');assert.equal(answer.strokes.length,49);
  }finally{surface.dispose();env.restore()}
+});
+
+test('a new pressed Pointer starts a separate stroke unless the same Touch survived a cancelled Pointer', () => {
+ for (const interruption of [null, 'pointercancel', 'lostpointercapture']) {
+  const env = environment();
+  const answer = { height: 1500, strokes: [] };
+  const surface = createInkSurface(env.box, answer);
+  const v = env.box.viewport;
+  const point = (pointerId, clientX) => ({pointerId, pointerType:'pen', clientX, clientY:100, buttons:1, pressure:.5});
+  try {
+   event(v, 'pointerdown', point(1, 100));
+   event(v, 'touchstart', {changedTouches:[pencil(7, 100, 100)], touches:[pencil(7, 100, 100)]});
+   event(v, 'pointermove', point(1, 118));
+   if (interruption) event(v, interruption, point(1, 118));
+   event(v, 'pointermove', point(2, 122));
+   assert.equal(answer.strokes.length, interruption ? 0 : 1);
+   event(v, 'pointerup', {...point(2, 140), pressure:0, buttons:0});
+   event(v, 'touchend', {changedTouches:[pencil(7, 140, 100)], touches:[]});
+   assert.equal(answer.strokes.length, interruption ? 1 : 2);
+  } finally { surface.dispose(); env.restore(); }
+ }
 });

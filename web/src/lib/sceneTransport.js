@@ -108,8 +108,59 @@ export function createSceneTransport(sdk, windowObject, fetchImpl, policy, annot
       reviewToken: target.reviewToken ?? null, ordinary: target.ordinary === true, hostVersion: windowObject.__MN_HOST_VERSION__ ?? null }, traceId);
     return (event, data) => logData(event, data, traceId);
   }
+  // 折叠写入只走官方场景 SDK：mn.api 等价于 fetch('/bridge/v1'+path).then(r => r.json())，
+  // 错误对象落在 resolve 里，因此要显式检查 error。changed/folded 只作为诊断，
+  // 成功与否由 JSB 侧按题卡读回决定。
+  async function foldMindmapBranch(noteid, folded) {
+    if (typeof sdk.api !== 'function') throw new Error('当前宿主未提供场景 SDK 的 mn.api');
+    const result = await sdk.api('/notes/fold', { method: 'POST', body: { noteIds: [noteid], folded, confirm: true } });
+    if (!result || typeof result !== 'object') throw new Error('折叠接口未返回结果');
+    if (result.error) throw Object.assign(new Error(result.error.message || result.error.code || '折叠接口返回错误'), { code: result.error.code });
+    const target = noteid.toLowerCase();
+    const skipped = (Array.isArray(result.skipped) ? result.skipped : []).find(item => item && typeof item.noteid === 'string' && item.noteid.toLowerCase() === target);
+    return {
+      folded: result.folded === true ? true : result.folded === false ? false : undefined,
+      topicid: typeof result.topicid === 'string' ? result.topicid : undefined,
+      skipped: skipped ? { noteid: skipped.noteid, reason: skipped.reason } : undefined,
+      changed: Array.isArray(result.changed) ? result.changed.length : undefined,
+      bridgeApiVersion: typeof result.bridgeApiVersion === 'string' ? result.bridgeApiVersion : undefined
+    };
+  }
+  // `/notes/fold` 的请求体没有 topicid，只能靠面板刚读到的界面状态确认作用域。
+  // 键集合随版本变化，只读认识的 topicid；读不到就当作未知，不允许写入。
+  function sceneTopic(ui) {
+    const state = ui && ui.state;
+    if (!state || typeof state !== 'object') return '';
+    return typeof state.topicid === 'string' ? state.topicid.trim() : '';
+  }
+  const sameIdentifier = (a, b) => typeof a === 'string' && typeof b === 'string' && a.trim() !== '' && a.trim().toLowerCase() === b.trim().toLowerCase();
+  listen('mn:foldBranch', async event => {
+    const detail = event.detail || {};
+    const requestId = detail.requestId;
+    if (!requestId || typeof detail.noteid !== 'string' || !detail.noteid) return;
+    let payload;
+    let posted = false;
+    try {
+      if (typeof detail.notebookId !== 'string' || !detail.notebookId.trim()) throw new Error('折叠请求缺少学习集，未写入分支状态');
+      const ui = await verify();
+      const current = sceneTopic(ui);
+      if (!current) throw new Error('无法确认场景当前学习集，未写入分支状态');
+      if (!sameIdentifier(current, detail.notebookId)) {
+        throw Object.assign(new Error('场景当前学习集与目标题卡不一致，未写入分支状态'), { topicid: current });
+      }
+      posted = true;
+      payload = { requestId, dispatched: true, result: Object.assign(await foldMindmapBranch(detail.noteid, detail.folded === true), { sceneTopic: current }) };
+      log('mindmap.fold.written', `noteid=${detail.noteid} folded=${detail.folded === true} topicid=${payload.result.topicid || '(空)'} scene=${current} changed=${payload.result.changed ?? '(无)'}`);
+    } catch (error) {
+      payload = { requestId, dispatched: posted, error: error.message || String(error), code: error.code, topicid: error.topicid };
+      log('mindmap.fold.failed', `dispatched=${posted} ${error.message || String(error)}`);
+    }
+    if (!disposed) try { await sdk.call('foldBranchReply', payload); }
+    catch (error) { log('mindmap.fold.replyFailed', error.message || String(error)); }
+  });
   listen('mn:nativeDataChanged', () => windowObject.__onNativeDataChanged?.());
   listen('mn:nativeBindingsChanged', () => windowObject.__onNativeBindingsChanged?.());
+  listen('mn:updatePrompt', event => windowObject.__cardLinkUpdatePrompt?.(event.detail ?? null));
   listen('mn:panelShown', event => windowObject.__onPanelShow?.(event.detail));
   listen('mn:clipperToolsRead', async event => {
     const requestId = event.detail?.requestId;

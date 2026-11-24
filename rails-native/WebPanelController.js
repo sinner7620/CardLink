@@ -210,6 +210,7 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
 
   function closePanel(controller, remember) {
     if (!controller) return;
+    __MN_ANSWER_CORE_GLOBAL__.disableMistakeDrag(controller.addon);
     controller.activeFrameGesture = null;
     controller.panStart = null;
     controller.resizeStart = null;
@@ -223,17 +224,21 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
     // view while a notebook is closing; sampling that transient frame causes
     // cumulative panel growth across notebook switches.
     controller.panelSurface.hidden = true;
+    if (controller.webReady) {
+      controller.webView.evaluateJavaScript("window.dispatchEvent(new Event('cardlink-panel-hide'))", function () {});
+    }
     if (controller.panelSurface.superview) controller.panelSurface.removeFromSuperview();
     if (remember !== false) NSUserDefaults.standardUserDefaults().setObjectForKey(false, OPEN_KEY);
   }
 
   function preservePanelForNotebookSwitch(controller) {
     if (!controller || !controller.webView) return;
+    __MN_ANSWER_CORE_GLOBAL__.cancelMistakeDrag(controller.addon);
     controller.preserveAcrossNotebookSwitch = true;
     controller.panelSurface.autoresizingMask = 0;
     // Reapply only the stable session frame. Never learn a new size from the
     // notebook transition itself.
-    controller.panelSurface.frame = savedFrame(controller);
+    if (!controller.userAdjustingFrame) controller.panelSurface.frame = savedFrame(controller);
   }
 
   function restorePanelAfterNotebookSwitch(controller) {
@@ -252,6 +257,7 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
     controller.panelSurface.frame = frame;
     layoutCloseButton(controller, panelCloseButtonSide());
     controller.panelSurface.hidden = false;
+    __MN_ANSWER_CORE_GLOBAL__.enableMistakeDrag(controller.addon);
     controller.preserveAcrossNotebookSwitch = false;
   }
 
@@ -298,7 +304,7 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
   }
 
   function setup(controller) {
-    var frame = { x: 0, y: 0, width: 900, height: 640 };
+    var frame = savedFrame(controller);
     controller.panelSurface = __MN_ANSWER_CORE_GLOBAL__.createWindowSurface(frame);
     controller.panelSurface.autoresizingMask = 0;
     controller.panelSurface.frame = frame;
@@ -369,8 +375,6 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
     controller.resizePan = resizePan;
     controller.panelSurface.addSubview(resize);
 
-    var entry = NSURL.fileURLWithPath(controller.mainPath + "/web-dist/index.html");
-    controller.webView.loadRequest(NSURLRequest.requestWithURL(entry));
   }
 
   function dispatchBridgeMessage(controller, webView, message) {
@@ -380,6 +384,7 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
     }
     var context = {
       controller: controller,
+      webView: webView,
       addon: controller.addon,
       closePanel: closePanel,
       resetPanelFrame: resetFrame,
@@ -427,19 +432,21 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
           }
         }
         if (!self.headerPanActive || !self.panStart) return;
-        var translation = gesture.translationInView(self.panelSurface.superview);
-        var frame = self.panStart;
-        // 位置自由，仅顶边受 clampFrameTop 约束：浮窗顶部不越入窗口安全区，
-        // UIKit 就不会调整 UIWebView 的 inset/contentOffset，旧版 UIWebView
-        // 对 position:fixed 的错误锚定（顶栏下移白条）无从触发。
-        __MN_ANSWER_CORE_GLOBAL__.setWindowFrame(self.panelSurface, clampFrameTop(self, {
-          x: Number(frame.x) + Number(translation.x),
-          y: Number(frame.y) + Number(translation.y),
-          width: Number(frame.width),
-          height: Number(frame.height)
-        }));
-        if (gesture.state === 3 || gesture.state === 4 || gesture.state === 5) {
-          saveFrame(self);
+        var finished = gesture.state === 3 || gesture.state === 4 || gesture.state === 5;
+        // Cancelled Pencil gestures can no longer report their final translation.
+        if (gesture.state === 1 || gesture.state === 2 || gesture.state === 3) {
+          var translation = gesture.translationInView(self.panelSurface.superview);
+          var frame = self.panStart;
+          // Keep the header within the top safe area so UIWebView does not adjust its inset.
+          __MN_ANSWER_CORE_GLOBAL__.setWindowFrame(self.panelSurface, clampFrameTop(self, {
+            x: Number(frame.x) + Number(translation.x),
+            y: Number(frame.y) + Number(translation.y),
+            width: Number(frame.width),
+            height: Number(frame.height)
+          }));
+          if (gesture.state !== 1) saveFrame(self);
+        }
+        if (finished) {
           self.userAdjustingFrame = false;
           self.headerPanActive = false;
           self.activeFrameGesture = null;
@@ -519,8 +526,6 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
         }
         if (webView === self.webView) {
           self.webReady = true;
-          // 页面载入完成即做一次完整复位：面板可能已停在屏幕顶部，
-          // fixed 顶栏需要按清零后的 offset 重新锚定。
         }
       }
     }
@@ -543,7 +548,8 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
     var host = panelHost(controller);
     if (!host) return;
     // 仅经典面板首次显示时触发 viewDidLoad，场景面板只复用控制器上的会话状态。
-    if (!controller.panelSurface) controller.view.hidden = true;
+    var firstShow = !controller.panelSurface;
+    if (firstShow) controller.view.hidden = true;
     var frame = savedFrame(controller);
     controller.panelSurface.autoresizingMask = 0;
     if (controller.panelSurface.superview !== host) {
@@ -556,7 +562,14 @@ var __MNAM_WEB_PANEL_GLOBAL__ = (function () {
     // movement/resizing or resetFrame may change sessionFrame afterwards.
     saveFrame(controller);
     controller.panelSurface.hidden = false;
+    __MN_ANSWER_CORE_GLOBAL__.enableMistakeDrag(controller.addon);
     NSUserDefaults.standardUserDefaults().setObjectForKey(true, OPEN_KEY);
+    if (firstShow) {
+      // 让网页首次排版使用已挂载到窗口且经过安全区约束的面板尺寸。
+      var entry = NSURL.fileURLWithPath(controller.mainPath + "/web-dist/index.html");
+      controller.webView.loadRequest(NSURLRequest.requestWithURL(entry));
+      return;
+    }
     // 首次创建由 React 挂载后的单次初始加载负责 dashboard；仅在后续
     // 已完成页面加载的面板重新显示时刷新，避免冷启动双请求阻塞首帧。
     // 跨学习集定位跳转后的恢复携带 skipReload：跳转不改变错题数据。

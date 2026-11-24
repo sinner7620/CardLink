@@ -35,7 +35,7 @@ const compiled = await build({ entryPoints: ["src/pkdrawing-core-webview.ts"], b
 ;(globalThis as any).__PKDRAWING_CORE_SCRIPT__ = compiled.outputFiles[0].text
 const { exportMistakes } = await import("../src/mistake-export")
 const result = await exportMistakes({ format: "pdf", recordIds: records.map(r => r.recordId), answerLayout: "end", include: { handwriting: true } })
-const entry = result.html.replace('</head>', '<link rel="stylesheet" href="/web-dist/vendor/katex.min.css"></head>').replace('</body>', '<script src="/node_modules/html2canvas/dist/html2canvas.min.js"></script><script src="/node_modules/jspdf/dist/jspdf.umd.min.js"></script><script src="/web/pdf-export-runtime.js"></script></body>')
+const entry = result.html.replace('</head>', '<link rel="stylesheet" href="/web-dist/vendor/katex.min.css"></head>').replace('</body>', '<script src="/node_modules/html2canvas/dist/html2canvas.min.js"></script><script src="/web/pdf-jpeg-writer.js"></script><script src="/web/pdf-export-runtime.js"></script></body>')
 writeFileSync(resolve(root, "index.html"), entry)
 writeFileSync(resolve(root, "result.json"), JSON.stringify({ count: result.count, assets: result.pdfAssets.length }))
 console.log(`PDF fixture: ${root}, ${result.count} records, ${result.pdfAssets.length} staged files`)

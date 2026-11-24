@@ -1,4 +1,4 @@
-import { NSJSONReadingOptions, isNSNull } from "marginnote"
+import { NSJSONReadingOptions, isNSNull, type NSURLRequest } from "marginnote"
 import { decodeBase64Ascii, decodeBase64Utf8 } from "./base64"
 import { CardLinkError } from "./errors"
 
@@ -36,12 +36,111 @@ function networkError(detail: string): CardLinkError {
   return new CardLinkError(/超时|timed?\s*out|-1001/i.test(detail) ? "timeout" : "network", { detail })
 }
 
-export function ocrHTTP(method: string, url: string, options: { headers?: Record<string, string>; json?: any; data?: any; timeoutMs?: number } = {}): Promise<{ status: number; json?: any; data?: any }> {
+type NativeCompletion = (response: any, data: any, error: any) => void
+type GuardedRequest = {
+  response?: any
+  chunks: string[]
+  finish: NativeCompletion
+  rejectRedirect: (response: any, stop: () => void) => void
+}
+const guardedRequests = new WeakMap<object, GuardedRequest>()
+let GuardedConnectionDelegate: any
+
+function cancelConnection(connection: { cancel(): void } | undefined) {
+  try { connection?.cancel() } catch { /* JS 收尾和拒绝重定向仍继续。 */ }
+}
+
+function sendWithoutRedirect(request: NSURLRequest, completion: NativeCompletion, signal?: AbortSignal) {
+  if (signal?.aborted) throw new Error("model_cancelled")
+  if (!GuardedConnectionDelegate) {
+    GuardedConnectionDelegate = JSB.defineClass("CardLinkModelConnectionDelegate : NSObject <NSURLConnectionDataDelegate>", {
+      connectionWillSendRequestRedirectResponse(connection: any, next: any, redirect: any) {
+        if (isNativeNull(redirect)) return next
+        guardedRequests.get(self)?.rejectRedirect(redirect, () => cancelConnection(connection))
+        return null
+      },
+      connectionDidReceiveResponse(_connection: any, response: any) {
+        const state = guardedRequests.get(self)
+        if (state) {
+          state.response = response
+          state.chunks.length = 0
+        }
+      },
+      connectionDidReceiveData(connection: any, data: any) {
+        const state = guardedRequests.get(self)
+        if (!state) return
+        try {
+          const encoded = data.base64Encoding()
+          if (!isNativeNull(encoded) && encoded) state.chunks.push(decodeBase64Ascii(String(encoded)))
+        } catch (error) {
+          cancelConnection(connection)
+          state.finish(null, null, error)
+        }
+      },
+      connectionDidFinishLoading() {
+        const state = guardedRequests.get(self)
+        if (!state) return
+        let data
+        try {
+          if (state.chunks.length) data = NSData.dataWithStringEncoding(state.chunks.join(""), 5)
+        } catch (error) {
+          state.finish(null, null, error)
+          return
+        }
+        state.finish(state.response, data, null)
+      },
+      connectionDidFailWithError(_connection: any, error: any) {
+        guardedRequests.get(self)?.finish(null, null, error)
+      },
+    }, {})
+  }
+  const delegate = GuardedConnectionDelegate.new()
+  let connection: { cancel(): void } | undefined
+  const finish: NativeCompletion = (response, data, error) => {
+    if (!guardedRequests.delete(delegate)) return
+    signal?.removeEventListener("abort", abort)
+    completion(response, data, error)
+  }
+  const abort = () => {
+    cancelConnection(connection)
+    finish(null, null, new Error("model_cancelled"))
+  }
+  guardedRequests.set(delegate, {
+    chunks: [],
+    finish,
+    rejectRedirect: (response, stop) => {
+      // 先回报 3xx，再取消底层加载，避免以通用网络错误覆盖重定向。
+      try { finish(response, null, null) } finally { stop() }
+    },
+  })
+  signal?.addEventListener("abort", abort)
+  try {
+    // 经典 JSB 导出完整的 selector 名，marginnote 的类型声明漏写了 Delegate。
+    const nativeConnection = NSURLConnection as typeof NSURLConnection & {
+      connectionWithRequestDelegate(request: NSURLRequest, delegate: object): { cancel(): void }
+    }
+    connection = nativeConnection.connectionWithRequestDelegate(request, delegate)
+    if (isNativeNull(connection)) throw new Error("当前宿主无法创建模型 HTTPS 连接")
+  } catch (error) {
+    finish(null, null, error)
+  }
+}
+
+type OcrHttpOptions = {
+  headers?: Record<string, string>
+  json?: any
+  data?: any
+  timeoutMs?: number
+  rejectRedirects?: boolean
+  signal?: AbortSignal
+}
+
+export function ocrHTTP(method: string, url: string, options: OcrHttpOptions = {}): Promise<{ status: number; json?: any; data?: any }> {
   return new Promise((resolve, reject) => { try {
     const request = NSMutableURLRequest.requestWithURL(NSURL.URLWithString(url)); request.setHTTPMethod(method); request.setTimeoutInterval((options.timeoutMs || 60000) / 1000)
     for (const [key, value] of Object.entries(options.headers || {})) request.setValueForHTTPHeaderField(value, key)
     if (options.json !== undefined) { request.setValueForHTTPHeaderField("application/json", "Content-Type"); request.setHTTPBody(NSData.dataWithStringEncoding(JSON.stringify(options.json), 4)) } else if (options.data) request.setHTTPBody(options.data)
-    NSURLConnection.sendAsynchronousRequestQueueCompletionHandler(request, NSOperationQueue.mainQueue(), (response: any, data: any, error: any) => {
+    const completion: NativeCompletion = (response, data, error) => {
       if (!isNativeNull(error)) return reject(networkError(nativeErrorMessage(error)))
       if (isNativeNull(response)) return reject(new CardLinkError("network", { detail: "未返回 HTTP 响应" }))
       const raw = typeof response.statusCode === "function" ? response.statusCode() : response.statusCode
@@ -54,7 +153,9 @@ export function ocrHTTP(method: string, url: string, options: { headers?: Record
         return reject(new CardLinkError("network", { detail: responseError(json, status), status, serviceCode }))
       }
       resolve({ status, json, data: responseData })
-    })
+    }
+    if (options.rejectRedirects) sendWithoutRedirect(request, completion, options.signal)
+    else NSURLConnection.sendAsynchronousRequestQueueCompletionHandler(request, NSOperationQueue.mainQueue(), completion)
   } catch (error) { reject(error) } })
 }
 /**

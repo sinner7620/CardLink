@@ -8,7 +8,7 @@ import {
   setLocalDataByKey,
   writeTextFile
 } from "marginnote"
-import { noteReferenceUrl } from "./note-link"
+import { notebookReferenceUrl } from "./note-link"
 import { loadMatcherSettings } from "./settings"
 import { cardLinkTempPath, ensureStorageDirectory } from "./storage-paths"
 
@@ -32,10 +32,12 @@ interface PendingNavigation {
   notebookId?: string
   createdAtMs: number
   enterFocusMode?: boolean
+  inFloat?: boolean
 }
 
 export interface OpenNoteInMindMapOptions {
   enterFocusMode?: boolean
+  inFloat?: boolean
 }
 
 function savePendingNavigation(target: PendingNavigation, persist = false): void {
@@ -64,7 +66,7 @@ function clearPendingNavigation(runId?: string): void {
 
 function pendingNavigation(): PendingNavigation | undefined {
   const memory = self.pendingMistakeNavigation as PendingNavigation | undefined
-  if (memory?.runId && memory?.noteId) return memory
+  if (memory?.runId && memory?.noteId && Date.now() - memory.createdAtMs <= PENDING_NAVIGATION_MAX_AGE_MS) return memory
   try {
     const stored = getLocalDataByKey(PENDING_NAVIGATION_STORAGE_KEY) as PendingNavigation | undefined
     if (
@@ -151,6 +153,11 @@ function pushRuntimeDebugLine(scope: string, message: string): void {
   } catch {
     // Diagnostic recording must never affect plugin behavior.
   }
+}
+
+/** High-frequency diagnostics use the same export buffer without querying the host UI or writing to its console. */
+export function recordRuntimeObservation(scope: string, message: string): void {
+  pushRuntimeDebugLine(scope, message)
 }
 
 /**
@@ -587,51 +594,76 @@ export function consumePendingLocateHint(): string | undefined {
 async function locateJumpInCurrentStudySet(
   noteId: string,
   runId: string,
-  enterFocusMode = false
+  options: OpenNoteInMindMapOptions
 ): Promise<string | undefined> {
-  const result = await focusWithFallback(noteId, runId)
-  if (result === "focused") {
-    debugLog("已确认目标卡片成为焦点或选中项")
-    if (enterFocusMode) {
-      const focusModeResult = await focusNoteInMindMapFocusMode(noteId)
-      if (focusModeResult !== "focused") {
-        clearPendingNavigation(runId)
-        return LOCATE_FOCUS_MODE_HINT
-      }
-    }
+  if (options.inFloat) {
+    const result = await focusNoteInFloatMindMap(noteId)
     clearPendingNavigation(runId)
-    return undefined
+    if (result === "dispatched") return undefined
+    return result === "unavailable" ? "当前 MarginNote 版本不支持在浮窗中定位原题" : "原题浮窗定位失败，请稍后重试"
   }
-  clearPendingNavigation(runId)
-  return result === "sync-off" ? LOCATE_SYNC_OFF_HINT : LOCATE_TIMEOUT_HINT
+  try {
+    if (options.enterFocusMode && await focusNoteInMindMapFocusMode(noteId) === "focused") return undefined
+    const result = await focusWithFallback(noteId, runId)
+    if (result === "focused") return options.enterFocusMode ? LOCATE_FOCUS_MODE_HINT : undefined
+    return result === "sync-off" ? LOCATE_SYNC_OFF_HINT : LOCATE_TIMEOUT_HINT
+  } catch (error) {
+    debugLog(`定位目标卡片失败=${String(error)}`)
+    return LOCATE_TIMEOUT_HINT
+  } finally {
+    clearPendingNavigation(runId)
+  }
 }
 
-async function locateJumpCrossStudySet(
-  noteId: string,
-  notebookId: string,
-  runId: string,
-  enterFocusMode: boolean
-): Promise<string | undefined> {
-  // 持久化接力记录：MarginNote 真机可能在 openURL 返回 false 后仍完成学习集切换，
-  // 切换完成由 notebookWillOpen → completePendingNoteNavigation 接力聚焦。
-  savePendingNavigation({ runId, noteId, notebookId, createdAtMs: Date.now(), enterFocusMode }, true)
-  // 跨学习集跳转会触发宿主切换笔记本；记录时间戳供面板恢复时跳过一次自动
-  // 刷新——跳转不改变错题数据，恢复触发的 load() 属于多余刷新且会让列表
-  // 滚动位置丢失（消费与清除在 WebAddon.shouldSuppressPanelReload）。
+function isTargetStudySetReady(notebookId: string): boolean {
+  return MN.currnetNotebookId === notebookId && MN.studyController?.studyMode !== 3
+}
+
+// Both the originating request and the notebook-open callback can reach this
+// point. They share one focus operation for the pending navigation.
+const crossStudyFocus = new Map<string, Promise<string | undefined>>()
+function focusPendingNavigation(target: PendingNavigation): Promise<string | undefined> {
+  let focus = crossStudyFocus.get(target.runId)
+  if (!focus) {
+    focus = locateJumpInCurrentStudySet(target.noteId, target.runId, target)
+      .finally(() => crossStudyFocus.delete(target.runId))
+    crossStudyFocus.set(target.runId, focus)
+  }
+  return focus
+}
+
+async function locateJumpCrossStudySet(target: PendingNavigation & { notebookId: string }, documentId?: string): Promise<string | undefined> {
+  savePendingNavigation(target, true)
   self.mn4LocateJumpStartedAtMs = Date.now()
-  const url = noteReferenceUrl(noteId)
-  debugLog(`跨学习集，派发唯一官方 openURL=${url}`)
-  try {
-    MN.app.openURL(genNSURL(url, true))
-  } catch (error) {
-    debugLog(`openURL 抛错=${String(error)}`)
+  const controller = MN.studyController as any
+  const openStudySet = controller?.openNotebookAndDocument
+  let dispatched = false
+  if (typeof openStudySet === "function") {
+    const docMd5 = documentId || MN.db.getNotebookById(target.notebookId)?.mainDocMd5
+    if (docMd5) {
+      try {
+        openStudySet.call(controller, target.notebookId, docMd5)
+        dispatched = true
+        debugLog("已请求直接打开目标学习集")
+      } catch (error) {
+        debugLog(`打开目标学习集失败=${String(error)}`)
+      }
+    }
+  }
+  if (!dispatched) {
+    try {
+      MN.app.openURL(genNSURL(notebookReferenceUrl(target.notebookId), true))
+    } catch (error) {
+      debugLog(`打开目标学习集链接失败=${String(error)}`)
+    }
   }
   for (let index = 0; index < 30; index++) {
-    if (!isNavigationRunActive(runId)) return undefined
-    if (String(MN.currnetNotebookId ?? "") === notebookId) {
-      debugLog("已确认切换到目标学习集")
-      return locateJumpInCurrentStudySet(noteId, runId, enterFocusMode)
+    const focus = crossStudyFocus.get(target.runId)
+    if (focus) return focus
+    if (!isNavigationRunActive(target.runId) || pendingNavigation()?.runId !== target.runId) {
+      return consumePendingLocateHint()
     }
+    if (isTargetStudySetReady(target.notebookId)) return focusPendingNavigation(target)
     await delay(0.1)
   }
   debugLog("等待目标学习集超时；保留 pending 供 notebookWillOpen 延迟接力")
@@ -644,20 +676,21 @@ export async function openNoteInMindMap(
   options: OpenNoteInMindMapOptions = {}
 ): Promise<string | undefined> {
   if (!noteId) throw new Error("目标卡片缺少 noteId")
-  if (!MN.db.getNoteById(noteId)) throw new Error("目标卡片不存在或尚未同步")
+  const note = MN.db.getNoteById(noteId)
+  if (!note) throw new Error("目标卡片不存在或尚未同步")
 
-  const actualNotebookId = String((MN.db.getNoteById(noteId) as any)?.notebookId ?? notebookId ?? "").trim()
+  const actualNotebookId = String(notebookId || note.notebookId || "").trim()
   const activePending = pendingNavigation()
   if (activePending && isNavigationRunActive(activePending.runId)) {
     return "上一条定位请求仍在处理中，请稍候"
   }
   const runId = startNavigationDebug(noteId, actualNotebookId || undefined)
-  if (actualNotebookId && String(MN.currnetNotebookId ?? "") !== actualNotebookId) {
+  if (actualNotebookId && !isTargetStudySetReady(actualNotebookId)) {
     // 跨学习集：先派发链接完成切换，聚焦由 notebookWillOpen 接力执行
-    return await locateJumpCrossStudySet(noteId, actualNotebookId, runId, options.enterFocusMode === true)
+    return await locateJumpCrossStudySet({ ...options, noteId, notebookId: actualNotebookId, runId, createdAtMs: Date.now() }, note.docMd5)
   }
   // 官方跳转指令 + 同步开关检测：关闭时面板顶栏下提示检查关联模式
-  return await locateJumpInCurrentStudySet(noteId, runId, options.enterFocusMode === true)
+  return await locateJumpInCurrentStudySet(noteId, runId, options)
 }
 
 export async function completePendingNoteNavigation(openedNotebookId?: string): Promise<void> {
@@ -681,8 +714,8 @@ export async function completePendingNoteNavigation(openedNotebookId?: string): 
   }
 
   await delay(0.2)
-  // 学习集切换完成后由接力派发官方聚焦；同步关闭时同样提示检查关联模式。
-  const hint = await locateJumpInCurrentStudySet(target.noteId, target.runId, target.enterFocusMode === true)
+  if (pendingNavigation()?.runId !== target.runId || !target.notebookId || !isTargetStudySetReady(target.notebookId)) return
+  const hint = await focusPendingNavigation(target)
   if (hint) self.mn4PendingLocateHint = hint
 }
 

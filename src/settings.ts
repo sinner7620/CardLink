@@ -12,14 +12,16 @@ export interface MatcherSettings {
   mistakeReviewCurves: MistakeReviewCurves
   mistakeCustomCategories: string[]
   debugModeEnabled: boolean
+  debugAiAnalysisEnabled: boolean
   debugReviewAlgorithm?: "fixed" | "fsrs"
   debugAnswerPreviewMode?: "custom" | "native"
   debugUpdateDownloadsEnabled: boolean
   debugAutoInstallUpdatesEnabled: boolean
   cardToolbarEnabled: boolean
-  sourceLocateMode: "locate" | "focus"
+  sourceLocateMode: "locate" | "focus" | "float"
   subcardAnswerDisplay: "reveal" | "window"
   boundHandwritingDisplay: "always" | "doubleTap"
+  answerInkEnabled: boolean
   mistakeListDisplay: "always" | "autoHide"
   entranceDefaultMode: "practice" | "clipper"
   answerMaskStyle: "dark" | "light"
@@ -51,14 +53,16 @@ export function loadMatcherSettings(): MatcherSettings {
     mistakeReviewCurves: normalizeMistakeReviewCurves(value?.mistakeReviewCurves),
     mistakeCustomCategories: normalizeMistakeCustomCategories(value?.mistakeCustomCategories),
     debugModeEnabled: value?.debugModeEnabled === true,
+    debugAiAnalysisEnabled: value?.debugModeEnabled === true && value?.debugAiAnalysisEnabled === true,
     debugReviewAlgorithm: value?.debugReviewAlgorithm === "fsrs" ? "fsrs" : "fixed",
     debugAnswerPreviewMode: value?.debugAnswerPreviewMode === "native" ? "native" : "custom",
     debugUpdateDownloadsEnabled: value?.debugModeEnabled === true && value?.debugUpdateDownloadsEnabled === true,
     debugAutoInstallUpdatesEnabled: value?.debugModeEnabled === true && value?.debugAutoInstallUpdatesEnabled === true,
     cardToolbarEnabled: value?.cardToolbarEnabled !== false,
-    sourceLocateMode: value?.sourceLocateMode === "focus" ? "focus" : "locate",
+    sourceLocateMode: value?.sourceLocateMode === "focus" || value?.sourceLocateMode === "float" ? value.sourceLocateMode : "locate",
     subcardAnswerDisplay: value?.subcardAnswerDisplay === "reveal" ? "reveal" : "window",
     boundHandwritingDisplay: value?.boundHandwritingDisplay === "always" ? "always" : "doubleTap",
+    answerInkEnabled: value?.answerInkEnabled === true,
     mistakeListDisplay: value?.mistakeListDisplay === "autoHide" ? "autoHide" : "always",
     entranceDefaultMode: value?.entranceDefaultMode === "clipper" ? "clipper" : "practice",
     answerMaskStyle: value?.answerMaskStyle === "light" ? "light" : "dark",
@@ -79,14 +83,16 @@ export function saveMatcherSettings(settings: Partial<MatcherSettings>): void {
     ...settings,
     globalQuestionColors: normalizeQuestionColors(settings.globalQuestionColors ?? current.globalQuestionColors),
     debugAnswerPreviewMode: settings.debugAnswerPreviewMode === "native" || settings.debugAnswerPreviewMode === "custom" ? settings.debugAnswerPreviewMode : current.debugAnswerPreviewMode,
+    debugAiAnalysisEnabled: (settings.debugModeEnabled ?? current.debugModeEnabled) === true && (settings.debugAiAnalysisEnabled ?? current.debugAiAnalysisEnabled) === true,
     debugUpdateDownloadsEnabled: (settings.debugModeEnabled ?? current.debugModeEnabled) === true && (settings.debugUpdateDownloadsEnabled ?? current.debugUpdateDownloadsEnabled) === true,
     debugAutoInstallUpdatesEnabled: (settings.debugModeEnabled ?? current.debugModeEnabled) === true && (settings.debugAutoInstallUpdatesEnabled ?? current.debugAutoInstallUpdatesEnabled) === true,
     boundHandwritingDisplay: settings.boundHandwritingDisplay === "always" || settings.boundHandwritingDisplay === "doubleTap" ? settings.boundHandwritingDisplay : current.boundHandwritingDisplay,
+    answerInkEnabled: typeof settings.answerInkEnabled === "boolean" ? settings.answerInkEnabled : current.answerInkEnabled,
     mistakeListDisplay: settings.mistakeListDisplay === "always" || settings.mistakeListDisplay === "autoHide" ? settings.mistakeListDisplay : current.mistakeListDisplay,
     entranceDefaultMode: settings.entranceDefaultMode === "practice" || settings.entranceDefaultMode === "clipper" ? settings.entranceDefaultMode : current.entranceDefaultMode,
     mistakeReviewCurves: normalizeMistakeReviewCurves(settings.mistakeReviewCurves ?? current.mistakeReviewCurves),
     mistakeCustomCategories: normalizeMistakeCustomCategories(settings.mistakeCustomCategories ?? current.mistakeCustomCategories),
-    sourceLocateMode: settings.sourceLocateMode === "focus" ? "focus" : settings.sourceLocateMode === "locate" ? "locate" : current.sourceLocateMode,
+    sourceLocateMode: settings.sourceLocateMode === "focus" || settings.sourceLocateMode === "float" || settings.sourceLocateMode === "locate" ? settings.sourceLocateMode : current.sourceLocateMode,
     subcardAnswerDisplay: settings.subcardAnswerDisplay === "reveal" ? "reveal" : settings.subcardAnswerDisplay === "window" ? "window" : current.subcardAnswerDisplay,
     answerMaskStyle: settings.answerMaskStyle === "light" ? "light" : settings.answerMaskStyle === "dark" ? "dark" : current.answerMaskStyle,
     answerMaskColor: /^#[0-9a-f]{6}$/i.test(settings.answerMaskColor ?? "") ? settings.answerMaskColor! : current.answerMaskColor,

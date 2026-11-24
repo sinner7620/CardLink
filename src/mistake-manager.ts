@@ -1,4 +1,6 @@
 import { distinctAnswers } from "./domain"
+import type { AnswerMatchOutcome, AnswerTextProjection } from "./answer-projection"
+import { projectAnswerText } from "./answer-projection"
 import { delay, MN, NodeNote, popup, setTimeInterval, showHUD, UndoManager } from "marginnote"
 import type { MbBookNote } from "marginnote"
 import { renderCardHtml, type CardContentOptions } from "./card-html"
@@ -6,9 +8,11 @@ import type { ErrorReason } from './error-reasons'
 import { withMistakeReason } from './mistake-domain'
 import { usesSubcardAnswers } from "./binding"
 import { CardLinkError } from "./errors"
+import { linkedNoteIds } from "./note-link"
 import { isAnswerIndexError } from "./answer-index-recovery"
 import { appendBoundMindMapHandwriting, readBoundMindMapHandwriting } from "./bound-handwriting"
 import { answerCardHtml, refreshIndex } from "./matcher"
+import type { IndexedAnswer } from "./matcher"
 import { findAnswersForQuestion } from "./answer-lookup"
 import {
   answerOnlyBindingScopes,
@@ -1407,6 +1411,7 @@ export interface MistakeDetailData {
   questionHtml: string
   answers: Array<{ id: string; title: string; path: string; html: string }>
   answerStatus: "ready" | "unbound" | "not-found" | "index-missing" | "deferred"
+  linkedQuestions?: Array<{ noteId: string; title: string; recordId?: string }>
 }
 
 export interface MistakeQuestionData {
@@ -1414,7 +1419,21 @@ export interface MistakeQuestionData {
   record?: Pick<MistakeRecord, "recordId" | "sourceTitle" | "updatedAt">
 }
 
-function previewQuestionHtml(record: MistakeRecord): string {
+/** 题干相册只读取摘录；不会请求子评论、答题笔迹或绑定手写。 */
+export function harnessQuestionExcerpt(record: MistakeRecord): string {
+  return questionHtml(record, currentDbNoteResolver, true, { comments: false, handwriting: false })
+}
+
+export function harnessMatchedAnswers(record: MistakeRecord): Pick<MistakeDetailData, "answers" | "answerStatus"> {
+  const note = currentDbNoteResolver(record.sourceNotebookId, record.sourceNoteId)
+  if (!note) throw new CardLinkError("sourceNoteUnavailable")
+  const { answers, answerStatus } = answerCandidatesForRecord(
+    record, new NodeNote(note, record.sourceNotebookId), currentDbNoteResolver, true, { comments: true, handwriting: true },
+  )
+  return { answers, answerStatus }
+}
+
+export function previewQuestionHtml(record: MistakeRecord): string {
   return appendBoundMindMapHandwriting(questionHtml(record), readBoundMindMapHandwriting(record.sourceNotebookId, record.sourceNoteId), true)
 }
 
@@ -1440,36 +1459,67 @@ export function mistakeQuestionById(recordId: string): MistakeQuestionData {
 }
 
 /**
- * 答案候选提取的共享内核：详情视图与 AI 只读快照都从这里取答案，
- * 保证两处绑定回退、匹配与渲染规则一致（评审 C 高危项的同源要求）。
+ * 答案候选提取的共享内核：详情视图、隔离复习与 AI 只读快照都从这里取答案，
+ * 保证绑定回退、匹配与渲染规则一致（评审 C 高危项的同源要求）。
  * 答案卡片可能位于非当前学习集，渲染经 resolveNote 解析。
  */
-function answerCandidatesForRecord(record: MistakeRecord, node: NodeNote, resolveNote: ScopedNoteResolver = currentDbNoteResolver, includeRuntime = true, contentOptions: CardContentOptions = {}): {
-  answers: MistakeDetailData["answers"]
+type AnswerMatchResult = {
   answerStatus: MistakeDetailData["answerStatus"]
+  matches: IndexedAnswer[]
   lookupDurationMs: number
-  answerHtmlDurationMs: number
-} {
-  const binding = answerBinding(record.sourceNotebookId, sourceMindMapInfo(node, record.sourceNotebookId).rootNodeId)
-  const answerTarget = binding ?? (record.answerNotebookId
+  /** 已匹配的答案卡片来源身份（v2.16 §6.1；不含答案脑图根）。 */
+  resolve: ScopedNoteResolver
+}
+
+function answerTargetForRecord(record: MistakeRecord, node: NodeNote, resolveTarget: (notebookId: string, rootNodeId: string) => BindingTarget | undefined = answerBinding): BindingTarget | undefined {
+  const binding = resolveTarget(record.sourceNotebookId, sourceMindMapInfo(node, record.sourceNotebookId).rootNodeId)
+  return binding ?? (record.answerNotebookId
     ? { notebookId: record.answerNotebookId, rootNodeId: record.answerRootNodeId }
     : undefined)
-  if (!answerTarget) return { answers: [], answerStatus: "unbound", lookupDurationMs: 0, answerHtmlDurationMs: 0 }
+}
+
+/** v2.16 §6.1：只做答案候选匹配（不渲染），供详情渲染与快照答案文本投影共用。 */
+function matchAnswersForRecord(
+  record: MistakeRecord,
+  node: NodeNote,
+  resolveNote: ScopedNoteResolver = currentDbNoteResolver,
+  resolveTarget?: (notebookId: string, rootNodeId: string) => BindingTarget | undefined
+): AnswerMatchResult {
+  const answerTarget = answerTargetForRecord(record, node, resolveTarget)
+  if (!answerTarget) return { answerStatus: "unbound", matches: [], lookupDurationMs: 0, resolve: resolveNote }
   try {
     const lookupStartedAt = Date.now()
     const titles = Array.from(new Set([record.sourceTitle, ...node.titles.map(title => title.trim())])).filter(Boolean)
     const rawMatches = findAnswersForQuestion(answerTarget, node, titles, pathTitles(node))
     const matches = distinctAnswers(rawMatches.filter(answer => answer.noteId !== record.sourceNoteId))
     recordRuntimeState("答案匹配", "mistake.candidates", `record=${record.recordId} raw=${rawMatches.length} unique=${matches.length} ids=${matches.map(answer => answer.noteId).join("|")}`)
-    const lookupDurationMs = Date.now() - lookupStartedAt
+    return {
+      answerStatus: matches.length ? "ready" : "not-found",
+      matches,
+      lookupDurationMs: Date.now() - lookupStartedAt,
+      resolve: resolveNote
+    }
+  } catch (error) {
+    return { answerStatus: isAnswerIndexError(error) ? "index-missing" : "not-found", matches: [], lookupDurationMs: 0, resolve: resolveNote }
+  }
+}
+
+function answerCandidatesForRecord(record: MistakeRecord, node: NodeNote, resolveNote: ScopedNoteResolver = currentDbNoteResolver, includeRuntime = true, contentOptions: CardContentOptions = {}): {
+  answers: MistakeDetailData["answers"]
+  answerStatus: MistakeDetailData["answerStatus"]
+  lookupDurationMs: number
+  answerHtmlDurationMs: number
+} {
+  const { answerStatus, matches, lookupDurationMs } = matchAnswersForRecord(record, node, resolveNote)
+  if (!matches.length) return { answers: [], answerStatus, lookupDurationMs, answerHtmlDurationMs: 0 }
+  try {
     const answerHtmlStartedAt = Date.now()
     const answers = matches.map(answer => ({ id: answer.noteId, title: answer.titles[0] || "答案卡片",
       path: answer.pathTitles.filter(Boolean).join(" › "), html: answerCardHtml(answer, record.sourceTitle,
         noteId => resolveNote(answer.notebookId, noteId), contentOptions.handwriting === true, includeRuntime, contentOptions) }))
-    const answerStatus: MistakeDetailData["answerStatus"] = answers.length ? "ready" : "not-found"
     return { answers, answerStatus, lookupDurationMs, answerHtmlDurationMs: Date.now() - answerHtmlStartedAt }
   } catch (error) {
-    return { answers: [], answerStatus: isAnswerIndexError(error) ? "index-missing" : "not-found", lookupDurationMs: 0, answerHtmlDurationMs: 0 }
+    return { answers: [], answerStatus: isAnswerIndexError(error) ? "index-missing" : "not-found", lookupDurationMs, answerHtmlDurationMs: 0 }
   }
 }
 
@@ -1541,8 +1591,60 @@ export function createMistakeContentReader(): MistakeContentReader {
   }
 }
 
-export function mistakeDetailById(recordId: string, content: "all" | "question" | "answers" = "all", forExport = false, exportContent: CardContentOptions = {}): MistakeDetailData {
-  const contentOptions: CardContentOptions = forExport
+/**
+ * v2.16 §6.1：设备端答案正文投影器（只读）。
+ * 复用详情视图同一套绑定→匹配→去重口径，只取唯一匹配卡片的纯文本与实际答案笔记身份；
+ * 批次内共享跨学习集卡片解析缓存与绑定快照，不刷新索引、不渲染 HTML/图片、不写错题库。
+ */
+export type AnswerTextProjector = { read(record: MistakeRecord): AnswerTextProjection }
+
+export function createAnswerTextProjector(): AnswerTextProjector {
+  const notebookNoteIndex = new Map<string, Map<string, MbBookNote>>()
+  const resolveNote: ScopedNoteResolver = (notebookId, noteId) => {
+    const current = MN.db.getNoteById(noteId)
+    if (current) return current
+    let index = notebookNoteIndex.get(notebookId)
+    if (!index) {
+      index = new Map()
+      try {
+        for (const note of notebookNotes(MN.db.getNotebookById(notebookId))) {
+          const id = String((note as { noteId?: unknown })?.noteId ?? "").trim()
+          if (id) index.set(id, note)
+        }
+      } catch {
+        // 学习集不可读：卡片按不存在处理后显式不可用，不猜测正文。
+      }
+      notebookNoteIndex.set(notebookId, index)
+    }
+    return index.get(noteId)
+  }
+  const bindings = loadBindings()
+  const scoped = loadMatcherSettings().allowSameStudySetMindMap
+  const resolveTarget = (notebookId: string, rootNodeId: string): BindingTarget | undefined => {
+    const target = getBindingForMode(bindings, notebookId, rootNodeId, scoped)
+    return target && targetForMode(target, scoped)
+  }
+  return {
+    read(record: MistakeRecord): AnswerTextProjection {
+      const note = resolveNote(record.sourceNotebookId, record.sourceNoteId)
+      if (!note) return { status: "missing", reason: "source_note_unavailable" }
+      const node = new NodeNote(note, record.sourceNotebookId)
+      const match = matchAnswersForRecord(record, node, resolveNote, resolveTarget)
+      const outcome: AnswerMatchOutcome = match.answerStatus === "ready"
+        ? { status: "ok", candidates: match.matches }
+        : match.answerStatus === "unbound"
+          ? { status: "unbound", candidates: [] }
+          : match.answerStatus === "index-missing"
+            ? { status: "index-missing", candidates: [] }
+            : { status: "not-found", candidates: [] }
+      const projection = projectAnswerText(outcome, (notebookId, noteId) => resolveNote(notebookId, noteId))
+      recordRuntimeState("答案匹配", "mistake.answerText", `record=${record.recordId} status=${projection.status}${"reason" in projection ? ` reason=${projection.reason}` : ` source=${projection.source.notebookId}:${projection.source.noteId} chars=${projection.text.length}`}`)
+      return projection
+    }
+  }
+}
+
+export function mistakeDetailById(recordId: string, content: "all" | "question" | "answers" = "all", forExport = false, exportContent: CardContentOptions = {}): MistakeDetailData {  const contentOptions: CardContentOptions = forExport
     ? { handwriting: exportContent.handwriting === true, comments: exportContent.comments === true }
     : {}
   const detailStartedAt = Date.now()
@@ -1578,7 +1680,14 @@ export function mistakeDetailById(recordId: string, content: "all" | "question" 
     renderedQuestionHtml = appendBoundMindMapHandwriting(renderedQuestionHtml, readBoundMindMapHandwriting(record.sourceNotebookId, record.sourceNoteId))
   }
   const questionHtmlDurationMs = Date.now() - questionHtmlStartedAt
-  const detail = {
+  const linkedQuestions = !forExport && content !== "answers" ? linkedNoteIds(note).flatMap(noteId => {
+    if (noteId === note.noteId) return []
+    const linked = MN.db.getNoteById(noteId)
+    if (!linked) return []
+    const target = recordForSource(state, linked.notebookId || record.sourceNotebookId, noteId)
+    return [{ noteId, title: linked.noteTitle?.trim() || target?.sourceTitle || "无标题卡片", recordId: target?.recordId }]
+  }) : undefined
+  const detail: MistakeDetailData = {
     record: {
       ...record,
       noteAvailable: true,
@@ -1590,7 +1699,8 @@ export function mistakeDetailById(recordId: string, content: "all" | "question" 
     },
     questionHtml: renderedQuestionHtml,
     answers,
-    answerStatus
+    answerStatus,
+    ...(linkedQuestions ? { linkedQuestions } : {})
   }
   // 分段耗时：定位"详情慢"究竟是记录解析、答案匹配还是 HTML 生成
   recordRuntimeState("桥接", "mistakeDetail 分段", `content=${content} durationMs=${Date.now() - detailStartedAt} lookupMs=${lookupDurationMs} answerHtmlMs=${answerHtmlDurationMs} questionHtmlMs=${questionHtmlDurationMs} htmlBytes=${detail.questionHtml?.length || 0} answers=${answers.length} status=${answerStatus}`)
@@ -1602,8 +1712,12 @@ export async function openSourceByMistakeId(
   options: { enterFocusMode?: boolean } = {}
 ): Promise<{ locateHint?: string }> {
   const record = recordById(recordId)
-  const enterFocusMode = options.enterFocusMode ?? loadMatcherSettings().sourceLocateMode === "focus"
-  const locateHint = await openNoteInMindMap(record.sourceNoteId, record.sourceNotebookId, { enterFocusMode })
+  const preference = loadMatcherSettings().sourceLocateMode
+  const enterFocusMode = options.enterFocusMode ?? preference === "focus"
+  const locateHint = await openNoteInMindMap(record.sourceNoteId, record.sourceNotebookId, {
+    enterFocusMode,
+    inFloat: options.enterFocusMode === undefined && preference === "float"
+  })
   return locateHint ? { locateHint } : {}
 }
 
@@ -1618,9 +1732,11 @@ export async function openMistakeById(recordId: string): Promise<{ locateHint?: 
 }
 
 export async function openMistakeRecord(record: MistakeRecord): Promise<void> {
-  await openNoteInMindMap(record.sourceNoteId, record.sourceNotebookId, {
-    enterFocusMode: loadMatcherSettings().sourceLocateMode === "focus"
+  const preference = loadMatcherSettings().sourceLocateMode
+  const hint = await openNoteInMindMap(record.sourceNoteId, record.sourceNotebookId, {
+    enterFocusMode: preference === "focus", inFloat: preference === "float"
   })
+  if (hint) showHUD(hint, 3)
 }
 
 export async function openLinkedMistakeOrSource(question: NodeNote, currentNotebookId: string): Promise<void> {

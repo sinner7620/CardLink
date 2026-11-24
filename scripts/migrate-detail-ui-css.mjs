@@ -5,7 +5,7 @@ import fs from "node:fs"
 import path from "node:path"
 import postcss from "postcss"
 
-const target = path.resolve("web/src/ui/mistakes.css")
+const target = path.resolve("web/src/ui/_legacy/mistakes.css")
 const RETIRED_TOKENS = [
   "detailTabs", "detailTabRightGroup", "detailTabAux", "detailCollapseToggle",
   "preview-collapsed", "preview-detail-meta", "preview-due-badge", "detailTagTrigger"

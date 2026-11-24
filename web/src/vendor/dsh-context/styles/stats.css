@@ -1,0 +1,47 @@
+/*
+ * Vendored from dsh-context (Apache-2.0)
+ * https://github.com/bowenliang123/dsh-context/tree/459e2369a4ff6caee912cf8b6dfc35cfac8c77c1
+ *   src/client/styles/stats.css  （按本面板实际使用拆离：卡片副标题与概览数字/百分比）
+ *
+ * CardLink 修改：无（逐字保留本文件所用到的规则）。
+ */
+
+.lc-card-sub {
+  font-weight: 400;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  margin-left: auto;
+}
+
+.lc-overview-num {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.lc-overview-num > b {
+  font-size: 20px;
+}
+
+.lc-overview-num span {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.lc-overview-pct {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+.lc-overview-pct b {
+  font-size: 20px;
+  color: var(--dsw-alias-label-primary);
+  margin-right: 4px;
+}
+
+/* 逐请求事实行：与上游 stats.css 的 .lc-pi-* 同构（标签左、值右）。 */
+.lc-pi-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.lc-pi-row { display: flex; flex-direction: row; justify-content: space-between; align-items: baseline; gap: 12px; min-width: 0; text-decoration: none; color: inherit; }
+.lc-pi-label { flex: none; color: var(--dsw-alias-label-secondary); font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lc-pi-value { min-width: 0; color: var(--dsw-alias-label-primary); font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }

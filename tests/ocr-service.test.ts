@@ -147,11 +147,35 @@ test('scheduled OCR checks due time, scope, pause and changed service configurat
   assert.equal((await bridge('ocrDbAutoTick')).started,false)
   preferencesKV['mn4-answer-matcher.ocr.preferences.v1'].nextAt=1
   await bridge('ocrDbPause');assert.equal((await bridge('ocrDbAutoTick')).started,false)
-  assert.equal((await bridge('ocrDbAutoTick',{enter:true})).started,true)
+  assert.equal((await bridge('ocrDbAutoTick',{enter:true})).started,false)
+  await bridge('ocrDbResume')
+  assert.equal((await bridge('ocrDbAutoTick')).started,true)
   await until(async()=>!(await bridge('ocrDbGetStats')).sync.running)
   assert.equal(store.question('q').status,'not_needed');assert.equal(requests,0)
   const pref=preferencesKV['mn4-answer-matcher.ocr.preferences.v1'];pref.nextAt=1;pref.configKey='changed'
   await assert.rejects(bridge('ocrDbAutoTick'),/服务设置已变化/);assert.equal((await bridge('ocrDbGetPreferences')).scheduled,false);store.db.close()
+})
+
+test('scheduled image OCR drains legacy consent and stays incremental when manual sync is full',async()=>{
+  await reset()
+  records.other={...records.q,recordId:'other',sourceNotebookId:'outside'}
+  await bridge('ocrDbSavePreferences',{scheduled:true,incremental:false,notebookId:'n',consent:true})
+  const pref=preferencesKV['mn4-answer-matcher.ocr.preferences.v1']
+  pref.sourceConsent=false
+  pref.nextAt=1
+  assert.deepEqual(await bridge('ocrDbAutoTick'),{started:true,total:1})
+  await until(async()=>!(await bridge('ocrDbGetStats')).sync.running)
+  const claim=await bridge('ocrDbNext',{automatic:true})
+  assert.equal(claim.recordId,'q')
+  await bridge('ocrDbSubmitImages',{jobId:claim.jobId,lease:claim.lease,images:['data:image/jpeg;base64,aW1hZ2U=']})
+  await bridge('ocrDbNext',{automatic:true})
+  await until(async()=>!(await bridge('ocrDbGetStats')).running)
+  preferencesKV['mn4-answer-matcher.ocr.preferences.v1'].nextAt=1
+  assert.equal((await bridge('ocrDbAutoTick')).started,true)
+  await until(async()=>!(await bridge('ocrDbGetStats')).sync.running)
+  assert.equal((await bridge('ocrDbNext',{automatic:true})).idle,true)
+  assert.equal(requests,1)
+  store.db.close()
 })
 
 test('native backup picker waits for its callback and import requires confirmation and an idle queue',async()=>{
@@ -180,7 +204,10 @@ test('automatic retries are bounded and never resubmit uncertain outcomes',async
 test('workbench refresh indexes edits and uses only explicitly authorized automatic OCR', async () => {
   await reset()
   notes.note.body = '<p>计算 Ｚ 变换</p>'
-  await bridge('ocrDbRefreshSources')
+  assert.deepEqual((await bridge('ocrDbSearchContent',{query:'Z变换'})).recordIds,[])
+  await bridge('ocrDbRefreshSources', { recordId: 'unrelated' })
+  assert.deepEqual((await bridge('ocrDbSearchContent',{query:'Z变换'})).recordIds,[])
+  await bridge('ocrDbRefreshSources', { recordId: 'q' })
   assert.deepEqual((await bridge('ocrDbSearchContent',{query:'Z变换'})).recordIds,['q'])
   notes.note.body = '<img src="data:image/jpeg;base64,aW1hZ2U=" />'
   await bridge('ocrDbRefreshSources')

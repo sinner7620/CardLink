@@ -31,7 +31,7 @@ export function findAnswersForQuestion(
   if (!useMindMap) return subcards
   // Paths are root-first. Only the direct parent identifies the containing
   // chapter; the source and answer mind-map roots can have different names.
-  // No parent match means no map answer, including single candidates/fallbacks.
+  // Prefer the direct parent when any genuine answer matches it.
   const parent = normalizeParentTitle(path[path.length - 1] || "")
   const filterByParent = (answers: IndexedAnswer[]): IndexedAnswer[] => {
     const matched = parent ? answers.filter(answer => {
@@ -41,19 +41,24 @@ export function findAnswersForQuestion(
     recordRuntimeState("答案匹配", "parent.filter", `mode=${target.matchMode || "title"} parent=${parent || "(缺失)"} before=${answers.length} after=${matched.length}`)
     return matched
   }
+  const preferParent = (candidates: IndexedAnswer[]): IndexedAnswer[] => {
+    const answers = candidates.filter(answer => answer.noteId !== question.note?.noteId)
+    const matched = filterByParent(answers)
+    return matched.length ? matched : answers
+  }
   if (target.matchMode === "regex") {
     const matched = target.regexRules
       ? findAnswersByRegex(target, titles, target.regexRules)
       : []
-    return [...subcards, ...filterByParent(matched)]
+    return [...subcards, ...preferParent(matched)]
   }
   const paired = pairedAnswerReference(target, question)
   if (paired) {
     const answer = findAnswerByReference(target, paired.noteId, paired.nodeId)
-    if (answer) {
+    if (answer && answer.noteId !== question.note?.noteId) {
       const matched = filterByParent([answer])
       if (matched.length) return [...subcards, ...matched]
     }
   }
-  return [...subcards, ...filterByParent(findAnswers(target, titles, path))]
+  return [...subcards, ...preferParent(findAnswers(target, titles, path))]
 }

@@ -22,12 +22,23 @@ pnpm exec tsx --experimental-test-module-mocks --test tests/review-detail-cache.
 
 选择范围依据调用方、共享协议和受影响行为，不只按文件名。`pnpm test` 仅供明确需要全量回归时手动运行，不作为本地安装包或发布 CI 的固定检查。复用本任务中输入未变的成功结果；有新代码、依赖变化或失败证据时再运行受影响检查。不要把验证次数当作质量指标。
 
+## Lint 配置
+
+项目使用 pnpm，在根目录运行 `pnpm lint`，通过 Oxlint 检查 `src/`、`web/`、`rails-native/`、`scripts/`、`tests/` 和 `build.mjs`；第三方源码 `web/vendor/`、`web/src/vendor/` 不纳入检查，现有 `.gitignore` 继续生效。Oxlint 原生解析 JavaScript、JSX、TypeScript 和 TSX，不需要额外的 JSX 解析器。
+
+根目录 [.oxlintrc.json](../.oxlintrc.json) 的 `jsPlugins` 注册 `@shadcn/lint`。本次仅完成工具接入，`rules` 保持为空，并关闭 Oxlint 默认启用的 `correctness` 类别，避免引入新的规则政策。现有 `pnpm check`、测试和构建命令保持不变；`pnpm lint` 成功只验证配置加载与源码解析，不代表已执行设计系统规则检查。
+
+需要启用规则时，由维护者在 `.oxlintrc.json` 的 `rules` 中选择 `shadcn/...` 规则并定义允许的行为。参考 [可用规则](https://github.com/shadcn-ui/lint/blob/main/README.md#rules)、[配置示例](https://github.com/shadcn-ui/lint/blob/main/docs/design-systems.md) 和 [组件与主题发现机制](https://github.com/shadcn-ui/lint/blob/main/docs/how-it-works.md)。项目目前使用自定义 CSS，没有 Tailwind v4 主题、`components.json` 或共享 UI 包别名，因此未添加假定的主题或组件发现设置，也未安装 Tailwind。启用依赖 Tailwind v4 主题的规则前，需要先确认其适用性；如需识别自定义组件导入，可按实际约定配置 `settings.shadcn`。
+
+当前固定版本为 `@shadcn/lint` 0.2.5 和 Oxlint 1.92.0。两者合并的 Node.js 要求为 `^20.19.0 || >=22.12.0`；项目现有构建工具可能有更高要求。
+
 ## 现有流程的分析（2026-09-11）
 
 - `pnpm check` 是 `tsc --noEmit`，配置包含 `src/**/*.ts` 和 `tests/**/*.ts`；不覆盖所有 Web JSX 和原生 JavaScript，不能代替打包或运行检查。
 - `pnpm test` 是完整测试命令；`tests/ui-stage2-visual.spec.js` 不在该命令中。测试通过不等于浏览器视觉或 MarginNote 真机通过。
 - `pnpm build` 与 `pnpm build:source` 都运行 `node build.mjs`，连续执行两者没有额外验证价值。
 - 构建执行 esbuild、Vite、预览资源生成与安装包组装，并检查嵌入脚本闭合序列、原生入口模块名及模块是否存在。这些针对实际产物约束的检查保留。
+- `build.mjs` 的安装包输出目录可用环境变量 `CARDLINK_DIST_DIR` 指向别处（默认 `dist/`）；`web-dist/` 仍按原位置生成，因为插件运行时要读取它。需要验证构建又不覆盖已交付同版本安装包时用它，例如 `$env:CARDLINK_DIST_DIR="output/verify-dist"; node build.mjs`。直接用 `vite build` 时必须传 `--outDir`，否则仓库配置里的 `emptyOutDir` 会清空 `web-dist/` 的运行入口（`index.html`、`scene-entry.js`、`boot.js`、`vendor/*` 等），这些入口由 `build.mjs` 生成，不由 Vite 产出。
 - 发布 CI 在标签推送或手动触发时执行安装依赖、check、build；受影响行为测试在本地交付前选择执行并记录。
 - 发布 CI 用版本中的连字符识别 prerelease，故今后预发布采用 `X.Y.Z-bN`，不沿用历史 `2.4.1bN` 写法。历史文件保持原名。
 - 历史测试仍保留为按需运行的回归资源；取消固定全量命令不代表各测试已失去价值。

@@ -1,4 +1,4 @@
-import { WINDOW_CONTROL_BACKGROUND_OPACITY } from "./ui-tokens"
+import { UI_COLORS, WINDOW_CONTROL_BACKGROUND_OPACITY } from "./ui-tokens"
 
 export type WindowControlSide = "left" | "right"
 
@@ -22,6 +22,22 @@ export const ANSWER_BAR_TOP_OFFSET = 6
 export const ANSWER_BAR_SIDE_INSET = 6
 // 顶部拖动热区与插件页 48pt 顶栏同高。
 export const ANSWER_BAR_DRAG_STRIP_HEIGHT = 48
+export const ANSWER_INK_MAX_WIDTH = 248
+
+export function answerDragStripFrames(width: number, toolbar?: { top: number; height: number; right: number; width: number }) {
+  const strip = ANSWER_BAR_DRAG_STRIP_HEIGHT
+  if (!toolbar) return [{ x: 0, y: 0, width, height: strip }]
+  const right = Math.max(0, width - toolbar.right)
+  const left = Math.max(0, right - toolbar.width)
+  const top = Math.min(strip, Math.max(0, toolbar.top))
+  const bottom = Math.min(strip, top + toolbar.height)
+  return [
+    { x: 0, y: 0, width: left, height: strip },
+    { x: right, y: 0, width: width - right, height: strip },
+    { x: left, y: 0, width: right - left, height: top },
+    { x: left, y: bottom, width: right - left, height: strip - bottom }
+  ]
+}
 
 /** 答案窗口的一体悬浮条：左右换边时整条移动，控件顺序同步镜像。 */
 export function answerControlBarLayout(
@@ -103,7 +119,7 @@ export function createWindowControlButton(title: string, action: string, selecte
   const button = UIButton.buttonWithType(0)
   button.autoresizingMask = 0
   button.setTitleForState(title, 0)
-  button.setTitleColorForState(selected ? UIColor.colorWithHexString("#0e8dfd") : UIColor.blackColor().colorWithAlphaComponent(0.82), 0)
+  button.setTitleColorForState(selected ? UIColor.colorWithHexString(UI_COLORS.accent) : UIColor.blackColor().colorWithAlphaComponent(0.82), 0)
   button.backgroundColor = UIColor.clearColor()
   // 各类按钮统一使用完整点击面与零内缩；✕ 比 × 使用更完整的字面框。
   button.titleEdgeInsets = { top: 0, left: 0, bottom: 0, right: 0 }

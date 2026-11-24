@@ -30,9 +30,9 @@ test("4.5.0 门限解析宿主版本，场景状态只接受明确 true", () => 
 })
 
 function native(version = "5.0.0", permitted = true, loadResult: any = true) {
-  const calls: any[] = [], timers: (() => void)[] = [], lockTimers: (() => void)[] = []
-  const lockIntervals: number[] = []
-  let activeLocks = 0
+  const calls: any[] = [], timers: (() => void)[] = [], surfaceTimers: (() => void)[] = []
+  const surfaceIntervals: number[] = []
+  let activeSurfaceWatchers = 0
   const owner: any = { window: "window" }, controller: any = { addon: owner }
   const panel: any = {
     loadPanel() { calls.push("load"); return loadResult },
@@ -52,19 +52,19 @@ function native(version = "5.0.0", permitted = true, loadResult: any = true) {
     NSUserDefaults: { standardUserDefaults: () => ({ setObjectForKey() {} }) },
     NSTimer: { scheduledTimerWithTimeInterval: (delay: number, repeat: boolean, callback: () => void) => {
       let active = true
-      if (repeat) { activeLocks++; lockIntervals.push(delay) }
-      ;(repeat ? lockTimers : timers).push(() => { if (active) callback() })
-      return { invalidate() { if (active && repeat) activeLocks--; active = false } }
+      if (repeat) { activeSurfaceWatchers++; surfaceIntervals.push(delay) }
+      ;(repeat ? surfaceTimers : timers).push(() => { if (active) callback() })
+      return { invalidate() { if (active && repeat) activeSurfaceWatchers--; active = false } }
     } },
     __MNAM_WEB_BRIDGE_GLOBAL__: { dispatch: async (context: any, command: string, payload: any) => {
       assert.equal(context.addon, owner); return { command, payload }
     } },
-    __MN_ANSWER_CORE_GLOBAL__: { isSceneMode: () => /^\d+\./.test(version) && parseInt(version, 10) >= 5, notifySceneUnavailable(message: string) { calls.push({ message }) }, annotationLog() {}, cardToolbar: { isEnabled: () => true },
+    __MN_ANSWER_CORE_GLOBAL__: { isSceneMode: () => /^\d+\./.test(version) && parseInt(version, 10) >= 5, notifySceneUnavailable(message: string) { calls.push({ message }) }, annotationLog() {}, enableMistakeDrag() {}, disableMistakeDrag() {}, cardToolbar: { isEnabled: () => true },
       closeCardMistakePanel(target: any) { assert.equal(target, owner); calls.push('closeMistakePanel') } }
   }
   runInNewContext(readFileSync("rails-native/SceneMedia.js", "utf8"), scope)
   runInNewContext(readFileSync("rails-native/SceneWorkbench.js", "utf8"), scope)
-  return { calls, timers, lockTimers, lockIntervals, get activeLocks() { return activeLocks }, owner, controller, panel, legacy, scope, helper: scope.__MNAM_SCENE_WORKBENCH_GLOBAL__ }
+  return { calls, timers, surfaceTimers, surfaceIntervals, get activeSurfaceWatchers() { return activeSurfaceWatchers }, owner, controller, panel, legacy, scope, helper: scope.__MNAM_SCENE_WORKBENCH_GLOBAL__ }
 }
 
 function fadedNativeView(host: any, alpha = .6, width = 640, height = 520) {
@@ -82,39 +82,39 @@ test('按参考原生条件找到唯一淡化父容器：无 URL 或脚本接口
   const own: any = fadedNativeView(host), foreign = fadedNativeView(host, 1);
   own.layer = { get opacity() { return value }, set opacity(v) { value = v; writes++ } };
   host.subviews = [nativeWeb(own), nativeWeb(foreign)];
-  h.owner.window = host; h.legacy.showPanel(h.controller); h.lockTimers[0]();
+  h.owner.window = host; h.legacy.showPanel(h.controller); h.surfaceTimers[0]();
   assert.equal(value, 1); assert.equal(writes, 1); assert.equal(foreign.layer.opacity, 1);
-  h.lockTimers[0](); assert.equal(writes, 1, 'alpha 仍为 .6 不能反复写图层');
-  value = .6; h.lockTimers[0](); assert.equal(value, 1); assert.equal(writes, 2);
-  value = 0; h.lockTimers[0](); assert.equal(value, 0, '不恢复主动隐藏');
-  own.hidden = true; value = .6; h.lockTimers[0](); assert.equal(value, .6);
-  own.hidden = false; h.helper.dispose(h.owner); h.lockTimers[0](); assert.equal(value, .6);
+  h.surfaceTimers[0](); assert.equal(writes, 1, 'alpha 仍为 .6 不能反复写图层');
+  value = .6; h.surfaceTimers[0](); assert.equal(value, 1); assert.equal(writes, 2);
+  value = 0; h.surfaceTimers[0](); assert.equal(value, 0, '不恢复主动隐藏');
+  own.hidden = true; value = .6; h.surfaceTimers[0](); assert.equal(value, .6);
+  own.hidden = false; h.helper.dispose(h.owner); h.surfaceTimers[0](); assert.equal(value, .6);
 });
 
-test('首次恢复与持续锁定严格分开：alpha=.6 且 layer=1 首次写回一次，后续只看图层回退', () => {
+test('首次校正与持续监视严格分开：alpha=.6 且 layer=1 首次写回一次，后续只看图层回退', () => {
   const h = native(), host: any = { subviews: [] };
   let writes = 0;
   const target: any = fadedNativeView(host);
   target.layer = { get opacity() { return 1 }, set opacity(_v) { writes++ } };
   host.subviews = [nativeWeb(target)];
-  h.owner.window = host; h.legacy.showPanel(h.controller); h.lockTimers[0]();
-  assert.equal(writes, 1); h.lockTimers[0](); assert.equal(writes, 1);
-  target.alpha = 1; h.lockTimers[0](); target.alpha = .6; h.lockTimers[0](); assert.equal(writes, 1);
+  h.owner.window = host; h.legacy.showPanel(h.controller); h.surfaceTimers[0]();
+  assert.equal(writes, 1); h.surfaceTimers[0](); assert.equal(writes, 1);
+  target.alpha = 1; h.surfaceTimers[0](); target.alpha = .6; h.surfaceTimers[0](); assert.equal(writes, 1);
 });
 
-test('多个半透明容器与参考插件一样拒绝修改；隐藏、小窗和其他父容器类型不列为候选', () => {
+test('多个被淡化的容器一律不改；隐藏、小窗和其他父容器类型不列为候选', () => {
   const h = native(), host: any = { subviews: [] };
   const one: any = fadedNativeView(host), two: any = fadedNativeView(host);
   const small: any = fadedNativeView(host, .6, 200, 160), hidden: any = fadedNativeView(host);
   hidden.hidden = true;
   const other: any = fadedNativeView(host); other.className = 'OtherContainer';
   host.subviews = [one, two, small, hidden, other].map(nativeWeb);
-  h.owner.window = host; h.legacy.showPanel(h.controller); h.lockTimers[0]();
+  h.owner.window = host; h.legacy.showPanel(h.controller); h.surfaceTimers[0]();
   assert.equal(one.layer.opacity, .6); assert.equal(two.layer.opacity, .6);
-  assert.match(h.owner.cardLinkSceneOpacityStatus.detail, /2 个/);
+  assert.match(h.owner.cardLinkSceneSurfaceStatus.detail, /2 个/);
 });
 
-test('layer 写入失败或不可读时仅调用可用的 setAlpha；没有 setAlpha 也不误报已锁定', () => {
+test('layer 写入失败或不可读时仅调用可用的 setAlpha；没有 setAlpha 也不误报已校正', () => {
   for (const unreadable of [false, true]) {
     const h = native(), host: any = { subviews: [] }, target: any = fadedNativeView(host);
     let calls = 0;
@@ -123,37 +123,37 @@ test('layer 写入失败或不可读时仅调用可用的 setAlpha；没有 setA
     host.subviews = [nativeWeb(target)]; h.owner.window = host;
     h.legacy.showPanel(h.controller);
     assert.equal(calls, 1); assert.equal(target.alpha, 1);
-    assert.equal(h.owner.cardLinkSceneOpacityStatus.event, 'panel.opacityRestored');
+    assert.equal(h.owner.cardLinkSceneSurfaceStatus.event, 'panel.surfaceVisible');
   }
   const h = native(), host: any = { subviews: [] }, target: any = fadedNativeView(host);
   target.layer = { get opacity() { return .6 }, set opacity(_v) { throw Error('readonly') } };
   host.subviews = [nativeWeb(target)]; h.owner.window = host;
-  h.legacy.showPanel(h.controller); h.lockTimers[0]();
-  assert.equal(h.owner.cardLinkSceneOpacityStatus.event, 'panel.opacityRestoreFailed');
+  h.legacy.showPanel(h.controller); h.surfaceTimers[0]();
+  assert.equal(h.owner.cardLinkSceneSurfaceStatus.event, 'panel.surfaceHidden');
 });
 
 test('首次自动等待淡化；已绑定容器移除后重新查找新容器，收起期间暂停', () => {
   const h = native(), host: any = { subviews: [] }, target: any = fadedNativeView(host, 1);
   let now = 1000; h.scope.Date = { now: () => now };
   host.subviews = [nativeWeb(target)]; h.owner.window = host;
-  h.legacy.showPanel(h.controller); h.lockTimers[0]();
-  assert.equal(h.owner.cardLinkSceneOpacityStatus.event, 'panel.opacityCandidates');
-  target.alpha = .6; target.layer.opacity = .6; now += 1000; h.lockTimers[0]();
+  h.legacy.showPanel(h.controller); h.surfaceTimers[0]();
+  assert.equal(h.owner.cardLinkSceneSurfaceStatus.event, 'panel.surfaceCandidates');
+  target.alpha = .6; target.layer.opacity = .6; now += 1000; h.surfaceTimers[0]();
   assert.equal(target.layer.opacity, 1);
   const next: any = fadedNativeView(host); target.superview = null; host.subviews = [nativeWeb(next)];
-  now += 1000; h.lockTimers[0](); assert.equal(next.layer.opacity, 1);
+  now += 1000; h.surfaceTimers[0](); assert.equal(next.layer.opacity, 1);
   h.panel.onMessage('sceneReady', { state: { immersive: true } });
-  h.panel.onMessage('sceneMinimize'); next.layer.opacity = .6; h.lockTimers[0](); assert.equal(next.layer.opacity, .6);
-  assert.equal(h.activeLocks, 0);
+  h.panel.onMessage('sceneMinimize'); next.layer.opacity = .6; h.surfaceTimers[0](); assert.equal(next.layer.opacity, .6);
+  assert.equal(h.activeSurfaceWatchers, 0);
   h.panel.onMessage('sceneExpand'); assert.equal(next.layer.opacity, 1);
-  assert.equal(h.activeLocks, 1);
+  assert.equal(h.activeSurfaceWatchers, 1);
   h.panel.onMessage('sceneCommandReady');
-  h.legacy.hidePanel(h.controller, true); assert.equal(h.activeLocks, 0);
+  h.legacy.hidePanel(h.controller, true); assert.equal(h.activeSurfaceWatchers, 0);
   next.layer.opacity = .6;
   h.legacy.showPanel(h.controller); assert.equal(next.layer.opacity, 1);
-  h.legacy.showPanel(h.controller); assert.equal(h.activeLocks, 1);
-  assert.deepEqual(h.lockIntervals, [0.5, 0.5, 0.5]);
-  h.helper.dispose(h.owner); assert.equal(h.activeLocks, 0);
+  h.legacy.showPanel(h.controller); assert.equal(h.activeSurfaceWatchers, 1);
+  assert.deepEqual(h.surfaceIntervals, [0.5, 0.5, 0.5]);
+  h.helper.dispose(h.owner); assert.equal(h.activeSurfaceWatchers, 0);
 });
 
 test('首次做题自动建立场景通道；握手和应用就绪后才完成，同步请求复用面板', async () => {
@@ -420,6 +420,7 @@ function transport(apiReply?: (url: string, options: any) => any) {
   const events: Record<string, ((event: any) => void)[]> = {}, handlers: any = {}, calls: any[] = []
   let immersive = true
   let closeDeliveryFails = false
+  let sceneTopic: string | null = "topic"
   const window: any = {
     __MN_HOST_VERSION__: "4.5.0", CustomEvent: class { constructor(public type: string, public detailObject: any) {} get detail() { return this.detailObject.detail } },
     addEventListener: (name: string, handler: any) => (events[name] ||= []).push(handler),
@@ -450,9 +451,9 @@ function transport(apiReply?: (url: string, options: any) => any) {
   const scope: any = { exports: {}, setTimeout, clearTimeout, require: (name: string) => name === './writingSession' ? writingScope.exports : windowSizeApi() }
   runInNewContext(transpileModule(readFileSync("web/src/lib/sceneTransport.js", "utf8"), { compilerOptions: { module: 1, target: 7 } }).outputText, scope)
   const client = scope.exports.createSceneTransport(sdk, window, async (url: string, options: any) => {
-    calls.push({ url, options }); return { ok: true, text: async () => 'runtime writing guide', json: async () => apiReply && !url.endsWith('/ui-state') ? apiReply(url, options) : ({ state: { immersive, topicid: "topic", focusnoteid: "wrong-focus" } }) }
+    calls.push({ url, options }); return { ok: true, text: async () => 'runtime writing guide', json: async () => apiReply && !url.endsWith('/ui-state') ? apiReply(url, options) : ({ state: { immersive, topicid: sceneTopic, focusnoteid: "wrong-focus" } }) }
   }, policy(), annotation)
-  return { client, calls, handlers, window, annotation, sdk, transportApi: scope.exports, events, failCloseDelivery() { closeDeliveryFails = true }, exit() { immersive = false }, enter() { immersive = true } }
+  return { client, calls, handlers, window, annotation, sdk, transportApi: scope.exports, events, failCloseDelivery() { closeDeliveryFails = true }, exit() { immersive = false }, enter() { immersive = true }, setSceneTopic(value: string | null) { sceneTopic = value } }
 }
 
 test('场景摘录笔仅从面板读取当前模板，错误回传且销毁后不再读取', async () => {
@@ -1194,4 +1195,177 @@ test('销毁后重建同前缀命令通道，迟到回复不能完成新请求',
   assert.equal(done, false)
   t.window.dispatchEvent({ type: 'mn:bridgeResponse', detail: { requestId: requests[1].requestId, payload: {} } })
   await waiting; current.dispose()
+})
+
+const foldFlush = () => new Promise(resolve => setImmediate(resolve))
+
+test("分支折叠只投递当前题卡与目标值，回执按请求ID完成；关闭面板取消未完成请求", async () => {
+  const n = native()
+  n.legacy.showPanel(n.controller)
+  n.panel.onMessage("sceneReady", { state: { immersive: true } })
+  n.panel.onMessage("bridgeRequest", { command: "runtimeLog", payload: { event: "boot.appRendered" } })
+  const token = n.helper.sceneToken(n.owner)
+  assert.ok(token, "已确认的场景会话应有身份")
+  const pending = n.helper.foldBranch(n.owner, { noteid: "q1", notebookId: "book", folded: true })
+  const posted = n.calls.filter(c => c.event === "foldBranch").slice(-1)[0].data
+  assert.deepEqual([posted.noteid, posted.folded, posted.notebookId], ["q1", true, "book"])
+  await assert.rejects(n.helper.foldBranch(n.owner, { noteid: "q2", folded: true }), /正在处理分支折叠请求/)
+  assert.equal(n.panel.onMessage("foldBranchReply", { requestId: "stale", result: { folded: true } }).ignored, true)
+  n.panel.onMessage("foldBranchReply", { requestId: posted.requestId, result: { folded: true, topicid: "book", changed: [] } })
+  const result = await pending
+  assert.equal(result.folded, true)
+  assert.equal(result.noteid, "q1")
+  assert.equal(result.sceneToken, token, "回执带回窗口会话身份")
+  const closing = n.helper.foldBranch(n.owner, { noteid: "q1", folded: false })
+  const rejected = assert.rejects(closing, /场景面板已关闭/)
+  n.helper.dispose(n.owner)
+  await rejected
+})
+
+test("场景通知保留空数据默认对象，显式 null 与关闭信号原样投递且只发给本窗口会话", () => {
+  const n = native()
+  n.legacy.showPanel(n.controller)
+  // 尚未确认的场景会话不投递通知。
+  n.helper.notify(n.owner, "updatePrompt", null)
+  assert.equal(n.calls.filter(call => call && call.event).length, 0)
+  n.panel.onMessage("sceneReady", { state: { immersive: true } })
+  n.calls.length = 0
+  n.helper.notify(n.owner, "nativeDataChanged")
+  n.helper.notify(n.owner, "updatePrompt", null)
+  n.helper.notify(n.owner, "updatePrompt", { promptId: "update-1", close: true })
+  n.helper.notify({ cardLinkSceneToken: "other-window" }, "updatePrompt", { promptId: "other-window" })
+  // 通知对象来自 vm 上下文，按 JSON 比较结构而不是原型。
+  assert.deepEqual(JSON.parse(JSON.stringify(n.calls)), [
+    { event: "nativeDataChanged", data: {} },
+    { event: "updatePrompt", data: null },
+    { event: "updatePrompt", data: { promptId: "update-1", close: true } }
+  ])
+})
+
+test("场景面板未授权、未渲染或缺少题卡时不投递折叠请求，回执错误按错误拒绝", async () => {
+  const n = native()
+  n.legacy.showPanel(n.controller)
+  await assert.rejects(n.helper.foldBranch(n.owner, { noteid: "q", folded: true }), /尚未授权/)
+  assert.equal(n.calls.some(c => c.event === "foldBranch"), false)
+  n.panel.onMessage("sceneReady", { state: { immersive: true } })
+  await assert.rejects(n.helper.foldBranch(n.owner, { noteid: "q", folded: true }), /尚未完成渲染/)
+  n.panel.onMessage("bridgeRequest", { command: "runtimeLog", payload: { event: "boot.appRendered" } })
+  await assert.rejects(n.helper.foldBranch(n.owner, { noteid: "" }), /缺少题卡/)
+  const pending = n.helper.foldBranch(n.owner, { noteid: "q", folded: true })
+  const posted = n.calls.filter(c => c.event === "foldBranch").slice(-1)[0].data
+  n.panel.onMessage("foldBranchReply", { requestId: posted.requestId, error: "无法写入", code: "IN_PROCESS_NOT_ALLOWED" })
+  await assert.rejects(pending, /无法写入/)
+})
+
+test("折叠请求超时与回执错误都标记已派发，便于按可能已写入处理", async () => {
+  const n = native()
+  n.legacy.showPanel(n.controller)
+  n.panel.onMessage("sceneReady", { state: { immersive: true } })
+  n.panel.onMessage("bridgeRequest", { command: "runtimeLog", payload: { event: "boot.appRendered" } })
+  const timeout = n.helper.foldBranch(n.owner, { noteid: "q", notebookId: "book", folded: true })
+  n.timers.slice(-1)[0]()
+  await assert.rejects(timeout, (error: any) => {
+    assert.equal(error.dispatched, true, "已投递但无回执不能当作没写")
+    assert.match(String(error.message), /超时/)
+    return true
+  })
+  const replied = n.helper.foldBranch(n.owner, { noteid: "q", notebookId: "book", folded: false })
+  const posted = n.calls.filter(c => c.event === "foldBranch").slice(-1)[0].data
+  n.panel.onMessage("foldBranchReply", { requestId: posted.requestId, error: "场景已失效", code: "SCENE_GONE", dispatched: true, topicid: "book" })
+  await assert.rejects(replied, (error: any) => {
+    assert.equal(error.dispatched, true)
+    assert.equal(error.code, "SCENE_GONE")
+    assert.equal(error.topicid, "book")
+    return true
+  })
+  // 未渲染、未授权等本地拒绝不带派发标记
+  const offline = native()
+  offline.legacy.showPanel(offline.controller)
+  await assert.rejects(offline.helper.foldBranch(offline.owner, { noteid: "q", folded: true }), (error: any) => {
+    assert.notEqual(error.dispatched, true)
+    return true
+  })
+})
+
+
+test("折叠请求经官方场景 SDK 下发，错误对象落在 resolve 时也必须报错", async () => {
+  const t = transport()
+  const api: any[] = []
+  let reply: any = { changed: [], folded: true, topicid: "topic", bridgeApiVersion: "0.91" }
+  t.sdk.api = async (path: string, options: any) => { api.push([path, options]); return reply }
+  t.window.dispatchEvent({ type: "mn:foldBranch", detail: { requestId: "fold-1", noteid: "N1", notebookId: "topic", folded: true } })
+  await foldFlush()
+  assert.equal(api.length, 1)
+  assert.equal(api[0][0], "/notes/fold")
+  assert.equal(api[0][1].method, "POST")
+  assert.equal(api[0][1].body.folded, true)
+  assert.equal(api[0][1].body.confirm, true)
+  assert.deepEqual([...api[0][1].body.noteIds], ["N1"])
+  const sent = t.calls.filter(call => call.name === "foldBranchReply").slice(-1)[0].payload
+  assert.equal(sent.requestId, "fold-1")
+  assert.equal(sent.dispatched, true)
+  assert.equal(sent.result.folded, true)
+  assert.equal(sent.result.topicid, "topic")
+  assert.equal(sent.result.sceneTopic, "topic", "回执带回校验过的场景学习集")
+  assert.equal(sent.result.changed, 0)
+  assert.equal(sent.error, undefined)
+  reply = { error: { code: "IN_PROCESS_NOT_ALLOWED", message: "面板不可用" } }
+  t.window.dispatchEvent({ type: "mn:foldBranch", detail: { requestId: "fold-2", noteid: "N1", notebookId: "topic", folded: false } })
+  await foldFlush()
+  const failed = t.calls.filter(call => call.name === "foldBranchReply").slice(-1)[0].payload
+  assert.match(failed.error, /面板不可用/)
+  assert.equal(failed.code, "IN_PROCESS_NOT_ALLOWED")
+  t.client.dispose()
+})
+
+test("折叠写入前核对场景当前学习集：缺学习集、未知或错配都不下发", async () => {
+  const t = transport()
+  const api: any[] = []
+  t.sdk.api = async (path: string, options: any) => { api.push([path, options]); return { folded: true, topicid: "topic" } }
+  t.window.dispatchEvent({ type: "mn:foldBranch", detail: { requestId: "no-topic", noteid: "N1", folded: true } })
+  await foldFlush()
+  assert.match(t.calls.filter(call => call.name === "foldBranchReply").slice(-1)[0].payload.error, /缺少学习集/)
+  t.window.dispatchEvent({ type: "mn:foldBranch", detail: { requestId: "wrong-topic", noteid: "N1", notebookId: "other", folded: true } })
+  await foldFlush()
+  const mismatch = t.calls.filter(call => call.name === "foldBranchReply").slice(-1)[0].payload
+  assert.match(mismatch.error, /不一致/)
+  assert.equal(mismatch.dispatched, false)
+  assert.equal(mismatch.topicid, "topic", "回执带出场景实际学习集，便于诊断")
+  assert.equal(api.length, 0, "作用域不确定时一次都不写")
+  t.client.dispose()
+
+  // 界面状态读不到学习集时也不能写
+  const unknown = transport()
+  unknown.setSceneTopic(null)
+  let writes = 0
+  unknown.sdk.api = async () => { writes++; return { folded: true, topicid: "topic" } }
+  unknown.window.dispatchEvent({ type: "mn:foldBranch", detail: { requestId: "unknown-topic", noteid: "N1", notebookId: "topic", folded: true } })
+  await foldFlush()
+  const blind = unknown.calls.filter(call => call.name === "foldBranchReply").slice(-1)[0].payload
+  assert.match(blind.error, /无法确认场景当前学习集/)
+  assert.equal(blind.dispatched, false)
+  assert.equal(writes, 0, "无法确认作用域时一次都不写")
+  unknown.client.dispose()
+})
+
+test("折叠回执归一化跳过项，缺少题卡不回复，缺 mn.api 明确报错", async () => {
+  const missing = transport()
+  missing.window.dispatchEvent({ type: "mn:foldBranch", detail: { requestId: "fold-x", noteid: "N1", notebookId: "topic", folded: true } })
+  await foldFlush()
+  const failed = missing.calls.filter(call => call.name === "foldBranchReply").slice(-1)[0].payload
+  assert.match(failed.error, /mn\.api/)
+  assert.equal(failed.dispatched, true, "已过场景校验即按可能已派发记录")
+  missing.client.dispose()
+
+  const t = transport()
+  t.sdk.api = async () => ({ changed: [], skipped: [{ noteid: "n1", reason: "no_children" }], folded: true, topicid: "topic" })
+  t.window.dispatchEvent({ type: "mn:foldBranch", detail: { requestId: "fold-3" } })
+  await foldFlush()
+  assert.equal(t.calls.some(call => call.name === "foldBranchReply"), false, "没有题卡不下发")
+  t.window.dispatchEvent({ type: "mn:foldBranch", detail: { requestId: "fold-4", noteid: "N1", notebookId: "topic", folded: true } })
+  await foldFlush()
+  const sent = t.calls.filter(call => call.name === "foldBranchReply").slice(-1)[0].payload
+  assert.equal(sent.result.skipped.reason, "no_children")
+  assert.equal(sent.result.skipped.noteid, "n1")
+  t.client.dispose()
 })

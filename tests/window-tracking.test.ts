@@ -5,6 +5,8 @@ import { runInNewContext } from 'node:vm'
 import { windowOpacityFixture } from './window-opacity-fixture'
 
 function harness(show = true) {
+  const loads: Array<{ path: string; frame: any; attached: boolean; registered: boolean }> = []
+  let registered = false
   class View {
     frame: any; layer: any = { removeAnimationForKey() {} }; scrollView: any = {}
     hidden = false; children: any[] = []; superview: any
@@ -13,11 +15,19 @@ function harness(show = true) {
     set bounds(_value) {}
     addSubview(view: any) { view.superview = this; this.children.push(view) }
     removeFromSuperview() { this.superview = null }
-    addGestureRecognizer() {} loadRequest() {}
+    addGestureRecognizer() {}
+    loadRequest(path: string) {
+      loads.push({ path, frame: this.frame, attached: this.superview?.superview === host, registered })
+    }
   }
   const root = new View(), host = new View(), opacity = windowOpacityFixture(View)
+  const core = {
+    ...opacity,
+    enableMistakeDrag() { registered = true },
+    disableMistakeDrag() { registered = false },
+  }
   let methods: any
-  const scope: any = { __MN_ANSWER_CORE_GLOBAL__: opacity, UIWebView: View, UILabel: View,
+  const scope: any = { __MN_ANSWER_CORE_GLOBAL__: core, UIWebView: View, UILabel: View,
     UIColor: { clearColor() {}, blackColor() {}, grayColor() {} }, UIPanGestureRecognizer: class {},
     NSURL: { fileURLWithPath: (p: string) => p }, NSURLRequest: { requestWithURL: (p: string) => p },
     NSUserDefaults: { standardUserDefaults: () => ({ objectForKey() {}, setObjectForKey() {} }) } }
@@ -38,11 +48,11 @@ function harness(show = true) {
   const controller = api.createController('/addon', { window: host })
   if (show) api.showPanel(controller)
   function invoke(name: string, gesture: any) { scope.self = controller; return methods[name](gesture) }
-  return { api, controller, root, invoke }
+  return { api, controller, root, invoke, loads, isRegistered: () => registered }
 }
 
 test('经典面板首次打开时才创建 WebView，关闭和重开复用该实例', () => {
-  const { api, controller, root } = harness(false)
+  const { api, controller, root, loads, isRegistered } = harness(false)
   api.ensureLayout(controller)
   api.hidePanel(controller, false)
   assert.equal(api.isVisible(controller), false)
@@ -50,11 +60,21 @@ test('经典面板首次打开时才创建 WebView，关闭和重开复用该实
   api.showPanel(controller)
   const webView = controller.webView
   assert.ok(webView)
+  const { width, height } = controller.panelSurface.frame
+  assert.equal(loads.length, 1)
+  assert.equal(loads[0].path, "/addon/web-dist/index.html")
+  assert.equal(loads[0].attached, true)
+  assert.equal(loads[0].registered, true)
+  assert.equal(loads[0].frame.width, width)
+  assert.equal(loads[0].frame.height, height)
   assert.equal(root.hidden, true)
   assert.equal(api.isVisible(controller), true)
   api.hidePanel(controller)
+  assert.equal(isRegistered(), false)
   api.showPanel(controller)
   assert.equal(controller.webView, webView)
+  assert.equal(loads.length, 1)
+  assert.equal(isRegistered(), true)
 })
 
 test('从场景切回经典模式并恢复面板时，可以首次加载经典 WebView', () => {

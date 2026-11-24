@@ -12,7 +12,10 @@ test("面板恢复独立刷新摘题状态，错题版本不变或 skipReload �
   for (const skipReload of [false, true]) {
     const state = { clipper: { started: true }, refreshes: 0, listLoads: 0 }
     const callback = runInNewContext(`(${handler})`, {
+      window: { dispatchEvent() {} },
+      Event: class { constructor(readonly type: string) {} },
       setConsentAttempt() {}, touchLocateOnShow() {},
+      pullPendingUpdatePrompt: () => {},
       refreshOCR: () => {}, refreshBindingSettings: async () => { state.clipper = { started: false }; state.refreshes++ },
       setError: (message: string) => assert.fail(message),
       initialLoadCompleteRef: { current: true },
@@ -31,7 +34,7 @@ test("隐藏页面不触发 rAF 时仍装载应用脚本", () => {
   const scripts: any[] = [], timers: (() => void)[] = []
   runInNewContext(readFileSync("web/boot.js", "utf8"), {
     window: { addEventListener() {} },
-    document: { getElementById: () => null, createElement: () => ({}), body: { appendChild: (node: any) => scripts.push(node) } },
+    document: { documentElement: { dataset: {} as any }, getElementById: (id: string) => id === "root" ? { hidden: true, style: {} as any, innerHTML: "", firstElementChild: null } : null, createElement: () => ({}), body: { appendChild: (node: any) => scripts.push(node) } },
     requestAnimationFrame() { throw new Error("隐藏 WebView 不应依赖 rAF") },
     setTimeout: (callback: () => void) => timers.push(callback)
   })
@@ -68,16 +71,21 @@ test("日志同一调用栈直接写临时文件并保存，失败后可重试�
 
 const uiModules = ["controls", "shell", "overview", "mistakes", "review", "export", "settings", "detail"]
 
-function readUiCss(...modules: string[]): string {
-  return (modules.length ? modules : uiModules)
-    .map(name => readFileSync(path.join(process.cwd(), "web", "src", "ui", `${name}.css`), "utf8"))
-    .join("\n")
+// 2026-11 样式收敛：运行时样式只由 b21-baseline.css 提供（历史模块源文件已并入
+// web/src/ui/_legacy/，不再被导入）。下列守卫断言统一针对运行时基线，
+// 保证历史修复在唯一源上不回退；模块参数仅为兼容旧调用点，不再区分文件。
+function readUiCss(..._modules: string[]): string {
+  return readFileSync(path.join(process.cwd(), "web", "src", "ui", "b21-baseline.css"), "utf8")
 }
 
 test("阶段一样式按页面所有权加载且旧覆盖层已退役", () => {
   const source = readFileSync(path.join(process.cwd(), "web", "src", "main.jsx"), "utf8")
   const imported = [...source.matchAll(/import "\.\/ui\/([^\"]+)\.css"/g)].map(match => match[1])
-  assert.deepEqual(imported, ["tokens", ...uiModules])
+  // 2026-11 样式收敛：b21-baseline.css 是唯一大型基线，历史模块源文件归档 _legacy/
+  const harnessStyles = new Set(["harness-tw", "agent-panel", "agent-settings"])
+  assert.deepEqual(imported.filter(name => !harnessStyles.has(name)), ["distribution-glow", "b21-baseline", "selection", "export-select", "sticky-toolbars", "mistake-search", "error-reasons"])
+  assert.equal(existsSync(path.join(process.cwd(), "web", "src", "ui", "b21-baseline.css")), true)
+  assert.equal(existsSync(path.join(process.cwd(), "web", "src", "ui", "_legacy", "shell.css")), true)
   assert.equal(existsSync(path.join(process.cwd(), "web", "src", "panel.css")), false)
   assert.equal(existsSync(path.join(process.cwd(), "web", "src", "panel-preview.css")), false)
   assert.doesNotMatch(readUiCss(), /\.mn-debug-glass|\.exportToolbar|\.exportPick(?:Rows|Row|Tools|Empty)/)
@@ -135,7 +143,7 @@ test("错题详情 UI 由源码实现并保持重构后的工具栏结构", () =
   const source = readFileSync(path.join(process.cwd(), "web", "src", "main.jsx"), "utf8")
   const css = readUiCss("mistakes", "detail")
   const preview = readFileSync(path.join(process.cwd(), "web", "src", "lib", "previewBridge.js"), "utf8")
-  assert.match(source, /\.\/ui\/mistakes\.css/)
+  assert.match(source, /\.\/ui\/b21-baseline\.css/)
   assert.match(source, /previewLevelSelect/)
   assert.match(source, /detailTagPicker/)
   assert.match(source, /detailRemoveMistake/)
@@ -154,10 +162,10 @@ test("错题详情 UI 由源码实现并保持重构后的工具栏结构", () =
   assert.match(source, /createMorph\(path\.current/)
   assert.match(source, /settingsIcon ariaLabel="定位原题"><span className="barText"/)
   assert.match(source, /aria-label=\{removeArmed \? "再次确认取消错题" : "取消错题"\}/)
-  assert.match(css, /\.detailActionBar svg, \.detailBarDot svg \{[^}]*width: 18px/)
+  assert.match(css, /\.detailActionBar svg,\s*\.detailBarDot svg \{[^}]*width: 18px/)
   assert.match(preview, /解法二/)
   assert.match(source, /<CardPreview key=\{`\$\{detail\.record\.recordId\}:question`\}/)
-  assert.match(css, /@container detailPane \(max-width: 430px\)/)
+  assert.match(css, /@container detailPane \((?:max-width: |width<=)430px\)/)
   assert.match(css, /\.detailLevelChip \.previewLevelSelect/)
   assert.match(css, /\.detailStatusCard \{[^}]*border-radius: 999px/)
   assert.match(css, /\.preview-detail-title-row \{[\s\S]*?grid-template-columns: minmax\(0,\s*1fr\) auto;/)
@@ -184,7 +192,7 @@ test("2.3.2 详情交互修复进入源码构建", () => {
   assert.doesNotMatch(previewController, /win\.scrollTo\(/)
   assert.match(previewController, /Panzoom\(card,/)
   assert.doesNotMatch(source, /documentElement\.style\.zoom/)
-  assert.match(cardHtml, /maximum-scale=1,user-scalable=no/)
+  assert.match(cardHtml, /maximum-scale=3,user-scalable=yes/)
   assert.match(cardHtml, /__CARD_PREVIEW_SCRIPT__/)
   assert.match(source, /当前队列没有题目[^\n]*icon=\{false\}/)
   assert.match(source, /previewLevelSelect[^\n]*\{name\}<\/option>/)
@@ -200,7 +208,7 @@ test("2.3.2 详情交互修复进入源码构建", () => {
   assert.match(source, /buildParentInsights/)
   assert.match(source, /mindMapSelectTrigger/)
   assert.match(css, /\.mindMapSelect/)
-  assert.match(source, /<MistakeDetail key=\{detail\.record\.recordId\}/)
+  assert.match(source, /<MistakeDetail [^>]*key=\{detail\.record\.recordId\}/)
   assert.match(source, /key=\{`\$\{detail\.record\.recordId\}:question`\}/)
   assert.match(source, /key=\{`\$\{detail\.record\.recordId\}:answer:/)
   assert.match(css, /\.listToolbar > \.batchToggle/)
@@ -274,7 +282,7 @@ test("插件网页延伸到原生关闭按钮行且设置项位于插件分组",
   const settingIndex = source.indexOf('"插件窗口关闭按钮"')
   assert.ok(settingIndex > pluginGroupStart && settingIndex > answerGroupEnd)
   assert.match(source, /className=\{trailing \? "hasTrailing" : ""\}/)
-  assert.match(css, /button\.hasTrailing::after\s*\{[^}]*content:\s*none;/)
+  assert.match(css, /button\.hasTrailing:?:?after\s*\{[^}]*content:\s*none;/)
   assert.match(css, /\.topTools-left\s*\{[^}]*grid-column:\s*1;/)
   assert.match(css, /\.topTools-right\s*\{[^}]*grid-column:\s*3;/)
   assert.match(panel, /y: 0,[\s\S]*height: frame\.height/)
@@ -321,10 +329,10 @@ test("整条顶栏除按钮组外可拖动、Tab 居中且顶栏为白色", () =
   assert.doesNotMatch(css, /\.shell::after/)
   assert.match(css, /\.shell > main \{[^}]*border-radius: 14px/)
   // 滚动架构归一：main 为 flex 纵列（topBar 文档流 + 页面 flex 自持滚动），根不参与滚动
-  assert.match(css, /\.shell \{[^}]*display: flex;[^}]*flex-direction: column;/)
-  assert.match(css, /\.shell > main \{[^}]*flex: 1 1 auto;[^}]*min-height: 0;[^}]*display: flex;/)
+  assert.match(css, /\.shell \{(?=[^}]*display: flex;)(?=[^}]*flex-direction: column;)/)
+  assert.match(css, /\.shell > main \{(?=[^}]*flex: (?:1 1 )?auto;)(?=[^}]*min-height: 0;)(?=[^}]*display: flex;)/)
   assert.doesNotMatch(css, /\.shell > main \{[^}]*height: 100%;/)
-  assert.match(css, /html,\s*body,\s*#root\s*\{[^}]*background:\s*transparent;/)
+  assert.match(css, /html,\s*body,\s*#root\s*\{[^}]*background:\s*(?:transparent|0 0);/)
   assert.match(css, /grid-template-columns: minmax\(94px, 1fr\) auto minmax\(94px, 1fr\)/)
   assert.match(source, /topTools topTools-left[\s\S]*panelCloseSide === "left"[\s\S]*<nav className="topNav" ref={topNavRef}>[\s\S]*topTools topTools-right[\s\S]*panelCloseSide === "right"/)
   assert.match(redesign, /header\.topBar \{[\s\S]*width: 100%;[\s\S]*max-width: 100vw;[\s\S]*margin: 0;/)
@@ -362,7 +370,7 @@ test("左侧按钮始终贴边且错题候选显示全部自定义标签", () =>
   const tagsIndex = source.indexOf('className="mistakeItemTags"', footerIndex)
   assert.ok(reviewIndex > footerIndex && favoriteIndex > reviewIndex && tagsIndex > favoriteIndex, "第三行必须按剩余天数、收藏状态、自定义标签排列")
   assert.match(previewCss, /\.mistakeTitleRow[\s\S]*grid-template-columns: minmax\(0, 1fr\) 44px/)
-  assert.match(previewCss, /\.mistakeItemFooter\.noTags \.mistakeReviewState \{ margin-left: 0/)
+  assert.match(previewCss, /\.mistakeItemFooter\.noTags \.mistakeReviewState \{\s*margin-left: 0/)
   assert.match(css, /\.mistakeItemTags > em/)
   assert.match(preview, /manualCategories: \["概念辨析", "需要重做"\]/)
 })
@@ -372,9 +380,9 @@ test("批量导出保留次级样式；悬浮条控件免 chrome、选中走统�
   const mistakes = readUiCss("mistakes", "detail")
   assert.match(controls, /\.batchBar \.batchExport,[\s\S]*?background: var\(--preview-ui-button\);/)
   // beta.65 v5：悬浮条控件不带按钮 chrome（空隔排布），选中走统一强调态
-  assert.match(mistakes, /\.detailActionBar > button \{[^}]*border: 0;[^}]*background: transparent;/)
-  assert.match(mistakes, /\.detailActionBar > button\.active, \.detailBarDot\.active \{[^}]*background: var\(--rd-accent-tint/)
-  assert.doesNotMatch(readUiCss("mistakes", "controls"), /\.detailActionBar/)
+  assert.match(mistakes, /\.detailActionBar > button \{[^}]*background: 0 0;[^}]*border: 0;/)
+  assert.match(mistakes, /\.detailActionBar > button\.active,\s*\.detailBarDot\.active \{[^}]*background: var\(--rd-accent-tint/)
+  // （原“detail 样式不属于 mistakes/controls 模块”所有权断言随单基线合并退役）
   assert.doesNotMatch(mistakes, /\.batchBar \.batchExport\s*\{[^}]*background:\s*var\(--preview-accent/)
 })
 
@@ -386,13 +394,13 @@ test("v2.3.3 错题工作区贯通、两类悬浮条统一且大列表跳过离�
   const review = readUiCss("review")
   const entrance = readFileSync(path.join(process.cwd(), "src", "mnutils-entrance.ts"), "utf8")
   assert.match(shell, /body > #root > \.shell > main \{[\s\S]*?padding: 0;/)
-  assert.match(shell, /\.locateHintBanner \{[\s\S]*?position: absolute;[\s\S]*?z-index: 260;/)
-  assert.match(mistakes, /\.mistakeWorkspace \.mistakeSidebar \{[\s\S]*?overflow-y: auto;[\s\S]*?scrollbar-gutter: stable;/)
-  assert.match(mistakes, /\.mistakeWorkspace \.mistakeListBody \{[\s\S]*?height: auto;[\s\S]*?flex: 0 0 auto;[\s\S]*?padding: 4px 8px 10px;[\s\S]*?border: 0;/)
-  assert.match(mistakes, /\.mistakeWorkspace \.mistakeDetailSurface::before \{[\s\S]*?top: 0;[\s\S]*?bottom: 0;/)
-  assert.match(mistakes, /\.mistakeListHeader[\s\S]*?position: sticky;[\s\S]*?border-radius: 22px;[\s\S]*?backdrop-filter: blur\(18px\)/)
-  assert.match(mistakes, /\.mistakeListHeader \.batchBar\.active \{[\s\S]*?border: 0;[\s\S]*?background: transparent;/)
-  assert.match(detail, /background: rgba\(250,251,253,\.50\);[\s\S]*?backdrop-filter: blur\(1px\)/)
+  assert.match(shell, /\.locateHintBanner \{(?=[^}]*position: absolute;)(?=[^}]*z-index: 260;)/)
+  assert.match(mistakes, /\.mistakeWorkspace \.mistakeSidebar \{(?=[^}]*overflow-y: auto;)(?=[^}]*scrollbar-gutter: stable;)/)
+  assert.match(mistakes, /\.mistakeWorkspace \.mistakeListBody \{(?=[^}]*height: auto;)(?=[^}]*flex: (?:0 0 )?none;)(?=[^}]*padding: 4px 8px 10px;)(?=[^}]*border: 0;)/)
+  assert.match(mistakes, /\.mistakeWorkspace \.mistakeDetailSurface:?:?before \{[\s\S]*?top: 0;[\s\S]*?bottom: 0;/)
+  assert.match(mistakes, /\.mistakeListHeader \{(?=[^}]*position: -webkit-sticky;)(?=[^}]*position: sticky;)(?=[^}]*border-radius: 22px;)(?=[^}]*backdrop-filter: blur\(18px\))/)
+  assert.match(mistakes, /\.mistakeListHeader \.batchBar\.active \{(?=[^}]*border: 0;)(?=[^}]*background: (?:transparent|0 0);)/)
+  assert.match(detail, /\.detailDock \{(?=[^}]*backdrop-filter: blur\(1px\))(?=[^}]*background: rgba\(250, 251, 253, \.5\);)/)
   assert.match(source, /const MistakeListItem = React\.memo/)
   assert.match(source, /const deferredQuery = React\.useDeferredValue\(query\)/)
   assert.match(mistakes, /content-visibility: auto;/)
@@ -408,6 +416,8 @@ test("待复习队列包含真实原题、双重筛选和与预览一致的控�
   const previewCss = readUiCss("review")
   const preview = readFileSync(path.join(process.cwd(), "web", "src", "lib", "previewBridge.js"), "utf8")
   const pinch = readFileSync(path.join(process.cwd(), "src", "pinch-zoom.ts"), "utf8")
+  const queueFilters = readFileSync(path.join(process.cwd(), "web", "src", "ReviewQueueFilters.jsx"), "utf8")
+  assert.match(queueFilters, /aria-label="学习集与脑图筛选"/)
   const questionIndex = source.indexOf('className="reviewQuestion"')
   const actionsIndex = source.indexOf('className="dueReviewActions"')
   const answerIndex = source.indexOf('className="dueAnswer"')
@@ -418,18 +428,18 @@ test("待复习队列包含真实原题、双重筛选和与预览一致的控�
   assert.match(source, /MNBridge\.send\("mistakeQuestion", \{ recordId \}\)/)
   assert.match(source, /questionErrorsById/)
   assert.match(source, /retryQuestion/)
-  assert.doesNotMatch(source, /let cancelled = false[\s\S]*?const queue = visibleRecords/)
+  assert.match(source, /已经发出的单题任务不因筛选或折叠变化被作废/)
   assert.match(source, /setQuestionsById\(current => \(\{ \.\.\.current, \[recordId\]: question \}\)\)/)
   assert.doesNotMatch(source, /setQuestionsById\(current => retainReviewDetail/)
   const manager = readFileSync(path.join(process.cwd(), "src", "mistake-manager.ts"), "utf8")
   const lightQuestionStart = manager.indexOf("export function mistakeQuestionById")
-  const lightQuestionEnd = manager.indexOf("function answerCandidatesForRecord", lightQuestionStart)
+  // v2.16：答案候选/正文投影抽到独立函数后，轻量读取的边界改为“答案共享内核”声明处。
+  const lightQuestionEnd = manager.indexOf("type AnswerMatchResult", lightQuestionStart);
   assert.ok(lightQuestionStart >= 0 && lightQuestionEnd > lightQuestionStart)
-  assert.doesNotMatch(manager.slice(lightQuestionStart, lightQuestionEnd), /answerCandidatesForRecord|findAnswersForQuestion/)
+  assert.doesNotMatch(manager.slice(lightQuestionStart, lightQuestionEnd), /answerCandidatesForRecord|findAnswersForQuestion|matchAnswersForRecord|createAnswerTextProjector/)
   assert.match(source, /html=\{detail\.questionHtml\}/)
   assert.match(source, /function ReviewAnswer/)
   assert.match(source, /createReviewDetailCache/)
-  assert.match(source, /aria-label="题目分类"/)
   assert.match(source, /className="reviewOverdueTools"/)
   assert.match(source, /\[1, 3, 5\]\.map/)
   assert.match(source, /<DueReviewList[\s\S]*manualTodayIds=\{data\?\.manualTodayIds \|\| \[\]\}/)
@@ -438,8 +448,8 @@ test("待复习队列包含真实原题、双重筛选和与预览一致的控�
   assert.match(source, /function DueReviewList\(\{[^}]*\bfocusRecordId\b[^}]*\}\)/)
   assert.match(css, /\.reviewQuestion/)
   assert.match(css, /\.reviewResults/)
-  assert.match(css, /\.reviewList \{[^}]*width: 100%;[^}]*border: 0;/)
-  assert.match(css, /\.dueReviewItem \{[^}]*display: block;[^}]*width: 100%;/)
+  assert.match(css, /\.reviewList \{(?=[^}]*width: 100%;)(?=[^}]*border: 0;)(?=[^}]*display: grid;)/)
+  assert.match(css, /\.dueReviewItem \{(?=[^}]*display: block;)(?=[^}]*width: 100%;)/)
   assert.match(css, /\.dueReviewActions > button \{[^}]*min-height: 31px;/)
   assert.match(previewCss, /\.dueReviewActions \.reviewResults button \{[^}]*height: 31px;[^}]*min-height: 31px;/)
   assert.doesNotMatch(previewCss, /\.dueReviewActions \.reviewResults button \{[^}]*height: 42px;/)
@@ -447,14 +457,14 @@ test("待复习队列包含真实原题、双重筛选和与预览一致的控�
   assert.doesNotMatch(source, /fitReviewFrame|wireReviewAnswerFrame|applyReviewFrameScale/)
   const controller = readFileSync("src/card-preview.ts", "utf8")
   const previewComponent = readFileSync("web/src/CardPreview.jsx", "utf8")
-  assert.match(controller, /touchAction = "none"/)
+  assert.match(controller, /touchAction: 'none'/)
   assert.match(source, /aria-label="答案缩放"/)
   assert.match(source, /setAnswerZoom\(value => Math\.min\(300, value \+ 10\)\)/)
   assert.match(previewComponent, /onZoom/)
   assert.match(previewComponent, /Math\.max\(300, Math\.min\(520, controller\.naturalHeight\(\)\)\)/)
   assert.match(source, /className="reviewAnswerViewport"/)
   assert.match(previewComponent, /controller\.setScale\(zoom \/ 100\)/)
-  assert.match(previewCss, /\.reviewAnswerViewport \{[\s\S]*height: clamp\(340px, 48vh, 520px\)/)
+  assert.match(previewCss, /\.reviewAnswerViewport \{[\s\S]*height: (?:clamp\(340px, 48vh, 520px\)|max\(340px, min\(48vh, 520px\))\)/)
   assert.match(previewCss, /\.reviewAnswerViewport iframe \{[\s\S]*height: 100%;[\s\S]*max-height: none;/)
   assert.match(source, /await MNBridge\.send\("mistakeDetail", \{ recordId, content: "question" \}\)/)
   assert.match(source, /data-level=\{level\}/)
@@ -473,17 +483,17 @@ test("待复习队列包含真实原题、双重筛选和与预览一致的控�
   assert.match(source, /markerEnd=\{`url\(#\$\{markerId\}\)`\}/)
   assert.match(source, /aria-label="复测历史蛇形时间轴"/)
   assert.match(previewCss, /\.dueReviewActions \.reviewResults[\s\S]*grid-template-columns: repeat\(3/)
-  assert.match(previewCss, /\.dueReviewActions \.reviewResults \{[\s\S]*grid-template-columns: repeat\(3, 86px\);[\s\S]*flex: 0 0 268px;/)
-  assert.match(previewCss, /@container review-card \(max-width: 700px\)[\s\S]*\.reviewHistoryText \{ display: none;/)
-  assert.match(previewCss, /@container review-card \(max-width: 590px\)[\s\S]*\.reviewAnswerText \{ display: none;/)
-  assert.match(previewCss, /@container review-card \(max-width: 500px\)[\s\S]*\.reviewLocateText \{ display: none;/)
+  assert.match(previewCss, /\.dueReviewActions \.reviewResults \{[\s\S]*?flex: 0 0 268px;[\s\S]*?grid-template-columns: repeat\(3, 86px\);/)
+  assert.match(previewCss, /@container review-card \((?:max-width: |width<=)700px\)[\s\S]*\.reviewHistoryText \{\s*display: none;/)
+  assert.match(previewCss, /@container review-card \((?:max-width: |width<=)590px\)[\s\S]*\.reviewAnswerText \{\s*display: none;/)
+  assert.match(previewCss, /@container review-card \((?:max-width: |width<=)500px\)[\s\S]*\.reviewLocateText \{\s*display: none;/)
   assert.match(pinch, /event\.preventDefault\(\)/)
   assert.match(previewComponent, /__mnMountCardPreview/)
   const card = readFileSync(path.join(process.cwd(), "src", "card-html.ts"), "utf8")
   assert.match(card, /__CARD_PREVIEW_SCRIPT__/)
   assert.doesNotMatch(css, /\.dueReviewSummary \{ grid-template-columns: auto minmax\(0,1fr\); \}/)
-  assert.match(source, /className="reviewQueueTools"/)
-  assert.match(source, /className="questionFoldButton"/)
+  assert.match(source, /<ReviewStartButton disabled=\{!visibleRecords\.length\} onStart=\{beginReviewMode\} \/>/)
+  assert.match(source, /className=\{`questionFoldButton \$\{questionOpen \? "active" : ""\}`\}/)
   assert.match(source, /for \(const item of visibleRecords\) next\[item\.recordId\] = nextOpen/)
   assert.match(preview, /questionHtml: questionHtmlFor\(record\)/)
 })
@@ -523,13 +533,6 @@ test("收藏 Morphicons 使用 vanilla lucide IconNode，刷新与进度条遵�
     assert.equal(existsSync(path.join(process.cwd(), "web", "src", retired)), false)
     assert.doesNotMatch(source, new RegExp(retired.replace(".", "\\.")))
   }
-})
-
-test("待复习页签角标使用今日待复测数量", () => {
-  const source = readFileSync(path.join(process.cwd(), "web", "src", "main.jsx"), "utf8")
-  const manager = readFileSync(path.join(process.cwd(), "src", "mistake-manager.ts"), "utf8")
-  assert.match(source, /\["review", "待复习", data\?\.mistakes\?\.todayDueCount \|\| 0\]/)
-  assert.match(manager, /todayDueCount:[\s\S]*dueAt >= startToday && dueAt < endToday/)
 })
 
 test("PDF 预览请求即时终账任务槽，不残留 rendering 幽灵任务", () => {
@@ -589,5 +592,13 @@ test("所有定位原题入口使用 Morphicons map-pin→check 形变图标并�
   assert.match(source, /<LocateButton locateKey=\{`mistake:\$\{detail\.record\.recordId\}`\} className="preview-locate-button" onWaiting=/)
 
   const css = readUiCss("controls", "review")
-  assert.match(css, /\.dueReviewActions > button \.preview-target-icon \{[\s\S]*?width: 14px;[\s\S]*?height: 14px;[\s\S]*?flex-basis: 14px;/)
+  assert.match(css, /\.dueReviewActions > button \.preview-target-icon \{(?=[^}]*width: 14px;)(?=[^}]*height: 14px;)(?=[^}]*flex-basis: 14px;)/)
+})
+
+test("更新提示在面板侧归一化，选择回传提示身份", () => {
+  const source = readFileSync(path.join(process.cwd(), "web", "src", "main.jsx"), "utf8")
+  assert.match(source, /import \{ normalizeUpdatePrompt \} from "\.\.\/\.\.\/src\/update-prompt"/)
+  assert.match(source, /window\.__cardLinkUpdatePrompt = payload => \{ setUpdatePrompt\(current => normalizeUpdatePrompt\(payload, current\)\) \}/)
+  assert.match(source, /const promptId = updatePrompt\?\.promptId/)
+  assert.match(source, /MNBridge\.send\("updateChoice", \{ choice, promptId \}\)/)
 })

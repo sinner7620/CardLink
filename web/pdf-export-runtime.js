@@ -610,13 +610,13 @@
 
   async function generatePdf() {
     if (typeof window.html2canvas !== "function") throw new Error("html2canvas 未加载");
-    if (!window.jspdf || typeof window.jspdf.jsPDF !== "function") throw new Error("jsPDF 未加载");
+    if (typeof window.createCardLinkPdf !== "function") throw new Error("PDF 写入器未加载");
     var manifest = window.__MN_PDF_MANIFEST__;
     if (!manifest || !manifest.units.length) throw new Error("PDF 任务清单为空");
     runtimeState.pages = 0;
     var total = await paginate(manifest, async function () {});
     runtimeState.totalPages = total;
-    var pdf = new window.jspdf.jsPDF({ orientation: "portrait", unit: "pt", format: "a4", compress: true, precision: 16 });
+    var pdf = window.createCardLinkPdf();
     async function render(view, pageNumber) {
       checkCancelled();
       runtimeState.stage = "rasterizing";
@@ -628,9 +628,7 @@
           ignoreElements: function (element) { return element.tagName === "IFRAME" || element.hasAttribute("data-pdf-control"); },
           width: 703, height: view.height });
         checkCancelled();
-        if (pageNumber > 1) pdf.addPage("a4", "portrait");
-        var jpeg = canvas.toDataURL("image/jpeg", 0.92);
-        pdf.addImage(jpeg, "JPEG", 56, 56, 595.28 - 112, 841.89 - 112);
+        pdf.addPage(canvas);
         if (window.__MN_PDF_PREVIEW_MODE__) {
           var preview = document.createElement("canvas");
           try {
@@ -648,11 +646,11 @@
     }
     render.rendering = true;
     var written = await paginate(manifest, render);
-    if (!written || written !== total || pdf.getNumberOfPages() !== total) throw new Error("PDF 页数与分页计划不一致");
+    if (!written || written !== total || pdf.getPageCount() !== total) throw new Error("PDF 页数与分页计划不一致");
     checkCancelled();
     progress("serializing", written, total);
     await yieldPage();
-    pdfBytes = new Uint8Array(pdf.output("arraybuffer"));
+    pdfBytes = pdf.finish();
     pdf = null;
     checkCancelled();
     var base64Length = 4 * Math.ceil(pdfBytes.length / 3);

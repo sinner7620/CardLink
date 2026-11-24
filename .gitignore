@@ -10,12 +10,15 @@
 !/scripts/
 !/tests/
 !/docs/
+!/cardlink-harness/
 !/AGENTS.md
 !/README.md
 !/THIRD_PARTY_NOTICES.txt
+!/LICENSE
 !/package.json
 !/pnpm-lock.yaml
 !/pnpm-workspace.yaml
+!/.oxlintrc.json
 !/tsconfig.json
 !/build.mjs
 # 发布说明统一放入已允许跟踪的 docs/release-notes/，根目录不再接纳。

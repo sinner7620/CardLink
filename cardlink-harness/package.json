@@ -1,0 +1,21 @@
+{
+  "name": "cardlink-harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CardLink Agent Harness — H1 错题只读分析 Agent 服务（规范 docs/design/cardlink-harness-h1.md）",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "tsx --test tests/domain/domain.test.ts tests/contract/session-store.test.ts tests/application/statistics.test.ts tests/application/tools.test.ts tests/application/policy-guard.test.ts tests/application/agent-service.test.ts tests/application/review-policy.test.ts tests/application/provider-router.test.ts tests/application/bridge.test.ts tests/application/bridge-session-commands.test.ts tests/application/session-management.test.ts tests/application/finish-reason.test.ts tests/application/continue-run.test.ts tests/application/citation-resolver.test.ts tests/application/run-lifecycle.test.ts tests/adapters/jsb-sqlite.test.ts tests/adapters/provider-finish-reason.test.ts tests/integration/http.test.ts tests/integration/provider-adapter.test.ts tests/harness/p0-core.test.ts tests/application/versioned-repository.test.ts tests/application/legacy-view.test.ts tests/application/versioned-adapter.test.ts tests/platform/platform.test.ts tests/platform/jsb-entry.test.ts tests/harness/snapshot-builder.test.ts tests/harness/agent-loop-e2e.test.ts tests/adapters/provider-persistence.test.ts tests/adapters/model-catalog.test.ts tests/application/provider-catalog-bridge.test.ts tests/application/reconcile-and-scope.test.ts tests/application/tool-executor.test.ts tests/application/context-compaction.test.ts tests/application/context-budget.test.ts tests/application/context-management.test.ts tests/application/tool-discovery.test.ts tests/application/review-history-paging.test.ts tests/harness/tool-discovery-e2e.test.ts tests/application/coverage-report.test.ts tests/application/answer-projection.test.ts tests/application/data-freshness.test.ts tests/application/budget-tiers.test.ts tests/application/continue-snapshot.test.ts tests/application/reconcile-budget.test.ts tests/application/repeated-review-errors.test.ts tests/harness/assistant-ui-v217.test.ts",
+    "test:live": "H1_LIVE_MODEL=1 tsx --test tests/integration/live-model.test.ts",
+    "build": "tsc --noEmit",
+    "build:jsb": "node scripts/build-jsb.mjs",
+    "serve": "tsx src/cli-main.ts serve",
+    "h1": "tsx src/cli-main.ts"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.6",
+    "tsx": "4.20.3",
+    "typescript": "5.8.3"
+  }
+}

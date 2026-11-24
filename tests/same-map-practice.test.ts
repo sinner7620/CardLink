@@ -5,6 +5,12 @@ import { readFileSync } from "node:fs"
 import { runInNewContext } from "node:vm"
 import { transpileModule } from "typescript"
 import { collectQuestionTree, questionIdsInTree } from "../src/quick-menu-selection"
+import { createFoldHost, loadMindmapFold } from "./mindmap-fold-fixture"
+
+// 未授权场景面板：折叠优先不可用，这些用例验证沿用原有遮盖流程。
+function unavailableFold() {
+  return loadMindmapFold(createFoldHost({ available: false }))
+}
 
 class MaskTestLayer {
   superlayer: any; sublayers: MaskTestLayer[] = []; opacity = 1; additions = 0
@@ -54,6 +60,7 @@ function lifecycleHarness(settings: any = { answerMaskStyle: "dark" }) {
     require: (name: string) => name === "./base64" ? { decodeBase64Ascii: () => "image" }
       : name === "./window-opacity" ? windowOpacityFixture(View) : name === "./settings" ? { loadMatcherSettings: () => settings }
       : name === "./note-navigation" ? { focusNoteInMindMapFocusMode: () => focus() }
+        : name === "./mindmap-fold" ? unavailableFold()
         : { MN: { currnetNotebookId: "book", notebookController: controller }, delay: () => pause(), showHUD() {} }
   })
   return { api: exports, map, card, View, controller, timers, answerNode, questionNode,
@@ -165,6 +172,7 @@ test("聚焦期间结束做题，旧启动流程不再选择卡片或启动遮�
   h.setFocus(() => new Promise(resolve => { complete = resolve }))
   h.map.selViewLst = []
   const pending = h.api.startSameMapPractice("book", ["question"])
+  await new Promise(resolve => setImmediate(resolve))
   h.api.stopSameMapPractice()
   complete("focused")
   const result = await pending
@@ -179,6 +187,7 @@ test("新会话已经启动时，晚完成的旧聚焦不选择旧题或结束�
   let complete!: (result: string) => void
   h.setFocus(() => new Promise(resolve => { complete = resolve }))
   const pending = h.api.startSameMapPractice("book", ["question"])
+  await new Promise(resolve => setImmediate(resolve))
   h.setFocus(async () => "focused")
   assert.equal((await h.api.startSameMapPractice("book", ["question"])).started, true)
   complete("focused")
@@ -335,6 +344,7 @@ test("当前脑图按父节点列题；勾选题目只遮盖直接子卡并可�
       ? { loadMatcherSettings: () => ({ answerMaskStyle: "dark", sceneWorkbenchEnabled: true }) }
       : name === "./review-mode"
         ? { mountPracticeNavigationToolbar() {}, removePracticeNavigationToolbar() {} }
+        : name === "./mindmap-fold" ? unavailableFold()
         : name === "./note-navigation"
           ? { locateNoteInCurrentMindMap: async () => { assert.fail("列表跳转必须定位并聚焦") }, focusNoteInMindMapFocusMode: async (id: string) => { focusedIds.push(id); return "focused" } }
           : { MN: { currnetNotebookId: "book", notebookController: { mindmapView: map } }, delay: async () => {} }

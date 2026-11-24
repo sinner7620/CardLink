@@ -1,6 +1,6 @@
 # WebBridgeCommands.js — 面板命令层与 PDF 管线
 ## 职责
-面板命令 dispatch（closePanel/pdfTaskStatus/pdfTaskCancel 先行，其余进 rails-core）；exportMistakes/previewMistakeExport 的 renderPdf 拦截 → 隐藏 webview 渲染 → html2canvas+jsPDF → 分块回传；PDF 页边距 56pt 单页追加；任务式导出的任务表与取消。
+面板命令 dispatch（closePanel/pdfTaskStatus/pdfTaskCancel 先行，其余进 rails-core）；exportMistakes/previewMistakeExport 的 renderPdf 拦截 → 隐藏 WebView 逐页截图 → JPEG 写入 A4 PDF → 分块回传。PDF 页边距 56pt，任务支持查询与取消。
 ## 边界
 - 导出任务式受理（立即应答 taskId），预览保持原同步行为
 - 初始准备按题数设超时；分页/页面完成事件重置 120s 无进展看门狗，传输也按块重置超时
@@ -9,14 +9,14 @@
 ## v2.4.7-b1 任务协议
 PDF 正式导出在读取题卡前返回 `taskAccepted/taskId`，状态为 preparing → rendering → saving → generated/error/cancelled。generated 表示本地 PDF 已生成且调用了系统保存面板，`saved=false` 不代表用户取消，也不宣称目标位置保存完成。准备过程互斥；取消后旧准备退出前不启动新任务。状态与取消核对传入 ID，过期 ID 不会操作新任务。
 
-预览沿用等待结果的请求，返回快速预览的 previewCount/truncated/missing；有活动导出时拒绝启动预览。图片在准备时保存为 UTF-8 资源脚本，原生复制到本次渲染页目录，以相对脚本回填原始 data URI；图片不经二进制字符串重编码。原生暂存去除逐卡预览脚本后的 HTML；绘制器按页尺寸分段生成画布，优先避开内容块及文字行，溢出的固定题数组也继续分页。最终 jsPDF 数据仍会占内存；完整预览已删除，快速预览最多三题。
+预览沿用等待结果的请求，返回快速预览的 previewCount/truncated/missing；有活动导出时拒绝启动预览。图片在准备时保存为 UTF-8 资源脚本，原生复制到本次渲染页目录，以相对脚本回填原始 data URI；图片不经二进制字符串重编码。原生暂存去除逐卡预览脚本后的 HTML；绘制器按页尺寸分段生成画布，优先避开内容块及文字行，溢出的固定题数组也继续分页。写入器嵌入每页 JPEG 原始字节，最终 PDF 仍在内存组装。快速预览最多三题。
 
 
 ## v2.4.7-b11 就绪与图片修复
 
 34% 表示原生已请求隐藏 WebView 检查就绪，尚未进入绘制。只保留 web/pdf-export-runtime.js 一份就绪实现，核心 HTML 和原生不再各注入一份；定时器驱动布局采样，字体最多等待 3 秒、图片 5 秒、布局 6 秒，不依赖 requestAnimationFrame，也不反复把手写 canvas 编成 PNG 做指纹。
 
-图片及手写资源脚本与 html2canvas/jsPDF/runtime 均复制到本次任务的 `pdf-runtime/<taskId>/`，释放 WebView 后删除该临时任务目录。任一图片未加载或损坏会报告错误并停止，不生成全是失败占位的文件；快速预览缺少页面图时使用 PDF URL，不回退到已失去资源目录的 HTML。
+图片及手写资源脚本与 html2canvas、JPEG PDF 写入器、导出运行时均复制到本次任务的 `pdf-runtime/<taskId>/`，释放 WebView 后删除该临时任务目录。任一图片未加载或损坏会报告错误并停止，不生成全是失败占位的文件；快速预览缺少页面图时使用 PDF URL，不回退到已失去资源目录的 HTML。
 
 `pdfExportStage` 日志记录 html.staged（资产数和 HTML 长度）、ready.begin、raster.begin、render.error；runtime 的 __MN_PDF_EXPORT_STATE__ 提供当前就绪/绘制阶段及错误，便于区分资源等待与后续画布问题，不包含图片内容。
 

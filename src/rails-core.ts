@@ -1,10 +1,12 @@
 import { startLocalCacheTask, localCacheTaskStatus, isLocalCacheClearing } from "./local-cache"
 import { ocrBridge } from './ocr-service'
+import { harnessCall } from './harness/runtime'
 import { ocrSettingsBridge } from './ocr-settings'
 import { closeCardMistakePanel } from './card-mistake-panel'
 import { exportSceneTemplate, openTemplateConverter } from './template-export'
 import { createWindowSurface, setWindowFrame } from "./window-opacity"
 import { chooseErrorReason } from './error-reasons'
+import { syncAnswerCardInkSetting } from "./answer-card-view"
 import { delay, MN, NodeNote, select, showHUD } from "marginnote"
 import { isSceneMode, clipperSnapshot, recordClipperTool, saveClipperSetting, saveClipperAnswerSetting, configureClipperTitleFormat } from "./question-clipper"
 import { openClipperQuickMenu, onClipperEnd, onClipperBindMother, onClipperResetQuestion, onClipperEditTitle } from "./mnutils-entrance"
@@ -107,7 +109,7 @@ import {
   setMistakeFavoriteById,
   setMistakeCategoryById
 } from "./mistake-manager"
-import { checkForUpdates, configureUpdatePath, setDebugUpdateDownloads, setDebugAutoInstallUpdates, showUpdateStatus } from "./updater"
+import { checkForUpdates, configureUpdatePath, pendingUpdatePrompt, resolveUpdateChoice, setDebugUpdateDownloads, setDebugAutoInstallUpdates, showUpdateStatus } from "./updater"
 import { runTelemetryConnectivityTest } from "./telemetry"
 import { exportMistakes, previewMistakeExport, cancelMistakeExportPreparation, mistakeExportPreparationStatus } from "./mistake-export"
 import { captureDiagnosticError, clearNavigationRuntimeLog, consumePendingLocateHint, exportNavigationRuntimeLog, focusNoteInFloatMindMap, recordRuntimeState } from "./note-navigation"
@@ -115,6 +117,8 @@ import { presentError } from "./error-messages"
 import { CardLinkError } from "./errors"
 import { isAnswerIndexError } from "./answer-index-recovery"
 import { loadMatcherSettings, saveMatcherSettings } from "./settings"
+import { linkMistakeOnDrop } from "./mistake-card-link"
+import { armMistakeDrag, cancelMistakeDrag, disableMistakeDrag, enableMistakeDrag } from "./mistake-drag-controller"
 
 function selectedNode(): NodeNote | undefined {
   // 冷启动时脑图视图可能尚未就绪，getSelectedNodes 会因此抛错——跳过该来源走回退。
@@ -141,6 +145,10 @@ async function chooseReviewWritingMode(owner: any): Promise<"mindmap" | "annotat
 async function bridgeInternal(command: string, payload: any, owner?: any): Promise<any> {
   if ((command === "exportMistakes" || command === "previewMistakeExport") && isLocalCacheClearing()) throw new Error("请等待缓存清理完成后再生成预览或导出")
   if (command.startsWith('ocrDb')) return ocrBridge(command, payload)
+  if (command === "harnessCall") {
+    if (!loadMatcherSettings().debugAiAnalysisEnabled) throw new Error("请先在调试功能中启用 AI 分析")
+    return harnessCall(String(payload?.command ?? ''), (payload?.data ?? {}) as Record<string, unknown>, owner ?? self)
+  }
   if (command.startsWith('ocr')) {
     const result = ocrSettingsBridge(command, payload ?? {})
     if (result !== undefined) return result
@@ -256,6 +264,12 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
     const key = String(payload?.key ?? "")
     if (key === "subcardAnswerDisplay" && ["reveal", "window"].includes(payload?.value)) saveMatcherSettings({ subcardAnswerDisplay: payload.value })
     else if (key === "boundHandwritingDisplay" && ["always", "doubleTap"].includes(payload?.value)) saveMatcherSettings({ boundHandwritingDisplay: payload.value })
+    else if (key === "answerInkEnabled" && typeof payload?.value === "boolean") {
+      if (loadMatcherSettings().answerInkEnabled !== payload.value) {
+        saveMatcherSettings({ answerInkEnabled: payload.value })
+        syncAnswerCardInkSetting(owner ?? self)
+      }
+    }
     else if (key === "mistakeListDisplay" && ["always", "autoHide"].includes(payload?.value)) saveMatcherSettings({ mistakeListDisplay: payload.value })
     else if (key === "entranceDefaultMode" && ["practice", "clipper"].includes(payload?.value)) saveMatcherSettings({ entranceDefaultMode: payload.value })
     else if (key === "answerMaskStyle" && ["dark", "light"].includes(payload?.value)) saveMatcherSettings({ answerMaskStyle: payload.value })
@@ -263,6 +277,10 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
     else if (key === "answerMaskImage" && (payload?.value === "" || (typeof payload?.value === "string" && /^data:image\/(?:png|jpeg|webp);base64,/.test(payload.value) && payload.value.length <= 400000))) saveMatcherSettings({ answerMaskImage: payload.value })
     else if (key === "globalQuestionColors" && Array.isArray(payload?.value) && payload.value.every((v: unknown) => Number.isInteger(v) && Number(v) >= 0 && Number(v) < 16)) saveMatcherSettings({ globalQuestionColors: payload.value })
     else if (key === "autoCollapseComments") saveMatcherSettings({ autoCollapseComments: payload?.value === true })
+    else if (key === "debugAiAnalysisEnabled" && typeof payload?.value === "boolean") {
+      if (!loadMatcherSettings().debugModeEnabled) throw new CardLinkError("debugModeRequired")
+      saveMatcherSettings({ debugAiAnalysisEnabled: payload.value })
+    }
     else if (key === "reviewCompletionConfetti" && typeof payload?.value === "boolean") saveMatcherSettings({ reviewCompletionConfetti: payload.value })
     else if (key === "reviewExpandedCommentCount" && Number.isInteger(payload?.value) && payload.value >= 0 && payload.value <= 10) saveMatcherSettings({ reviewExpandedCommentCount: payload.value })
     else throw new Error("无效的个性设置")
@@ -328,13 +346,15 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
   if (command === "chooseSourceLocateMode") {
     await delay(0.08)
     const current = loadMatcherSettings().sourceLocateMode
+    const modes = ["locate", "focus", "float"] as const
+    const labels = ["在脑图中定位", "在脑图中定位并聚焦", "在浮窗中定位"]
     const choice = await select(
-      [`仅定位${current === "locate" ? "（当前）" : ""}`, `定位并聚焦${current === "focus" ? "（当前）" : ""}`],
+      modes.map((mode, index) => labels[index] + (mode === current ? "（当前）" : "")),
       "定位原题方式",
       "选择复习模式外定位原题时的操作",
       true
     )
-    const mode = choice.index === 0 ? "locate" : choice.index === 1 ? "focus" : current
+    const mode = modes[choice.index] ?? current
     if (mode !== current) saveMatcherSettings({ sourceLocateMode: mode })
     return { mode }
   }
@@ -386,7 +406,9 @@ async function bridgeInternal(command: string, payload: any, owner?: any): Promi
     showHUD(enabled ? "调试模式已开启" : "调试模式已关闭，运行日志已清空", 3)
     return { enabled, algorithm: enabled && loadMatcherSettings().debugReviewAlgorithm === "fsrs" ? "fsrs" : "fixed" }
   }
-  if (command === "checkUpdates") return checkForUpdates(true)
+  if (command === "checkUpdates") return checkForUpdates(true, owner ?? self)
+  if (command === "updateChoice") return { accepted: resolveUpdateChoice(payload?.choice, payload?.promptId) }
+  if (command === "pendingUpdatePrompt") return pendingUpdatePrompt()
   if (command === "setDebugUpdateDownloads") return setDebugUpdateDownloads(payload?.enabled === true)
   if (command === "setDebugAutoInstallUpdates") return setDebugAutoInstallUpdates(payload?.enabled === true)
   if (command === "showUpdateStatus") return showUpdateStatus()
@@ -437,6 +459,18 @@ async function bridge(command: string, payload: any, owner?: any): Promise<any> 
   closeCardMistakePanel,
   configureUpdatePath,
   bridge,
+  armMistakeDrag,
+  cancelMistakeDrag,
+  disableMistakeDrag,
+  enableMistakeDrag,
+  linkMistakeOnDrop: (...args: Parameters<typeof linkMistakeOnDrop>) => {
+    try {
+      return linkMistakeOnDrop(...args)
+    } catch (error) {
+      captureDiagnosticError(error, "桥接", "linkMistakeOnDrop")
+      throw error instanceof CardLinkError ? presentError(error) : error
+    }
+  },
   eventObservers,
   handlers,
   lifecycle,

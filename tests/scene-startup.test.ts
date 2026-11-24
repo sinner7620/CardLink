@@ -91,6 +91,8 @@ test("工作台首次打开明确恢复workspace与标准尺寸，菜单小窗�
   menu.events["mn:workbenchRequested"]()
   assert.equal(menu.scripts.length, 1)
   assert.ok(menu.calls.some(c => Array.isArray(c) && c[0] === "size" && c[1] === 720 && c[2] === 520))
+  const callsBeforeRepeat = menu.calls.length
   menu.events["mn:workbenchRequested"]()
   assert.equal(menu.scripts.length, 1)
+  assert.deepEqual(menu.calls.slice(callsBeforeRepeat), [])
 })
